@@ -1,0 +1,5 @@
+syntax = "proto3";
+package iota.gprc.v1;
+
+// Placeholder for Coins service
+service CoinGprcService {} 

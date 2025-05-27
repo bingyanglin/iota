@@ -1,0 +1,29 @@
+syntax = "proto3";
+
+package iota.gprc.v1;
+
+// Corresponds to iota_rest_api::Direction
+enum Direction {
+  DIRECTION_UNSPECIFIED = 0;
+  ASCENDING = 1;
+  DESCENDING = 2;
+}
+
+// Corresponds to iota_rest_api::Page
+// We'll need to define specific Page messages for each type, e.g., CheckpointPageGprc
+// This is a generic placeholder or might be used with google.protobuf.Any for dynamic types if absolutely necessary (usually avoided).
+
+// Placeholder for types that are just strings but have semantic meaning
+message StringEncodedUid {
+    string id = 1;
+}
+
+// Placeholder for u64, often represented as strings in JSON APIs to avoid precision loss
+message StringU64 {
+    string value = 1;
+}
+
+// Placeholder for U256, often represented as strings
+message StringU256 {
+    string value = 1;
+} 

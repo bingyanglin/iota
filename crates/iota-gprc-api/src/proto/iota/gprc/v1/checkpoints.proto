@@ -1,0 +1,127 @@
+syntax = "proto3";
+
+package iota.gprc.v1;
+
+import "iota/gprc/v1/common.proto";
+// Potentially import other types if they become complex, e.g., transaction.proto if CheckpointTransaction becomes very detailed here
+
+// Corresponds to iota_sdk2::types::CheckpointSequenceNumber (u64)
+// Using StringU64 from common.proto if it's passed as a string in paths, otherwise can be uint64.
+// For path parameters that can be number or digest, we usually take string and parse server-side.
+
+// Corresponds to iota_sdk2::types::CheckpointDigest (struct with a [u8; 32])
+message CheckpointDigestGprc {
+    bytes digest = 1; // Or string if hex-encoded
+}
+
+// Corresponds to iota_types::full_checkpoint_content::CheckpointTransaction
+// This is a simplified version. The actual Rust type has variants.
+message CheckpointTransactionGprc {
+    // For simplicity, let's assume it's just the transaction digest for now.
+    // In reality, this needs to model the enum CheckpointTransaction in Rust:
+    // enum CheckpointTransaction { Full(VerifiedTransaction), DigestOnly(TransactionDigest) }
+    oneof content {
+        VerifiedTransactionGprc full_transaction = 1;
+        TransactionDigestGprc digest_only = 2;
+    }
+}
+
+// Placeholder for iota_sdk2::types::VerifiedTransaction
+message VerifiedTransactionGprc {
+    // Define fields based on VerifiedTransaction structure
+    // This will be complex and might involve raw transaction data, effects, events etc.
+    bytes raw_tx = 1; // Example
+}
+
+// Placeholder for iota_types::digests::TransactionDigest
+message TransactionDigestGprc {
+    bytes digest = 1; // Or string if hex-encoded
+}
+
+
+// Corresponds to iota_sdk2::types::SignedCheckpointSummary
+message SignedCheckpointSummaryGprc {
+    // epoch, sequence_number, network_total_transactions etc.
+    // All these are u64 in Rust, potentially StringU64 here if needed for JS compatibility, or uint64.
+    uint64 epoch = 1;
+    uint64 sequence_number = 2;
+    uint64 network_total_transactions = 3;
+    CheckpointDigestGprc content_digest = 4;
+    CheckpointDigestGprc previous_digest = 5;
+    // iota_sdk2::types::epoch::EpochRollingGasCostSummary gas_summary = 6;
+    // iota_sdk2::types::timestamp::TimestampMs timestamp_ms = 7;
+    // Vec<u8> checkpoint_commitments = 8; // Placeholder, this is complex
+    // iota_sdk2::crypto::AuthoritySignInfo signature = 9;
+    // iota_sdk2::version::Version version = 10;
+
+    // Simplified for now. Detailed fields need to be added based on the Rust struct.
+    // For example, GasCostSummary, TimestampMs, AuthoritySignInfo are structs themselves.
+}
+
+// Corresponds to iota_types::full_checkpoint_content::CheckpointData
+// which is also re-exported by iota_rest_api
+message CheckpointDataGprc {
+    SignedCheckpointSummaryGprc summary = 1;
+    repeated CheckpointTransactionGprc transactions = 2;
+    // Vec<iota_sdk2::types::effects::TransactionEffects> effects = 3; // Not present in iota_types::full_checkpoint_content::CheckpointData
+}
+
+// Request for GetCheckpoint and GetCheckpointFull
+message GetCheckpointRequest {
+    // Can be sequence number (u64 as string) or digest (hex string)
+    string checkpoint_id = 1;
+}
+
+message ListCheckpointsRequest {
+    // Corresponds to ListCheckpointsQueryParameters in iota-rest-api
+    optional uint32 limit = 1;
+    optional string start_sequence_number = 2; // u64 as string
+    optional string end_sequence_number = 3;   // u64 as string, new field
+    optional Direction direction = 4; // Changed from 3 to 4
+}
+
+message CheckpointPageGprc {
+    repeated SignedCheckpointSummaryGprc checkpoints = 1;
+    optional string next_cursor = 2; // Next sequence number as string, if any
+}
+
+// Representing a single checkpoint summary, potentially with full data.
+// This will be the type streamed back to the client.
+message StreamedCheckpoint {
+    oneof checkpoint_type {
+        SignedCheckpointSummaryGprc summary = 1;
+        CheckpointDataGprc full_data = 2; // If full data is requested for the stream
+    }
+    // We could add an error field here if a specific checkpoint in a stream fails processing
+    // string error_message = 3;
+}
+
+// Request for streaming a range of checkpoints
+message StreamCheckpointsInRangeRequest {
+    string start_sequence_number = 1; // Required: u64 as string
+    optional string end_sequence_number = 2; // Optional: u64 as string. If not set, could stream indefinitely or up to a server-defined max from start.
+    bool include_full_data = 3; // Option to request full CheckpointDataGprc instead of just summaries
+}
+
+// Request for subscribing to new checkpoints
+message SubscribeNewCheckpointsRequest {
+    // Optional: specify a sequence number to start streaming from (excluding already processed ones).
+    // If not provided, starts from the next new checkpoint after subscription.
+    optional string start_from_sequence_number = 1; // u64 as string
+    bool include_full_data = 2; // Option to request full CheckpointDataGprc
+}
+
+service CheckpointGprcService {
+    // Corresponds to iota_rest_api::checkpoints::GetCheckpointFull
+    rpc GetCheckpointFull(GetCheckpointRequest) returns (CheckpointDataGprc) {}
+
+    // Corresponds to iota_rest_api::checkpoints::GetCheckpoint
+    rpc GetCheckpoint(GetCheckpointRequest) returns (SignedCheckpointSummaryGprc) {}
+
+    // Corresponds to iota_rest_api::checkpoints::ListCheckpoints
+    rpc ListCheckpoints(ListCheckpointsRequest) returns (CheckpointPageGprc) {}
+
+    // New Server-Streaming RPCs
+    rpc StreamCheckpointsInRange(StreamCheckpointsInRangeRequest) returns (stream StreamedCheckpoint) {}
+    rpc SubscribeNewCheckpoints(SubscribeNewCheckpointsRequest) returns (stream StreamedCheckpoint) {}
+} 

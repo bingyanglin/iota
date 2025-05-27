@@ -1,0 +1,77 @@
+syntax = "proto3";
+package iota.gprc.v1;
+
+// Potentially import common types if needed, e.g., from common.proto
+// import "iota/gprc/v1/common.proto";
+
+// Represents a request to get an object
+message GetObjectRequest {
+    // The ID of the object to retrieve (e.g., hex string)
+    string object_id = 1;
+    // Optional: specify version
+    optional string version = 2; 
+}
+
+// Represents an IOTA Object (simplified for PoC)
+// This should ideally mirror iota_sdk2::types::Object or iota_types::object::Object
+// For PoC, we'll keep it very simple.
+message ObjectGprc {
+    string object_id = 1;
+    string version = 2; // SequenceNumber as string
+    string owner_type = 3; // e.g., "Address", "Object", "Shared"
+    string data_type = 4; // e.g., "MovePackage", "MoveObject"
+    bytes raw_object = 5; // The raw serialized object
+    // Add more fields as needed, like owner address, previous_transaction_digest etc.
+}
+
+message ListObjectsRequest {
+    // Optional: Filter by owner address (hex string)
+    optional string owner_address = 1;
+    // Optional: Pagination cursor (e.g., an ObjectID hex string from the last object of the previous page)
+    optional string cursor = 2;
+    // Optional: Maximum number of objects to return
+    optional uint32 limit = 3;
+    // Optional: Direction of listing (defaults to Ascending if not provided, or based on service logic)
+    // enum Direction { ASCENDING = 0; DESCENDING = 1; } // Consider adding if complex ordering is needed
+    // optional Direction direction = 4;
+}
+
+message ListObjectsResponse {
+    repeated ObjectGprc objects = 1;
+    // Optional: Cursor for the next page. If not set, this is the last page.
+    optional string next_cursor = 2;
+}
+
+message StreamObjectsRequest {
+    // The owner address (hex string) for which to stream objects.
+    string owner_address = 1;
+    // Optional: If provided, start streaming objects whose ID is greater than this cursor.
+    // This allows for a form of resuming or starting from a known point if objects are ordered.
+    // For now, the mock implementation might just list all current objects for the owner.
+    optional string start_after_object_id = 2;
+}
+
+// Request for subscribing to new or updated objects for a specific owner
+message SubscribeObjectsByOwnerRequest {
+    string owner_address = 1; // Required: Bech32m encoded IOTA address
+    // optional string start_after_object_id = 2; // Consider for future enhancement: Hex string ObjectID
+}
+
+// Service definition for Objects
+service ObjectGprcService {
+    // Retrieves an object by its ID
+    rpc GetObject(GetObjectRequest) returns (ObjectGprc) {}
+
+    // Add other RPCs as needed, e.g.:
+    // rpc GetObjectWithVersion(GetObjectRequest) returns (ObjectGprc) {}
+    // rpc ListObjects(...) returns (stream ObjectGprc) {}
+    rpc ListObjects(ListObjectsRequest) returns (ListObjectsResponse) {}
+
+    // Streams objects belonging to a specific owner.
+    // Depending on implementation, this could be current objects or a stream of new/updated objects.
+    // For initial implementation, it will stream all current objects for the owner.
+    rpc StreamObjects(StreamObjectsRequest) returns (stream ObjectGprc) {}
+
+    // Subscribe to new or updated objects for a specific owner
+    rpc SubscribeObjectsByOwner(SubscribeObjectsByOwnerRequest) returns (stream ObjectGprc) {}
+} 

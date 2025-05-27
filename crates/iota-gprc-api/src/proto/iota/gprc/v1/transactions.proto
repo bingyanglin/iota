@@ -1,0 +1,30 @@
+syntax = "proto3";
+package iota.gprc.v1;
+
+// Request to get a transaction by its ID (digest/hash)
+message GetTransactionRequest {
+    // The 32-byte ID (digest/hash) of the transaction to retrieve
+    bytes transaction_digest_bytes = 1;
+}
+
+// Represents an IOTA Transaction (simplified for gRPC)
+message TransactionGprc {
+    // The ID of the transaction (e.g., hex string of the digest)
+    string transaction_id_hex = 1; // Kept as hex string for response readability
+    // Type of the payload, e.g., "SignedTransaction", "Block", etc.
+    // This can be expanded based on actual transaction types in iota-types.
+    string payload_type = 2;
+    // The raw serialized transaction data.
+    bytes raw_transaction = 3;
+    // Further fields like sender, recipients, amount, gas details, etc., can be added later.
+}
+
+// Service definition for Transactions
+service TransactionGprcService {
+    // Retrieves a transaction by its ID
+    rpc GetTransaction(GetTransactionRequest) returns (TransactionGprc);
+
+    // Future RPCs for transactions could include:
+    // rpc SubmitTransaction(TransactionGprc) returns (SubmitTransactionResponse) {}
+    // rpc StreamTransactionEvents(StreamTransactionEventsRequest) returns (stream TransactionEventGprc) {}
+} 
