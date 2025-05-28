@@ -107,9 +107,9 @@ Therefore, to use the public gRPC API, ensure the `grpc_public_api_address` is c
   * Implemented services (`CheckpointGprcService`, `ObjectGprcService`, `TransactionGprcService`) use the `state_reader` to fetch data.
   * Conversions from `iota_types` to gRPC types are implemented for checkpoints, objects, and transactions.
   * Unit tests use a `MockRestStateReader` which has been updated to support these calls, including dynamic updates for testing subscriptions.
-  * **Next Steps for Checkpoints:**
+  * **Checkpoint Service Details:**
     * The `include_full_data` flag is **complete** for `StreamCheckpointsInRange` and `SubscribeNewCheckpoints`.
-    * The `subscribe_new_checkpoints` RPC provides a true subscription for gRPC clients: clients connect once and receive a stream of new checkpoints as they are published by the server. Internally, to enable this, the `CheckpointServiceImpl` uses a reactive pub/sub model where a single background task polls the `state_reader` (the current interface to node data) and then broadcasts new checkpoints to all subscribed clients. This approach is a functional and efficient solution for client-side reactivity. Eliminating the service's internal polling would require the underlying node core (`StateReader` interface) to offer direct event notifications for new checkpoints.
+    * The `subscribe_new_checkpoints` RPC provides a true subscription for gRPC clients. Internally, `CheckpointServiceImpl` uses a reactive pub/sub model: a background task polls the `state_reader` and broadcasts new checkpoints. While this polling is a current design choice, eliminating it would require the underlying node core (`StateReader` interface) to offer direct event notifications.
 * **Implement Other gRPC Services (Transactions Service Started, Object Subscription Added):**
   * `TransactionGprcService` (`TransactionServiceImpl`) has been implemented with the `GetTransaction` RPC.
     * This RPC takes `bytes transaction_digest_bytes` in the request and converts `iota_types::transaction::VerifiedTransaction` to `TransactionGprc`.
