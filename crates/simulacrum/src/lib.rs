@@ -30,7 +30,7 @@ use iota_swarm_config::{
     network_config_builder::ConfigBuilder,
 };
 use iota_types::{
-    base_types::{AuthorityName, IotaAddress, ObjectID, VersionNumber},
+    base_types::{AuthorityName, IotaAddress, ObjectID, TransactionDigest, VersionNumber},
     committee::Committee,
     crypto::AuthoritySignature,
     digests::ConsensusCommitDigest,
@@ -46,7 +46,7 @@ use iota_types::{
     object::Object,
     programmable_transaction_builder::ProgrammableTransactionBuilder,
     signature::VerifyParams,
-    storage::{ObjectStore, ReadStore, RestStateReader},
+    storage::{ListDirection, ObjectStore, ReadStore, RestStateReader},
     transaction::{
         EndOfEpochTransactionKind, GasData, Transaction, TransactionData, TransactionKind,
         VerifiedTransaction,
@@ -557,6 +557,17 @@ impl<T, V: store::SimulatorStore> ReadStore for Simulacrum<T, V> {
 }
 
 impl<T: Send + Sync, V: store::SimulatorStore + Send + Sync> RestStateReader for Simulacrum<T, V> {
+    fn list_transactions(
+        &self,
+        _cursor: Option<TransactionDigest>,
+        _limit: u64,
+        _direction: ListDirection,
+    ) -> iota_types::storage::error::Result<Vec<(TransactionDigest, Arc<VerifiedTransaction>)>>
+    {
+        // Placeholder for now
+        unimplemented!()
+    }
+
     fn get_transaction_checkpoint(
         &self,
         _digest: &iota_types::digests::TransactionDigest,

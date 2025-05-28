@@ -52,7 +52,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             proto_package_dir.display()
         );
     } else {
-        tonic_build::configure().compile(
+        tonic_build::configure().compile_protos(
             &protos_to_compile_fullpath_str
                 .iter()
                 .map(AsRef::as_ref)

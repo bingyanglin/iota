@@ -20,8 +20,8 @@ use iota_types::{
     },
     object::{Object, Owner},
     storage::{
-        BackingPackageStore, ChildObjectResolver, ObjectStore, PackageObject, ReadStore,
-        RestStateReader, load_package_object_from_object_store,
+        BackingPackageStore, ChildObjectResolver, ListDirection, ObjectStore, PackageObject,
+        ReadStore, RestStateReader, load_package_object_from_object_store,
     },
     transaction::VerifiedTransaction,
 };
@@ -689,6 +689,17 @@ impl ReadStore for PersistedStoreInnerReadOnlyWrapper {
 }
 
 impl RestStateReader for PersistedStoreInnerReadOnlyWrapper {
+    fn list_transactions(
+        &self,
+        _cursor: Option<TransactionDigest>,
+        _limit: u64,
+        _direction: ListDirection,
+    ) -> iota_types::storage::error::Result<Vec<(TransactionDigest, Arc<VerifiedTransaction>)>>
+    {
+        // Placeholder for now
+        unimplemented!()
+    }
+
     fn get_transaction_checkpoint(
         &self,
         _digest: &TransactionDigest,

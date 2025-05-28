@@ -16,8 +16,8 @@ use iota_types::{
     },
     object::Object,
     storage::{
-        AccountOwnedObjectInfo, CoinInfo, DynamicFieldIndexInfo, DynamicFieldKey, ObjectKey,
-        ObjectStore, ReadStore, RestStateReader, WriteStore,
+        AccountOwnedObjectInfo, CoinInfo, DynamicFieldIndexInfo, DynamicFieldKey, ListDirection,
+        ObjectKey, ObjectStore, ReadStore, RestStateReader, WriteStore,
         error::{Error as StorageError, Result},
     },
     transaction::VerifiedTransaction,
@@ -497,6 +497,17 @@ impl ReadStore for RestReadStore {
 }
 
 impl RestStateReader for RestReadStore {
+    fn list_transactions(
+        &self,
+        _cursor: Option<TransactionDigest>,
+        _limit: u64,
+        _direction: ListDirection,
+    ) -> iota_types::storage::error::Result<Vec<(TransactionDigest, Arc<VerifiedTransaction>)>>
+    {
+        // Placeholder for now
+        unimplemented!()
+    }
+
     fn get_transaction_checkpoint(
         &self,
         digest: &TransactionDigest,
