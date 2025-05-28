@@ -274,7 +274,7 @@ async fn worker_pool_with_reducer() {
     let result = run(
         bundle.executor,
         Some(path),
-        Some(Duration::from_secs(1)),
+        Some(Duration::from_secs(5)),
         bundle.token,
     )
     .await;

@@ -10,7 +10,7 @@ use crate::{
     server::StateReader,
 };
 
-// const NODE_VERSION: &str = "iota-gprc-api-dev"; // Replaced by
+// const NODE_VERSION: &str = "iota-grpc-api-dev"; // Replaced by
 // CARGO_PKG_VERSION
 
 #[derive(Clone)]

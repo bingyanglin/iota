@@ -8,7 +8,7 @@ use std::{
 
 use anyhow; // Added anyhow
 use futures::StreamExt;
-use iota_gprc_api::{
+use iota_grpc_api::{
     proto::iota::gprc::v1::{
         GetObjectRequest,
         ListObjectsRequest, // Added for new tests

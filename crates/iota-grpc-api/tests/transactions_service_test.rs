@@ -4,7 +4,7 @@ use std::{
     time::Duration,
 };
 
-use iota_gprc_api::{
+use iota_grpc_api::{
     proto::iota::gprc::v1::{
         Direction, GetTransactionRequest, ListTransactionsRequest,
         transaction_gprc_service_client::TransactionGprcServiceClient,

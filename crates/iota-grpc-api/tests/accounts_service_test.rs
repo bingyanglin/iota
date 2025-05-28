@@ -7,7 +7,7 @@ use std::{
 };
 
 use anyhow;
-use iota_gprc_api::{
+use iota_grpc_api::{
     proto::iota::gprc::v1::{
         GetAccountInfoRequest, ListAccountObjectsRequest, StringU64,
         accounts_gprc_service_client::AccountsGprcServiceClient,

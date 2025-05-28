@@ -7,9 +7,9 @@ use std::{
 };
 
 use futures::StreamExt;
-// use iota_gprc_api::conversions::checkpoints::convert_verified_checkpoint_to_gprc_summary; //
+// use iota_grpc_api::conversions::checkpoints::convert_verified_checkpoint_to_gprc_summary; //
 // This will be removed by cargo fix if still unused after other fixes
-use iota_gprc_api::{
+use iota_grpc_api::{
     proto::iota::gprc::v1::{
         Direction,
         GetCheckpointRequest,

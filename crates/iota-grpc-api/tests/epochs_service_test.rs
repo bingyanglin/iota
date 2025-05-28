@@ -1,14 +1,15 @@
 use std::{
     collections::BTreeMap,
     net::{SocketAddr, TcpListener},
-    sync::Arc,
+    sync::{Arc, Mutex},
     time::Duration,
 };
 
 use anyhow;
-use iota_gprc_api::{
+use iota_grpc_api::{
     proto::iota::gprc::v1::{
-        GetSystemInfoRequest, system_gprc_service_client::SystemGprcServiceClient,
+        Direction as GrpcDirection, EpochIdGprc, GetEpochInfoRequest, ListEpochsRequest,
+        epochs_gprc_service_client::EpochsGprcServiceClient,
     },
     server::{GrpcServer, StateReader},
 };
@@ -41,7 +42,43 @@ use shared_crypto::intent::Intent;
 use tokio::{sync::broadcast, time::sleep};
 
 #[derive(Default)]
-struct MockRestStateReader {}
+struct MockEpochState {
+    committees: BTreeMap<EpochId, Arc<Committee>>,
+    latest_epoch_id: EpochId,
+}
+
+struct MockRestStateReader {
+    mock_state: Arc<Mutex<MockEpochState>>,
+}
+
+impl Default for MockRestStateReader {
+    fn default() -> Self {
+        Self {
+            mock_state: Arc::new(Mutex::new(MockEpochState::default())),
+        }
+    }
+}
+
+impl MockRestStateReader {
+    fn add_committee(&self, epoch_id: EpochId, committee: Committee) {
+        let mut state = self.mock_state.lock().unwrap();
+        state.committees.insert(epoch_id, Arc::new(committee));
+    }
+
+    fn set_latest_epoch_id(&self, epoch_id: EpochId) {
+        let mut state = self.mock_state.lock().unwrap();
+        state.latest_epoch_id = epoch_id;
+    }
+}
+
+fn create_mock_committee(epoch_id: EpochId) -> Committee {
+    let keypair: AuthorityKeyPair = AuthorityKeyPair::generate(&mut thread_rng());
+    let authority_name = AuthorityName::from(keypair.public());
+    Committee::new(
+        epoch_id,
+        BTreeMap::from([(authority_name, TOTAL_VOTING_POWER)]),
+    )
+}
 
 fn create_mock_verified_checkpoint(
     seq_num: CheckpointSequenceNumber,
@@ -70,7 +107,7 @@ fn create_mock_verified_checkpoint(
     let keypair: AuthorityKeyPair = AuthorityKeyPair::generate(&mut thread_rng());
     let authority_name = AuthorityName::from(keypair.public());
     let stake: StakeUnit = TOTAL_VOTING_POWER;
-    let committee = Committee::new(epoch_id, BTreeMap::from([(authority_name, stake)]));
+    let temp_committee = Committee::new(epoch_id, BTreeMap::from([(authority_name, stake)]));
 
     let sign_info = AuthoritySignInfo::new(
         epoch_id,
@@ -81,7 +118,7 @@ fn create_mock_verified_checkpoint(
     );
 
     let auth_strong_quorum_sig =
-        AuthorityStrongQuorumSignInfo::new_from_auth_sign_infos(vec![sign_info], &committee)
+        AuthorityStrongQuorumSignInfo::new_from_auth_sign_infos(vec![sign_info], &temp_committee)
             .expect("Mock AuthStrongQuorumSignInfo creation failed");
 
     let envelope = Envelope::new_from_data_and_sig(summary, auth_strong_quorum_sig);
@@ -89,23 +126,34 @@ fn create_mock_verified_checkpoint(
 }
 
 impl ReadStore for MockRestStateReader {
-    fn get_committee(&self, _epoch: EpochId) -> StorageResult<Option<Arc<Committee>>> {
-        Ok(None)
+    fn get_committee(&self, epoch_id: EpochId) -> StorageResult<Option<Arc<Committee>>> {
+        let state = self.mock_state.lock().unwrap();
+        Ok(state.committees.get(&epoch_id).cloned())
     }
     fn get_latest_checkpoint(&self) -> StorageResult<VerifiedCheckpoint> {
-        Ok(create_mock_verified_checkpoint(0, 0))
+        Ok(create_mock_verified_checkpoint(
+            self.mock_state.lock().unwrap().latest_epoch_id,
+            0,
+        ))
     }
     fn get_latest_checkpoint_sequence_number(&self) -> StorageResult<CheckpointSequenceNumber> {
         Ok(0)
     }
     fn get_latest_epoch_id(&self) -> StorageResult<EpochId> {
-        Ok(0)
+        let state = self.mock_state.lock().unwrap();
+        Ok(state.latest_epoch_id)
     }
     fn get_highest_verified_checkpoint(&self) -> StorageResult<VerifiedCheckpoint> {
-        Ok(create_mock_verified_checkpoint(0, 0))
+        Ok(create_mock_verified_checkpoint(
+            self.mock_state.lock().unwrap().latest_epoch_id,
+            0,
+        ))
     }
     fn get_highest_synced_checkpoint(&self) -> StorageResult<VerifiedCheckpoint> {
-        Ok(create_mock_verified_checkpoint(0, 0))
+        Ok(create_mock_verified_checkpoint(
+            self.mock_state.lock().unwrap().latest_epoch_id,
+            0,
+        ))
     }
     fn get_lowest_available_checkpoint(&self) -> StorageResult<CheckpointSequenceNumber> {
         Ok(0)
@@ -203,14 +251,14 @@ impl RestStateReader for MockRestStateReader {
         Ok(0)
     }
     fn get_chain_identifier(&self) -> StorageResult<ChainIdentifier> {
-        Ok(ChainIdentifier::from(CheckpointDigest::new([0u8; 32])))
+        unimplemented!()
     }
     fn account_owned_objects_info_iter(
         &self,
         _owner: iota_types::base_types::IotaAddress,
         _cursor: Option<ObjectID>,
     ) -> StorageResult<Box<dyn Iterator<Item = AccountOwnedObjectInfo> + '_>> {
-        Ok(Box::new(std::iter::empty()))
+        unimplemented!()
     }
     fn dynamic_field_iter(
         &self,
@@ -218,7 +266,7 @@ impl RestStateReader for MockRestStateReader {
         _cursor: Option<ObjectID>,
     ) -> StorageResult<Box<dyn Iterator<Item = (DynamicFieldKey, DynamicFieldIndexInfo)> + '_>>
     {
-        Ok(Box::new(std::iter::empty()))
+        unimplemented!()
     }
     fn get_coin_info(&self, _coin_type: &StructTag) -> StorageResult<Option<CoinInfo>> {
         Ok(None)
@@ -247,9 +295,8 @@ fn get_available_port() -> u16 {
         .port()
 }
 
-async fn spawn_test_server_with_system_client() -> (
-    SystemGprcServiceClient<tonic::transport::Channel>,
-    SocketAddr,
+async fn spawn_test_server_with_epochs_client() -> (
+    EpochsGprcServiceClient<tonic::transport::Channel>,
     broadcast::Sender<()>,
     Arc<MockRestStateReader>,
 ) {
@@ -265,7 +312,7 @@ async fn spawn_test_server_with_system_client() -> (
 
     tokio::spawn(async move {
         if let Err(e) = grpc_server.start(server_shutdown_rx).await {
-            eprintln!("[Test SystemService] gRPC server failed: {}", e);
+            eprintln!("[Test EpochsService] gRPC server failed: {}", e);
         }
     });
 
@@ -279,71 +326,105 @@ async fn spawn_test_server_with_system_client() -> (
         .await
         .unwrap_or_else(|e| {
             panic!(
-                "[Test SystemService] Failed to connect to gRPC server at {}: {:?}",
+                "[Test EpochsService] Failed to connect to gRPC server at {}: {:?}",
                 client_endpoint, e
             )
         });
 
-    let client = SystemGprcServiceClient::new(client_channel);
-    (client, addr, shutdown_tx, mock_state_reader_arc)
+    let client = EpochsGprcServiceClient::new(client_channel);
+    (client, shutdown_tx, mock_state_reader_arc)
 }
 
 #[tokio::test]
-async fn test_get_system_info_success() {
-    let (mut client, _addr, shutdown_tx, _mock_state_reader) =
-        spawn_test_server_with_system_client().await;
+async fn test_get_epoch_info_success() {
+    let (mut client, shutdown_tx, mock_state_reader_arc) =
+        spawn_test_server_with_epochs_client().await;
 
-    // Brief pause to ensure uptime is non-zero.
-    sleep(Duration::from_millis(20)).await; // Increased sleep slightly
+    let test_epoch_id: EpochId = 5;
+    let mock_committee = create_mock_committee(test_epoch_id);
+    mock_state_reader_arc.add_committee(test_epoch_id, mock_committee);
 
-    let request = tonic::Request::new(GetSystemInfoRequest {});
-    let response_result = client.get_system_info(request).await;
+    let request = GetEpochInfoRequest {
+        epoch_id: Some(EpochIdGprc {
+            epoch: test_epoch_id,
+        }),
+    };
 
-    assert!(
-        response_result.is_ok(),
-        "GetSystemInfo RPC call failed: {:?}",
-        response_result.err()
-    );
-    let response = response_result.unwrap().into_inner();
+    let response = client.get_epoch_info(request).await.unwrap().into_inner();
 
+    assert_eq!(response.epoch_id.as_ref().unwrap().epoch, test_epoch_id);
     assert_eq!(
-        response.node_version,
-        env!("CARGO_PKG_VERSION"), // Expect actual crate version
-        "Node version should match CARGO_PKG_VERSION"
+        response.total_stake.as_ref().unwrap().value,
+        TOTAL_VOTING_POWER.to_string()
     );
-    assert!(response.uptime_ms.is_some(), "Uptime should be present");
-    let first_uptime_str = response.uptime_ms.as_ref().unwrap().value.clone();
-    let first_uptime_val = first_uptime_str
-        .parse::<u128>()
-        .expect("uptime_ms should be a valid u128 string");
-    assert!(first_uptime_val > 0, "uptime_ms should be positive");
+    assert!(response.start_time_ms.is_none());
+    assert!(response.end_time_ms.is_none());
+    assert!(response.rewards_pool_balance.is_none());
 
-    // Test idempotency: call again and check uptime increases or stays same
-    sleep(Duration::from_millis(10)).await; // Ensure a small duration passes for uptime to potentially change
-    let response2_result = client.get_system_info(GetSystemInfoRequest {}).await;
-    assert!(
-        response2_result.is_ok(),
-        "GetSystemInfo (2nd call) RPC call failed: {:?}",
-        response2_result.err()
-    );
-    let system_info2 = response2_result.unwrap().into_inner();
+    drop(shutdown_tx);
+}
 
-    assert!(
-        system_info2.uptime_ms.is_some(),
-        "uptime_ms (2nd call) should be present"
-    );
-    let uptime_str2 = system_info2.uptime_ms.as_ref().unwrap().value.clone();
-    let uptime_val2 = uptime_str2
-        .parse::<u128>()
-        .expect("uptime_ms (2nd call) should be a valid u128 string");
-    assert!(
-        uptime_val2 >= first_uptime_val,
-        "Uptime ({}) should increase or stay the same ({}) on subsequent calls",
-        uptime_val2,
-        first_uptime_val
+#[tokio::test]
+async fn test_get_epoch_info_latest_success() {
+    let (mut client, shutdown_tx, mock_state_reader_arc) =
+        spawn_test_server_with_epochs_client().await;
+
+    let latest_epoch_id: EpochId = 10;
+    let mock_committee = create_mock_committee(latest_epoch_id);
+    mock_state_reader_arc.add_committee(latest_epoch_id, mock_committee);
+    mock_state_reader_arc.set_latest_epoch_id(latest_epoch_id);
+
+    let request = GetEpochInfoRequest { epoch_id: None };
+
+    let response = client.get_epoch_info(request).await.unwrap().into_inner();
+
+    assert_eq!(response.epoch_id.as_ref().unwrap().epoch, latest_epoch_id);
+    assert_eq!(
+        response.total_stake.as_ref().unwrap().value,
+        TOTAL_VOTING_POWER.to_string()
     );
 
-    // Cleanly shut down the server
-    let _ = shutdown_tx.send(());
-    sleep(Duration::from_millis(100)).await; // Give server time to shutdown
+    drop(shutdown_tx);
+}
+
+#[tokio::test]
+async fn test_get_epoch_info_not_found() {
+    let (mut client, shutdown_tx, _mock_state_reader_arc) =
+        spawn_test_server_with_epochs_client().await;
+
+    let request = GetEpochInfoRequest {
+        epoch_id: Some(EpochIdGprc { epoch: 99 }),
+    };
+
+    let result = client.get_epoch_info(request).await;
+    assert!(result.is_err());
+    if let Err(status) = result {
+        assert_eq!(status.code(), tonic::Code::NotFound);
+    }
+    drop(shutdown_tx);
+}
+
+#[tokio::test]
+async fn test_list_epochs_returns_empty() {
+    let (mut client, shutdown_tx, _mock_state_reader) =
+        spawn_test_server_with_epochs_client().await;
+
+    let request = ListEpochsRequest {
+        start_epoch: None,
+        end_epoch: None,
+        page_size: None,
+        cursor: None,
+        direction: GrpcDirection::Ascending as i32,
+    };
+
+    let result = client.list_epochs(request).await;
+    assert!(
+        result.is_ok(),
+        "ListEpochs should return Ok an empty list as a placeholder"
+    );
+    let response = result.unwrap().into_inner();
+    assert!(response.epochs.is_empty());
+    assert!(response.next_cursor.is_none());
+
+    drop(shutdown_tx);
 }

@@ -8,7 +8,7 @@ use std::{
 };
 
 use diesel::prelude::*;
-use iota_gprc_api::proto::iota::gprc::v1::{
+use iota_grpc_api::proto::iota::gprc::v1::{
     CheckpointDataGprc, CheckpointDigestGprc, CheckpointTransactionGprc, GetCheckpointRequest,
     ListCheckpointsRequest, SignedCheckpointSummaryGprc, StreamCheckpointsInRangeRequest,
     StreamedCheckpoint, SubscribeNewCheckpointsRequest, VerifiedTransactionGprc,
@@ -120,7 +120,7 @@ impl CheckpointGprcService for MockCheckpointService {
     async fn list_checkpoints(
         &self,
         _request: Request<ListCheckpointsRequest>,
-    ) -> Result<Response<iota_gprc_api::proto::iota::gprc::v1::CheckpointPageGprc>, Status> {
+    ) -> Result<Response<iota_grpc_api::proto::iota::gprc::v1::CheckpointPageGprc>, Status> {
         Err(Status::unimplemented(
             "list_checkpoints not implemented in mock",
         ))
@@ -201,7 +201,7 @@ fn mock_checkpoint_data_gprc_indexer_test(sequence_number_val: u64) -> Checkpoin
         }),
         transactions: vec![CheckpointTransactionGprc {
             content: Some(
-                iota_gprc_api::proto::iota::gprc::v1::checkpoint_transaction_gprc::Content::FullTransaction(
+                iota_grpc_api::proto::iota::gprc::v1::checkpoint_transaction_gprc::Content::FullTransaction(
                     VerifiedTransactionGprc { raw_tx: mock_raw_tx_bytes_indexer_test() },
                 ),
             ),

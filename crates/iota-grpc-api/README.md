@@ -1,4 +1,4 @@
-# IOTA gRPC API Crate (`iota-gprc-api`)
+# IOTA gRPC API Crate (`iota-grpc-api`)
 
 This crate provides a gRPC API interface for an IOTA node. It is currently under development as a **Proof of Concept (PoC)** with an initial focus on serving checkpoint data, object data, and transaction data.
 
@@ -68,10 +68,10 @@ The subscription logic for new checkpoints should draw inspiration from similar 
 From the workspace root (`iota/`):
 
 ```bash
-cargo build --release -p iota-gprc-api
+cargo build --release -p iota-grpc-api
 ```
 
-Or, from within the crate's directory (`iota/crates/iota-gprc-api/`):
+Or, from within the crate's directory (`iota/crates/iota-grpc-api/`):
 
 ```bash
 cargo build --release
@@ -82,10 +82,10 @@ cargo build --release
 From the workspace root (`iota/`):
 
 ```bash
-cargo test -p iota-gprc-api
+cargo test -p iota-grpc-api
 ```
 
-Or, from within the crate's directory (`iota/crates/iota-gprc-api/`):
+Or, from within the crate's directory (`iota/crates/iota-grpc-api/`):
 
 ```bash
 cargo test
@@ -116,7 +116,7 @@ grpc_public_api_address: "127.0.0.1:9091" # Or your desired IP and port
 * **Disabling the Server:**
   * If the `grpc_public_api_address` field is omitted from the configuration file, or if its value is explicitly set to `null` (or not defined), the gRPC server will be disabled and will not start.
 * **Node Integration:**
-  * The IOTA node's startup logic checks this configuration value. If an address is present, it launches the gRPC server implemented in this (`iota-gprc-api`) crate.
+  * The IOTA node's startup logic checks this configuration value. If an address is present, it launches the gRPC server implemented in this (`iota-grpc-api`) crate.
 
 Therefore, to use the public gRPC API, ensure the `grpc_public_api_address` is correctly set in your IOTA node's main configuration file.
 

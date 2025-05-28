@@ -73,7 +73,7 @@ tracing-subscriber = { workspace = true, features = ["fmt"] }
 
 # internal dependencies
 iota-config.workspace = true
-iota-gprc-api = { workspace = true }
+iota-grpc-api = { workspace = true }
 iota-keys.workspace = true
 iota-move-build.workspace = true
 iota-swarm-config.workspace = true

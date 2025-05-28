@@ -6535,7 +6535,7 @@ dependencies = [
  "fastcrypto",
  "futures",
  "iota-config",
- "iota-gprc-api",
+ "iota-grpc-api",
  "iota-metrics",
  "iota-protocol-config",
  "iota-rest-api",
@@ -6823,35 +6823,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "iota-gprc-api"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "async-trait",
- "bcs",
- "config",
- "fastcrypto",
- "futures",
- "hex",
- "iota-protocol-config",
- "iota-rust-sdk",
- "iota-types",
- "move-core-types",
- "prost",
- "rand 0.8.5",
- "roaring",
- "serde",
- "serde_json",
- "shared-crypto",
- "thiserror 1.0.64",
- "tokio",
- "tokio-stream",
- "tonic 0.13.1",
- "tonic-build",
- "tower 0.4.13",
-]
-
-[[package]]
 name = "iota-graphql-config"
 version = "1.2.0-alpha"
 dependencies = [
@@ -6975,6 +6946,35 @@ dependencies = [
 ]
 
 [[package]]
+name = "iota-grpc-api"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "bcs",
+ "config",
+ "fastcrypto",
+ "futures",
+ "hex",
+ "iota-protocol-config",
+ "iota-rust-sdk",
+ "iota-types",
+ "move-core-types",
+ "prost",
+ "rand 0.8.5",
+ "roaring",
+ "serde",
+ "serde_json",
+ "shared-crypto",
+ "thiserror 1.0.64",
+ "tokio",
+ "tokio-stream",
+ "tonic 0.13.1",
+ "tonic-build",
+ "tower 0.4.13",
+]
+
+[[package]]
 name = "iota-http"
 version = "1.2.0-alpha"
 dependencies = [
@@ -7016,7 +7016,7 @@ dependencies = [
  "hex",
  "iota-config",
  "iota-data-ingestion-core",
- "iota-gprc-api",
+ "iota-grpc-api",
  "iota-json",
  "iota-json-rpc",
  "iota-json-rpc-api",
@@ -7562,7 +7562,7 @@ dependencies = [
  "iota-common",
  "iota-config",
  "iota-core",
- "iota-gprc-api",
+ "iota-grpc-api",
  "iota-json-rpc",
  "iota-json-rpc-api",
  "iota-macros",
