@@ -66,6 +66,8 @@ pub enum IndexerTypeConfig {
     Writer {
         snapshot_config: SnapshotLagConfig,
         epochs_to_keep: Option<u64>,
+        use_grpc_streaming: bool,
+        start_ingestion_from_checkpoint_seq_num: Option<u64>,
     },
     AnalyticalWorker,
 }
@@ -80,10 +82,14 @@ impl IndexerTypeConfig {
     pub fn writer_mode(
         snapshot_config: Option<SnapshotLagConfig>,
         epochs_to_keep: Option<u64>,
+        use_grpc_streaming: bool,
+        start_ingestion_from_checkpoint_seq_num: Option<u64>,
     ) -> Self {
         Self::Writer {
             snapshot_config: snapshot_config.unwrap_or_default(),
             epochs_to_keep,
+            use_grpc_streaming,
+            start_ingestion_from_checkpoint_seq_num,
         }
     }
 }
@@ -104,6 +110,7 @@ pub async fn start_test_indexer(
         reader_writer_config,
         data_ingestion_path,
         CancellationToken::new(),
+        None,
     )
     .await
 }
@@ -118,13 +125,15 @@ pub async fn start_test_indexer_impl(
     reader_writer_config: IndexerTypeConfig,
     data_ingestion_path: Option<PathBuf>,
     cancel: CancellationToken,
+    remote_store_url_override: Option<String>,
 ) -> (PgIndexerStore, JoinHandle<Result<(), IndexerError>>) {
     let mut config = IndexerConfig {
         db_url: Some(db_url.clone().into()),
-        // As fallback sync mechanism enable Rest Api if `data_ingestion_path` was not provided
-        remote_store_url: data_ingestion_path
-            .is_none()
-            .then_some(format!("{rpc_url}/api/v1")),
+        remote_store_url: remote_store_url_override.or_else(|| {
+            data_ingestion_path
+                .is_none()
+                .then_some(format!("{}/api/v1", rpc_url))
+        }),
         rpc_client_url: rpc_url,
         reset_db,
         fullnode_sync_worker: true,
@@ -132,6 +141,15 @@ pub async fn start_test_indexer_impl(
         data_ingestion_path,
         ..Default::default()
     };
+    if let IndexerTypeConfig::Writer {
+        use_grpc_streaming,
+        start_ingestion_from_checkpoint_seq_num,
+        ..
+    } = &reader_writer_config
+    {
+        config.use_grpc_streaming = *use_grpc_streaming;
+        config.start_ingestion_from_checkpoint_seq_num = *start_ingestion_from_checkpoint_seq_num;
+    }
 
     let store = create_pg_store(config.get_db_url().unwrap(), reset_db);
     if config.reset_db {
@@ -158,6 +176,8 @@ pub async fn start_test_indexer_impl(
         IndexerTypeConfig::Writer {
             snapshot_config,
             epochs_to_keep,
+            use_grpc_streaming: _,
+            start_ingestion_from_checkpoint_seq_num: _,
         } => {
             let store_clone = store.clone();
 

@@ -37,7 +37,7 @@ use crate::{
     insert_or_ignore_into,
     metrics::IndexerMetrics,
     models::{
-        checkpoints::{StoredChainIdentifier, StoredCheckpoint, StoredCpTx},
+        checkpoints::{StoredCheckpoint, StoredCpTx},
         display::StoredDisplay,
         epoch::{StoredEpochInfo, StoredFeatureFlag, StoredProtocolConfig},
         event_indices::OptimisticEventIndices,
@@ -539,40 +539,28 @@ impl PgIndexerStore {
     }
 
     fn persist_checkpoints(&self, checkpoints: Vec<IndexedCheckpoint>) -> Result<(), IndexerError> {
-        let Some(first_checkpoint) = checkpoints.first() else {
-            return Ok(());
-        };
+        let _start = Instant::now();
 
-        // If the first checkpoint has sequence number 0, we need to persist the digest
-        // as chain identifier.
-        if first_checkpoint.sequence_number == 0 {
-            let checkpoint_digest = first_checkpoint.checkpoint_digest.into_inner().to_vec();
-            self.persist_protocol_configs_and_feature_flags(checkpoint_digest.clone())?;
-            transactional_blocking_with_retry!(
-                &self.blocking_cp,
-                |conn| {
-                    let checkpoint_digest =
-                        first_checkpoint.checkpoint_digest.into_inner().to_vec();
-                    insert_or_ignore_into!(
-                        chain_identifier::table,
-                        StoredChainIdentifier { checkpoint_digest },
-                        conn
-                    );
-                    Ok::<(), IndexerError>(())
-                },
-                PG_DB_COMMIT_SLEEP_DURATION
-            )?;
+        let mut final_stored_checkpoints = Vec::with_capacity(checkpoints.len());
+        let mut final_stored_cp_txs = Vec::with_capacity(checkpoints.len());
+
+        for indexed_checkpoint_ref in &checkpoints {
+            let stored_checkpoint = StoredCheckpoint::from(indexed_checkpoint_ref);
+            final_stored_checkpoints.push(stored_checkpoint);
+            final_stored_cp_txs.push(StoredCpTx::from(indexed_checkpoint_ref));
         }
+
         let guard = self
             .metrics
             .checkpoint_db_commit_latency_checkpoints
             .start_timer();
 
-        let stored_cp_txs = checkpoints.iter().map(StoredCpTx::from).collect::<Vec<_>>();
         transactional_blocking_with_retry!(
             &self.blocking_cp,
             |conn| {
-                for stored_cp_tx_chunk in stored_cp_txs.chunks(PG_COMMIT_CHUNK_SIZE_INTRA_DB_TX) {
+                for stored_cp_tx_chunk in
+                    final_stored_cp_txs.chunks(PG_COMMIT_CHUNK_SIZE_INTRA_DB_TX)
+                {
                     insert_or_ignore_into!(pruner_cp_watermark::table, stored_cp_tx_chunk, conn);
                 }
                 Ok::<(), IndexerError>(())
@@ -582,38 +570,32 @@ impl PgIndexerStore {
         .tap_ok(|_| {
             info!(
                 "Persisted {} pruner_cp_watermark rows.",
-                stored_cp_txs.len(),
+                final_stored_cp_txs.len(),
             );
         })
         .tap_err(|e| {
             tracing::error!("Failed to persist pruner_cp_watermark with error: {}", e);
         })?;
 
-        let stored_checkpoints = checkpoints
-            .iter()
-            .map(StoredCheckpoint::from)
-            .collect::<Vec<_>>();
         transactional_blocking_with_retry!(
             &self.blocking_cp,
             |conn| {
                 for stored_checkpoint_chunk in
-                    stored_checkpoints.chunks(PG_COMMIT_CHUNK_SIZE_INTRA_DB_TX)
+                    final_stored_checkpoints.chunks(PG_COMMIT_CHUNK_SIZE_INTRA_DB_TX)
                 {
                     insert_or_ignore_into!(checkpoints::table, stored_checkpoint_chunk, conn);
                     let time_now_ms = chrono::Utc::now().timestamp_millis();
-                    for stored_checkpoint in stored_checkpoint_chunk {
+                    for stored_checkpoint_item in stored_checkpoint_chunk {
                         self.metrics
                             .db_commit_lag_ms
-                            .set(time_now_ms - stored_checkpoint.timestamp_ms);
+                            .set(time_now_ms - stored_checkpoint_item.timestamp_ms);
                         self.metrics.max_committed_checkpoint_sequence_number.set(
-                            stored_checkpoint.sequence_number,
+                            stored_checkpoint_item.sequence_number,
                         );
                         self.metrics.committed_checkpoint_timestamp_ms.set(
-                            stored_checkpoint.timestamp_ms,
+                            stored_checkpoint_item.timestamp_ms,
                         );
-                    }
-                    for stored_checkpoint in stored_checkpoint_chunk {
-                        info!("Indexer lag: persisted checkpoint {} with time now {} and checkpoint time {}", stored_checkpoint.sequence_number, time_now_ms, stored_checkpoint.timestamp_ms);
+                         info!("Indexer lag: persisted checkpoint {} with time now {} and checkpoint time {}", stored_checkpoint_item.sequence_number, time_now_ms, stored_checkpoint_item.timestamp_ms);
                     }
                 }
                 Ok::<(), IndexerError>(())
@@ -625,12 +607,13 @@ impl PgIndexerStore {
             info!(
                 elapsed,
                 "Persisted {} checkpoints",
-                stored_checkpoints.len()
+                final_stored_checkpoints.len()
             );
         })
         .tap_err(|e| {
             tracing::error!("Failed to persist checkpoints with error: {}", e);
-        })
+        })?;
+        Ok(())
     }
 
     fn persist_transactions_chunk(
@@ -1765,75 +1748,35 @@ impl IndexerStore for PgIndexerStore {
         &self,
         object_versions: Vec<StoredObjectVersion>,
     ) -> Result<(), IndexerError> {
-        if object_versions.is_empty() {
-            return Ok(());
-        }
-        let object_versions_count = object_versions.len();
-
-        let chunks = chunk!(object_versions, self.config.parallel_objects_chunk_size);
-        let futures = chunks
-            .into_iter()
-            .map(|c| self.spawn_blocking_task(move |this| this.persist_object_version_chunk(c)))
-            .collect::<Vec<_>>();
-
-        futures::future::try_join_all(futures)
-            .await
-            .map_err(|e| {
-                tracing::error!("Failed to join persist_object_version_chunk futures: {}", e);
-                IndexerError::from(e)
-            })?
-            .into_iter()
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|e| {
-                IndexerError::PostgresWrite(format!(
-                    "Failed to persist all object version chunks: {:?}",
-                    e
-                ))
-            })?;
-        info!("Persisted {} objects history", object_versions_count);
-        Ok(())
+        let store_clone = self.clone();
+        self.execute_in_blocking_worker(move |_| {
+            store_clone.persist_object_version_chunk(object_versions)
+        })
+        .await
     }
 
     async fn persist_checkpoints(
         &self,
-        checkpoints: Vec<IndexedCheckpoint>,
+        checkpoints_to_persist: Vec<IndexedCheckpoint>,
     ) -> Result<(), IndexerError> {
-        self.execute_in_blocking_worker(move |this| this.persist_checkpoints(checkpoints))
-            .await
+        let store_clone = self.clone();
+        // The actual persistence happens in the blocking worker, calling the inherent
+        // sync method.
+        self.execute_in_blocking_worker(move |_| {
+            store_clone.persist_checkpoints(checkpoints_to_persist)
+        })
+        .await
     }
 
     async fn persist_transactions(
         &self,
         transactions: Vec<IndexedTransaction>,
     ) -> Result<(), IndexerError> {
-        let guard = self
-            .metrics
-            .checkpoint_db_commit_latency_transactions
-            .start_timer();
-        let len = transactions.len();
-
-        let chunks = chunk!(transactions, self.config.parallel_chunk_size);
-        let futures = chunks
-            .into_iter()
-            .map(|c| self.spawn_blocking_task(move |this| this.persist_transactions_chunk(c)));
-
-        futures::future::try_join_all(futures)
-            .await
-            .map_err(|e| {
-                tracing::error!("Failed to join persist_transactions_chunk futures: {}", e);
-                IndexerError::from(e)
-            })?
-            .into_iter()
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|e| {
-                IndexerError::PostgresWrite(format!(
-                    "Failed to persist all transactions chunks: {:?}",
-                    e
-                ))
-            })?;
-        let elapsed = guard.stop_and_record();
-        info!(elapsed, "Persisted {} transactions", len);
-        Ok(())
+        let store_clone = self.clone();
+        self.execute_in_blocking_worker(move |_| {
+            store_clone.persist_transactions_chunk(transactions)
+        })
+        .await
     }
 
     async fn persist_optimistic_transaction(
@@ -2317,6 +2260,22 @@ impl IndexerStore for PgIndexerStore {
     ) -> Result<u64, IndexerError> {
         self.execute_in_blocking_worker(move |this| {
             this.get_network_total_transactions_by_end_of_epoch(epoch)
+        })
+        .await
+    }
+
+    async fn get_epoch_info_by_id(
+        &self,
+        epoch_id: u64,
+    ) -> Result<Option<StoredEpochInfo>, IndexerError> {
+        self.execute_in_blocking_worker(move |this| {
+            read_only_blocking!(&this.blocking_cp, |conn| {
+                crate::schema::epochs::dsl::epochs
+                    .filter(crate::schema::epochs::epoch.eq(epoch_id as i64))
+                    .first::<StoredEpochInfo>(conn)
+                    .optional()
+            })
+            .context("Failed reading epoch info by ID from PostgresDB")
         })
         .await
     }

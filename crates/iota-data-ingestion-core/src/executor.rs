@@ -14,6 +14,7 @@ use tokio::{
     task::JoinHandle,
 };
 use tokio_util::sync::CancellationToken;
+use tracing;
 
 use crate::{
     DataIngestionMetrics, IngestionError, IngestionResult, ReaderOptions, Worker,
@@ -209,6 +210,11 @@ impl<P: ProgressStore> IndexerExecutor<P> {
                 // Only process new checkpoints while system is running (token not cancelled).
                 // The guard prevents accepting new work during shutdown while allowing existing work to complete for other branches.
                 Some(checkpoint) = checkpoint_recv.recv(), if !self.token.is_cancelled() => {
+                    tracing::info!(
+                        "IndexerExecutor::start: Received checkpoint {} from CheckpointReader. Pools: {}",
+                        checkpoint.checkpoint_summary.sequence_number,
+                        self.pool_senders.len()
+                    );
                     for sender in &self.pool_senders {
                         sender.send(checkpoint.clone()).await.map_err(|_| {
                             IngestionError::Channel(

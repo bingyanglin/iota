@@ -6,12 +6,14 @@ use std::{collections::BTreeMap, ffi::OsString, fs, path::PathBuf, sync::Arc, ti
 
 use anyhow;
 use backoff::backoff::Backoff;
-use futures::StreamExt;
 use iota_gprc_api::{
     conversions::checkpoints::convert_checkpoint_data_gprc_to_core,
     proto::iota::gprc::v1::{
-        GetCheckpointRequest, SubscribeNewCheckpointsRequest,
-        checkpoint_gprc_service_client::CheckpointGprcServiceClient, streamed_checkpoint,
+        CheckpointDataGprc, CheckpointDigestGprc, CheckpointPageGprc, CheckpointTransactionGprc,
+        GetCheckpointRequest, ListCheckpointsRequest, SignedCheckpointSummaryGprc,
+        StreamCheckpointsInRangeRequest, StreamedCheckpoint, SubscribeNewCheckpointsRequest,
+        VerifiedTransactionGprc, checkpoint_gprc_service_client::CheckpointGprcServiceClient,
+        streamed_checkpoint,
     },
 };
 use iota_metrics::spawn_monitored_task;
@@ -30,7 +32,7 @@ use tokio::{
     time::timeout,
 };
 use tonic;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, info};
 
 use crate::{
     IngestionError, IngestionResult, create_remote_store_client,
@@ -95,10 +97,19 @@ impl Default for ReaderOptions {
     }
 }
 
+// Define GrpcStreamingReader struct before RemoteStore enum
+#[derive(Debug)]
+pub struct GrpcStreamingReader {
+    grpc_client: CheckpointGprcServiceClient<tonic::transport::Channel>,
+    grpc_stream: Option<tonic::Streaming<StreamedCheckpoint>>,
+    server_address: String,
+}
+
 enum RemoteStore {
     ObjectStore(Box<dyn ObjectStore>),
     Rest(RestClient),
     Grpc(CheckpointGprcServiceClient<tonic::transport::Channel>),
+    GrpcStreaming(GrpcStreamingReader),
     Hybrid(Box<dyn ObjectStore>, RestClient),
 }
 
@@ -194,6 +205,19 @@ impl CheckpointReader {
                     Err(_) => Self::fetch_from_object_store(store, checkpoint_number).await,
                 }
             }
+            RemoteStore::GrpcStreaming(reader) => {
+                match reader
+                    .fetch_from_full_node_grpc_streaming(Some(checkpoint_number))
+                    .await
+                {
+                    Ok(Some((checkpoint_arc, size))) => Ok((checkpoint_arc, size)),
+                    Ok(None) => Err(IngestionError::GrpcCheckpointNotFound(format!(
+                        "Stream yielded no checkpoint for requested sequence {}",
+                        checkpoint_number
+                    ))),
+                    Err(e) => Err(e),
+                }
+            }
         }
     }
 
@@ -237,7 +261,6 @@ impl CheckpointReader {
         })?;
 
         let use_grpc_streaming = self.options.use_grpc_streaming;
-        let reader_options_clone = self.options.clone();
 
         let mut store_for_task = if let Some((fn_url, remote_url)) = url.split_once('|') {
             let object_store = create_remote_store_client(
@@ -247,14 +270,51 @@ impl CheckpointReader {
             )?;
             RemoteStore::Hybrid(object_store, RestClient::new(fn_url.to_string()))
         } else if url.starts_with("grpc://") {
-            match CheckpointGprcServiceClient::connect(url.clone()).await {
-                Ok(client) => RemoteStore::Grpc(client),
-                Err(e) => {
-                    return Err(IngestionError::Upstream(anyhow::anyhow!(
-                        "Failed to connect to gRPC endpoint {}: {}",
-                        url,
-                        e
-                    )));
+            if use_grpc_streaming {
+                match CheckpointGprcServiceClient::connect(url.clone()).await {
+                    Ok(grpc_client) => {
+                        info!(
+                            "CheckpointReader: Initializing RemoteStore::GrpcStreaming for URL: {}",
+                            url
+                        );
+                        RemoteStore::GrpcStreaming(GrpcStreamingReader {
+                            grpc_client,
+                            grpc_stream: None, // Stream will be initialized on first fetch
+                            server_address: url.clone(),
+                        })
+                    }
+                    Err(e) => {
+                        error!(
+                            "Failed to connect to gRPC endpoint {} for streaming: {}. Falling back or erroring.",
+                            url, e
+                        );
+                        return Err(IngestionError::Upstream(anyhow::anyhow!(
+                            "Failed to connect to gRPC endpoint {} for streaming: {}",
+                            url,
+                            e
+                        )));
+                    }
+                }
+            } else {
+                match CheckpointGprcServiceClient::connect(url.clone()).await {
+                    Ok(client) => {
+                        info!(
+                            "CheckpointReader: Initializing RemoteStore::Grpc (unary) for URL: {}",
+                            url
+                        );
+                        RemoteStore::Grpc(client)
+                    }
+                    Err(e) => {
+                        error!(
+                            "Failed to connect to gRPC endpoint {} for unary: {}.",
+                            url, e
+                        );
+                        return Err(IngestionError::Upstream(anyhow::anyhow!(
+                            "Failed to connect to gRPC endpoint {} for unary: {}",
+                            url,
+                            e
+                        )));
+                    }
                 }
             }
         } else if url.ends_with("/api/v1") {
@@ -271,116 +331,20 @@ impl CheckpointReader {
         spawn_monitored_task!({
             let mut current_checkpoint_to_fetch = start_checkpoint_from_config;
             async move {
-                if use_grpc_streaming && matches!(store_for_task, RemoteStore::Grpc(_)) {
-                    if let RemoteStore::Grpc(mut client) = store_for_task {
-                        info!(
-                            "Starting gRPC streaming from checkpoint: {}",
-                            current_checkpoint_to_fetch
-                        );
-                        let request = tonic::Request::new(SubscribeNewCheckpointsRequest {
-                            start_from_sequence_number: Some(
-                                current_checkpoint_to_fetch.to_string(),
-                            ),
-                            include_full_data: true,
-                        });
-
-                        match client.subscribe_new_checkpoints(request).await {
-                            Ok(response) => {
-                                let mut stream = response.into_inner();
-                                while let Some(item_result) = stream.next().await {
-                                    match item_result {
-                                        Ok(streamed_checkpoint) => {
-                                            if let Some(checkpoint_type) =
-                                                streamed_checkpoint.checkpoint_type
-                                            {
-                                                match checkpoint_type {
-                                                    streamed_checkpoint::CheckpointType::FullData(gprc_data) => {
-                                                        let seq_num = gprc_data.summary.as_ref().map_or(0, |s| s.sequence_number);
-                                                        match convert_checkpoint_data_gprc_to_core(gprc_data) {
-                                                            Ok(core_data) => {
-                                                                let size = bcs::serialized_size(&core_data).unwrap_or(0);
-                                                                if sender.send(Ok((Arc::new(core_data), size))).await.is_err() {
-                                                                    error!("Checkpoint receiver closed, terminating gRPC stream.");
-                                                                    break;
-                                                                }
-                                                                current_checkpoint_to_fetch = seq_num + 1;
-                                                            }
-                                                            Err(e) => {
-                                                                error!("gRPC stream: Failed to convert checkpoint {}: {:?}", seq_num, e);
-                                                                if sender.send(Err(IngestionError::Upstream(anyhow::anyhow!("gRPC conversion error: {}", e)))).await.is_err() {
-                                                                    break;
-                                                                }
-                                                            }
-                                                        }
-                                                    }
-                                                    streamed_checkpoint::CheckpointType::Summary(summary_data) => {
-                                                        info!(
-                                                            "gRPC stream: Received summary for checkpoint {}, skipping as full data is expected.",
-                                                            summary_data.sequence_number
-                                                        );
-                                                    }
-                                                }
-                                            }
-                                        }
-                                        Err(status) => {
-                                            error!(
-                                                "gRPC stream error: {:?}. Attempting to re-establish.",
-                                                status
-                                            );
-                                            if sender
-                                                .send(Err(IngestionError::Upstream(
-                                                    anyhow::anyhow!(
-                                                        "gRPC stream error: {}",
-                                                        status
-                                                    ),
-                                                )))
-                                                .await
-                                                .is_err()
-                                            {
-                                                break;
-                                            }
-                                            break;
-                                        }
-                                    }
-                                }
-                                info!(
-                                    "gRPC checkpoint stream ended. Next expected checkpoint if resumed: {}",
-                                    current_checkpoint_to_fetch
-                                );
-                            }
-                            Err(status) => {
-                                error!(
-                                    "Failed to subscribe to gRPC checkpoint stream: {:?}",
-                                    status
-                                );
-                                let _ = sender
-                                    .send(Err(IngestionError::Upstream(anyhow::anyhow!(
-                                        "Failed to subscribe to gRPC stream: {}",
-                                        status
-                                    ))))
-                                    .await;
-                            }
-                        }
-                        return;
-                    } else {
-                        warn!("gRPC streaming mode with non-Grpc store, this is unexpected.");
-                    }
-                }
-
                 info!(
-                    "Entering polling mode for remote fetcher. Current start checkpoint: {}. Streaming: {}",
+                    "Entering polling/streaming mode for remote fetcher. Current start checkpoint: {}. Streaming enabled in options: {}",
                     current_checkpoint_to_fetch, use_grpc_streaming
                 );
 
                 loop {
                     let mut sent_any_success_in_batch = false;
-                    if reader_options_clone.batch_size == 0 {
+                    if batch_size == 0 {
                         tokio::time::sleep(Duration::from_millis(100)).await;
                         current_checkpoint_to_fetch += 1;
                         continue;
                     }
 
-                    for i in 0..reader_options_clone.batch_size {
+                    for i in 0..batch_size {
                         let checkpoint_num_to_fetch = current_checkpoint_to_fetch + i as u64;
                         let result = Self::remote_fetch_checkpoint(
                             &mut store_for_task,
@@ -400,14 +364,14 @@ impl CheckpointReader {
                         }
                     }
 
-                    if !sent_any_success_in_batch && reader_options_clone.batch_size > 0 {
+                    if !sent_any_success_in_batch && batch_size > 0 {
                         debug!(
                             "All fetches in batch failed, adding small delay before next batch."
                         );
                         tokio::time::sleep(Duration::from_millis(500)).await;
                     }
 
-                    current_checkpoint_to_fetch += reader_options_clone.batch_size as u64;
+                    current_checkpoint_to_fetch += batch_size as u64;
                 }
             }
         });
@@ -475,18 +439,57 @@ impl CheckpointReader {
             if read_source == "local"
                 && checkpoint.checkpoint_summary.sequence_number > self.current_checkpoint_number
             {
+                // For local reads, if we find a file far ahead, stop and wait for intermediate
+                // ones. This might not be strictly necessary if executor
+                // handles out-of-order, but good for now.
                 break;
             }
-            assert_eq!(
+            // If the received checkpoint is not what we strictly expected next, log and
+            // adjust. For streaming, we expect it to be sequential starting
+            // from current_checkpoint_number or current_checkpoint_number + 1
+            // depending on how the stream was initiated relative to
+            // current_checkpoint_number.
+            if checkpoint.checkpoint_summary.sequence_number != self.current_checkpoint_number {
+                if checkpoint.checkpoint_summary.sequence_number < self.current_checkpoint_number {
+                    info!(
+                        "CheckpointReader::sync: Received checkpoint {} which is older than current expected {}. Skipping.",
+                        checkpoint.checkpoint_summary.sequence_number,
+                        self.current_checkpoint_number
+                    );
+                    continue; // Skip older checkpoints
+                }
+                info!(
+                    "CheckpointReader::sync: Received checkpoint {} while expecting {}. Adjusting current checkpoint number.",
+                    checkpoint.checkpoint_summary.sequence_number, self.current_checkpoint_number
+                );
+                // We will process this checkpoint, so current_checkpoint_number
+                // will become this.seq + 1
+            }
+
+            tracing::info!(
+                "CheckpointReader::sync: Attempting to send CP {} to executor. Current CPNUM: {}",
                 checkpoint.checkpoint_summary.sequence_number,
                 self.current_checkpoint_number
             );
-            self.checkpoint_sender.send(checkpoint).await.map_err(|_| {
-                IngestionError::Channel(
-                    "unable to send checkpoint to executor, receiver half closed".to_owned(),
-                )
-            })?;
-            self.current_checkpoint_number += 1;
+            self.checkpoint_sender
+                .send(checkpoint.clone())
+                .await
+                .map_err(|e| {
+                    tracing::error!(
+                        "CheckpointReader::sync: FAILED to send CP to executor: {:?}",
+                        e
+                    );
+                    IngestionError::Channel(
+                        "unable to send checkpoint to executor, receiver half closed".to_owned(),
+                    )
+                })?;
+            tracing::info!(
+                "CheckpointReader::sync: Successfully sent CP {} to executor. Updated CPNUM to: {}",
+                checkpoint.checkpoint_summary.sequence_number,
+                checkpoint.checkpoint_summary.sequence_number + 1
+            );
+            // Update current_checkpoint_number to be the next one we expect
+            self.current_checkpoint_number = checkpoint.checkpoint_summary.sequence_number + 1;
         }
         Ok(())
     }
@@ -565,17 +568,37 @@ impl CheckpointReader {
         self.gc_processed_files(self.last_pruned_watermark)
             .expect("Failed to clean the directory");
 
+        tracing::info!(
+            "CheckpointReader::run: Starting main loop. Path: {:?}, Initial CP: {}",
+            self.path,
+            self.current_checkpoint_number
+        );
         loop {
             tokio::select! {
-                _ = &mut self.exit_receiver => break,
+                _ = &mut self.exit_receiver => {
+                    tracing::info!("CheckpointReader::run: Exit signal received, breaking loop.");
+                    break;
+                }
                 Some(gc_checkpoint_number) = self.processed_receiver.recv() => {
+                    tracing::info!("CheckpointReader::run: Received GC for CP: {}", gc_checkpoint_number);
                     self.gc_processed_files(gc_checkpoint_number).expect("Failed to clean the directory");
                 }
                 Ok(Some(_)) | Err(_) = timeout(Duration::from_millis(self.options.tick_interval_ms), inotify_recv.recv())  => {
-                    self.sync().await.expect("Failed to read checkpoint files");
+                    tracing::info!(
+                        "CheckpointReader::run: Tick or inotify event. Current CP before sync: {}",
+                        self.current_checkpoint_number
+                    );
+                    match self.sync().await {
+                        Ok(_) => tracing::info!(
+                            "CheckpointReader::run: sync() completed. Current CP after sync: {}",
+                            self.current_checkpoint_number
+                        ),
+                        Err(e) => tracing::error!("CheckpointReader::run: sync() failed: {:?}", e),
+                    }
                 }
             }
         }
+        tracing::info!("CheckpointReader::run: Exited main loop.");
         Ok(())
     }
 }
@@ -621,15 +644,275 @@ impl DataLimiter {
     }
 }
 
+impl RemoteStore {
+    pub fn is_streaming_grpc(&self) -> bool {
+        matches!(self, RemoteStore::GrpcStreaming(_))
+    }
+
+    pub async fn fetch_checkpoint(
+        &mut self,
+        last_processed_sequence_number: Option<CheckpointSequenceNumber>,
+    ) -> Result<Option<Arc<CheckpointData>>, IngestionError> {
+        match self {
+            RemoteStore::Rest(client) => {
+                let target_seq = last_processed_sequence_number.map_or(0, |s| s + 1);
+                tracing::info!(
+                    "CORE_READER: RemoteStore::fetch_checkpoint (REST) called. Last_processed: {:?}, attempting fetch for target: {:?}",
+                    last_processed_sequence_number,
+                    target_seq
+                );
+                match CheckpointReader::fetch_from_full_node(client, target_seq).await {
+                    Ok((arc_checkpoint_data, _size)) => Ok(Some(arc_checkpoint_data)),
+                    Err(IngestionError::RestApi(sdk_err)) => {
+                        if sdk_err.status() == Some(::reqwest::StatusCode::NOT_FOUND) {
+                            tracing::info!(
+                                "CORE_READER: RemoteStore::fetch_checkpoint (REST) - Checkpoint {} not found (404 status). Returning Ok(None).",
+                                target_seq
+                            );
+                            Ok(None)
+                        } else {
+                            tracing::error!(
+                                "CORE_READER: RemoteStore::fetch_checkpoint (REST) - Non-404 API error for checkpoint {}: {:?}",
+                                target_seq,
+                                sdk_err
+                            );
+                            Err(IngestionError::RestApi(sdk_err))
+                        }
+                    }
+                    Err(e) => {
+                        tracing::error!(
+                            "CORE_READER: RemoteStore::fetch_checkpoint (REST) - Error fetching checkpoint {}: {:?}",
+                            target_seq,
+                            e
+                        );
+                        Err(e)
+                    }
+                }
+            }
+            RemoteStore::Grpc(client) => {
+                let target_seq = last_processed_sequence_number.map_or(0, |s| s + 1);
+                tracing::info!(
+                    "CORE_READER: RemoteStore::fetch_checkpoint (Unary gRPC) called. Last_processed: {:?}, attempting for target: {:?}",
+                    last_processed_sequence_number,
+                    target_seq
+                );
+                match CheckpointReader::fetch_from_full_node_grpc(client, target_seq).await {
+                    Ok((arc_checkpoint_data, _size)) => Ok(Some(arc_checkpoint_data)),
+                    Err(IngestionError::Upstream(anyhow_err)) => {
+                        if let Some(status) = anyhow_err.downcast_ref::<tonic::Status>() {
+                            if status.code() == tonic::Code::NotFound {
+                                tracing::info!(
+                                    "CORE_READER: RemoteStore::fetch_checkpoint (Unary gRPC) - Checkpoint {} not found via gRPC (NotFound status). Returning Ok(None).",
+                                    target_seq
+                                );
+                                return Ok(None);
+                            }
+                        }
+                        tracing::error!(
+                            "CORE_READER: RemoteStore::fetch_checkpoint (Unary gRPC) - Error fetching checkpoint {}: {:?}",
+                            target_seq,
+                            anyhow_err
+                        );
+                        Err(IngestionError::Upstream(anyhow_err))
+                    }
+                    Err(e) => {
+                        tracing::error!(
+                            "CORE_READER: RemoteStore::fetch_checkpoint (Unary gRPC) - Error fetching checkpoint {}: {:?}",
+                            target_seq,
+                            e
+                        );
+                        Err(e)
+                    }
+                }
+            }
+            RemoteStore::GrpcStreaming(stream_reader) => {
+                tracing::info!(
+                    "CORE_READER: RemoteStore::fetch_checkpoint (GRPC_STREAMING) called. Last_processed: {:?}. Delegating to GrpcStreamingReader.",
+                    last_processed_sequence_number
+                );
+                let result = stream_reader
+                    .fetch_from_full_node_grpc_streaming(last_processed_sequence_number)
+                    .await;
+                tracing::info!(
+                    "CORE_READER: RemoteStore::fetch_checkpoint (GRPC_STREAMING) result from GrpcStreamingReader: is_ok={:?}, is_option_some={:?}",
+                    result.is_ok(),
+                    result.as_ref().ok().map_or(false, |opt| opt.is_some())
+                );
+                result.map(|opt_data_with_size| opt_data_with_size.map(|(data, _size)| data))
+            }
+            RemoteStore::ObjectStore(_) => {
+                tracing::warn!(
+                    "CORE_READER: RemoteStore::fetch_checkpoint called on ObjectStore variant directly. This might be unhandled or require specific sequence. Returning None."
+                );
+                Ok(None)
+            }
+            RemoteStore::Hybrid(_, _) => {
+                tracing::warn!(
+                    "CORE_READER: RemoteStore::fetch_checkpoint called on Hybrid variant directly. This path is complex and might not be fully supported in generic fetch. Returning None."
+                );
+                Ok(None)
+            }
+        }
+    }
+}
+
+impl GrpcStreamingReader {
+    async fn fetch_from_full_node_grpc_streaming(
+        &mut self,
+        current_processed_checkpoint_seq_num: Option<CheckpointSequenceNumber>,
+    ) -> Result<Option<(Arc<CheckpointData>, usize)>, IngestionError> {
+        tracing::info!(
+            "CORE_READER_STREAM: fetch_from_full_node_grpc_streaming called. Current processed CP: {:?}",
+            current_processed_checkpoint_seq_num
+        );
+
+        if self.grpc_stream.is_none() {
+            tracing::info!(
+                "CORE_READER_STREAM: No active stream for {}. Attempting to subscribe.",
+                self.server_address
+            );
+            let start_from_sequence_number = current_processed_checkpoint_seq_num
+                .map(|val| val + 1)
+                .unwrap_or(0)
+                .to_string();
+            tracing::info!(
+                "CORE_READER_STREAM: Subscribing with start_from_sequence_number: {}",
+                start_from_sequence_number
+            );
+            let request = SubscribeNewCheckpointsRequest {
+                start_from_sequence_number: Some(start_from_sequence_number),
+                include_full_data: true,
+            };
+            match self
+                .grpc_client
+                .clone()
+                .subscribe_new_checkpoints(request)
+                .await
+            {
+                Ok(response) => {
+                    tracing::info!(
+                        "CORE_READER_STREAM: Successfully subscribed to new checkpoint stream for {}.",
+                        self.server_address
+                    );
+                    self.grpc_stream = Some(response.into_inner());
+                }
+                Err(e) => {
+                    tracing::error!(
+                        "CORE_READER_STREAM: Failed to subscribe to checkpoint stream for {}: {:?}",
+                        self.server_address,
+                        e
+                    );
+                    return Err(IngestionError::GrpcConnectionError(format!(
+                        "Failed to subscribe to gRPC stream from {}: {}",
+                        self.server_address, e
+                    )));
+                }
+            }
+        }
+
+        if let Some(stream) = &mut self.grpc_stream {
+            tracing::info!(
+                "CORE_READER_STREAM: Attempting to get next item from active stream for {}.",
+                self.server_address
+            );
+            match stream.message().await {
+                Ok(Some(streamed_checkpoint)) => {
+                    let cp_type_str = streamed_checkpoint.checkpoint_type.as_ref().map_or(
+                        "None".to_string(),
+                        |t| match t {
+                            streamed_checkpoint::CheckpointType::FullData(_) => {
+                                "FullData".to_string()
+                            }
+                            streamed_checkpoint::CheckpointType::Summary(_) => {
+                                "Summary".to_string()
+                            }
+                        },
+                    );
+                    tracing::info!(
+                        "CORE_READER_STREAM: Received streamed_checkpoint: type {} from {}.",
+                        cp_type_str,
+                        self.server_address
+                    );
+                    match streamed_checkpoint.checkpoint_type {
+                        Some(streamed_checkpoint::CheckpointType::FullData(cp_data_gprc)) => {
+                            let cp_seq = cp_data_gprc
+                                .summary
+                                .as_ref()
+                                .map_or(u64::MAX, |s| s.sequence_number);
+                            tracing::info!(
+                                "CORE_READER_STREAM: Received FullData for CP {} from {}.",
+                                cp_seq,
+                                self.server_address
+                            );
+                            match convert_checkpoint_data_gprc_to_core(cp_data_gprc) {
+                                Ok(core_checkpoint_data) => {
+                                    tracing::info!(
+                                        "CORE_READER_STREAM: Successfully converted gRPC CP {} to Core CheckpointData from {}.",
+                                        cp_seq,
+                                        self.server_address
+                                    );
+                                    let size = bcs::serialized_size(&core_checkpoint_data)
+                                        .map_err(|e| IngestionError::Bcs(e))?;
+                                    return Ok(Some((Arc::new(core_checkpoint_data), size)));
+                                }
+                                Err(e) => {
+                                    tracing::error!(
+                                        "CORE_READER_STREAM: Failed to convert gRPC CP {} to Core CheckpointData from {}: {:?}. Skipping item.",
+                                        cp_seq,
+                                        self.server_address,
+                                        e
+                                    );
+                                }
+                            }
+                        }
+                        Some(streamed_checkpoint::CheckpointType::Summary(summary_gprc)) => {
+                            let cp_seq = summary_gprc.sequence_number;
+                            tracing::warn!(
+                                "CORE_READER_STREAM: Received SummaryOnly for CP {} from {}, but FullData is required. Skipping.",
+                                cp_seq,
+                                self.server_address
+                            );
+                        }
+                        None => {
+                            tracing::warn!(
+                                "CORE_READER_STREAM: Received StreamedCheckpoint with no CheckpointType from {}. Skipping.",
+                                self.server_address
+                            );
+                        }
+                    }
+                }
+                Ok(None) => {
+                    tracing::info!(
+                        "CORE_READER_STREAM: Stream ended (Ok(None)) for {}. Resetting for re-subscription.",
+                        self.server_address
+                    );
+                    self.grpc_stream = None;
+                }
+                Err(e) => {
+                    tracing::error!(
+                        "CORE_READER_STREAM: Error receiving message from stream for {}: {:?}. Resetting stream.",
+                        self.server_address,
+                        e
+                    );
+                    self.grpc_stream = None;
+                    return Err(IngestionError::GrpcMessageError(e.to_string()));
+                }
+            }
+        }
+        tracing::info!(
+            "CORE_READER_STREAM: fetch_from_full_node_grpc_streaming for {} returning None for this attempt.",
+            self.server_address
+        );
+        Ok(None)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::{net::SocketAddr, str::FromStr, sync::Arc, time::Duration};
 
     use iota_gprc_api::proto::iota::gprc::v1::{
-        CheckpointDataGprc, CheckpointDigestGprc, CheckpointPageGprc, CheckpointTransactionGprc,
-        GetCheckpointRequest, ListCheckpointsRequest, SignedCheckpointSummaryGprc,
-        StreamCheckpointsInRangeRequest, StreamedCheckpoint, SubscribeNewCheckpointsRequest,
-        VerifiedTransactionGprc,
+        GetCheckpointRequest, StreamedCheckpoint, SubscribeNewCheckpointsRequest,
         checkpoint_gprc_service_server::{CheckpointGprcService, CheckpointGprcServiceServer},
     };
     use iota_types::{
@@ -726,7 +1009,6 @@ mod tests {
 
             let mut mock_response_guard = self.mock_response.lock().await;
             if let Some(response) = mock_response_guard.take() {
-                // Take the response to simulate it being consumed
                 Ok(tonic::Response::new(response))
             } else {
                 Err(tonic::Status::not_found(
@@ -740,8 +1022,6 @@ mod tests {
             _request: tonic::Request<GetCheckpointRequest>,
         ) -> Result<tonic::Response<SignedCheckpointSummaryGprc>, tonic::Status> {
             println!("MockService: Received GetCheckpoint (summary)");
-            // For this test suite, we are focused on GetCheckpoint logic becomes relevant
-            // for the reader.
             Err(tonic::Status::unimplemented(
                 "get_checkpoint (summary) not fully implemented in this mock for reader tests",
             ))
@@ -779,18 +1059,14 @@ mod tests {
                 .and_then(|s| s.parse::<u64>().ok())
                 .unwrap_or(0);
 
-            // For the test, let's stream a few checkpoints starting from `start_from_seq`
-            let (tx, rx) = mpsc::channel(10); // Buffer size for the stream
+            let (tx, rx) = mpsc::channel(10);
             let num_checkpoints_to_stream = 3;
 
-            let _mock_response_template = self.mock_response.clone(); // Prefix with _
+            let _mock_response_template = self.mock_response.clone();
 
             tokio::spawn(async move {
                 for i in 0..num_checkpoints_to_stream {
                     let current_seq = start_from_seq + i;
-                    // Create a mock StreamedCheckpoint with FullData
-                    // Use the mock_response logic if available, or create fresh mock data.
-                    // For simplicity, creating fresh mock_checkpoint_data_gprc here.
                     let gprc_data = mock_checkpoint_data_gprc(current_seq);
 
                     let streamed_item = StreamedCheckpoint {
@@ -799,22 +1075,18 @@ mod tests {
                         )),
                     };
                     if tx.send(Ok(streamed_item)).await.is_err() {
-                        // Receiver dropped, stop sending
                         println!("MockService: Stream receiver dropped.");
                         break;
                     }
-                    // Simulate some delay between streaming items
                     tokio::time::sleep(Duration::from_millis(50)).await;
                 }
                 println!("MockService: Finished streaming mock checkpoints.");
-                // Dropping tx will close the stream on the client side
             });
 
             Ok(tonic::Response::new(ReceiverStream::new(rx)))
         }
     }
 
-    // Helper to create a mock CheckpointDataGprc
     fn mock_checkpoint_data_gprc(sequence_number: u64) -> CheckpointDataGprc {
         CheckpointDataGprc {
             summary: Some(SignedCheckpointSummaryGprc {
@@ -838,13 +1110,12 @@ mod tests {
         }
     }
 
-    // Helper to start the mock server
     async fn start_mock_server(
         service: MockCheckpointService,
     ) -> Result<SocketAddr, anyhow::Error> {
-        let initial_addr: SocketAddr = "127.0.0.1:0".parse()?; // For TcpListener
+        let initial_addr: SocketAddr = "127.0.0.1:0".parse()?;
         let listener = tokio::net::TcpListener::bind(initial_addr).await?;
-        let actual_addr = listener.local_addr()?; // Get the OS-assigned port
+        let actual_addr = listener.local_addr()?;
 
         let server_builder =
             Server::builder().add_service(CheckpointGprcServiceServer::new(service));
@@ -858,7 +1129,7 @@ mod tests {
             }
         });
 
-        Ok(actual_addr) // Return the actual address
+        Ok(actual_addr)
     }
 
     #[tokio::test]
@@ -893,10 +1164,7 @@ mod tests {
     #[tokio::test]
     async fn test_grpc_streaming_fetch() -> Result<(), Box<dyn std::error::Error>> {
         let start_seq = 10u64;
-        // The mock_response in MockCheckpointService isn't directly used by
-        // subscribe_new_checkpoints, as it generates its own stream. So, the
-        // specific data doesn't matter for the constructor here.
-        let mock_service = MockCheckpointService::default(); // Or new with any dummy data
+        let mock_service = MockCheckpointService::default();
         let server_addr = start_mock_server(mock_service).await?;
         let grpc_url = format!("grpc://{}", server_addr);
 
@@ -904,19 +1172,19 @@ mod tests {
         let (mut reader, _checkpoint_receiver, _processed_sender, _exit_sender) =
             CheckpointReader::initialize(
                 temp_dir.path().to_path_buf(),
-                start_seq, // Start current_checkpoint_number from here
+                start_seq,
                 Some(grpc_url.clone()),
                 vec![],
                 ReaderOptions {
                     use_grpc_streaming: true,
-                    batch_size: 1, // Keep low for predictable stream item count
+                    batch_size: 1,
                     ..Default::default()
                 },
             );
 
         let mut actual_stream_receiver = reader.start_remote_fetcher().await.unwrap();
         let mut received_count = 0;
-        let expected_stream_count = 3; // Mock service streams 3 items
+        let expected_stream_count = 3;
 
         for i in 0..expected_stream_count {
             match timeout(Duration::from_secs(2), actual_stream_receiver.recv()).await {
@@ -934,12 +1202,10 @@ mod tests {
         }
         assert_eq!(received_count, expected_stream_count);
 
-        // Check that the stream can close gracefully
         match timeout(Duration::from_millis(200), actual_stream_receiver.recv()).await {
-            Ok(None) => { /* Expected: stream closed after mock server finishes */ }
+            Ok(None) => {}
             Ok(Some(_)) => panic!("Stream sent more items than expected."),
             Err(_) => {
-                // Timeout is also acceptable if stream is just idle
                 info!("Stream idle as expected after items.");
             }
         }

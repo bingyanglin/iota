@@ -89,6 +89,12 @@ pub struct IndexerConfig {
     pub analytical_worker: bool,
     #[arg(long, default_value_t = false)]
     pub use_grpc_streaming: bool,
+    /// Optional. If specified, the indexer will attempt to start ingesting
+    /// checkpoints from this sequence number. This will override any value
+    /// found in the progress store if it is higher. Useful for starting
+    /// fresh or skipping ahead.
+    #[arg(long)]
+    pub start_ingestion_from_checkpoint_seq_num: Option<u64>,
     #[command(flatten)]
     pub iota_names_options: IotaNamesOptions,
 }
@@ -164,6 +170,7 @@ impl Default for IndexerConfig {
             data_ingestion_path: None,
             analytical_worker: false,
             use_grpc_streaming: false,
+            start_ingestion_from_checkpoint_seq_num: None,
             iota_names_options: IotaNamesOptions::default(),
         }
     }

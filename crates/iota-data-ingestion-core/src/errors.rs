@@ -54,6 +54,18 @@ pub enum IngestionError {
 
     #[error("reading historical data failed: `{0}`")]
     HistoryRead(String),
+
+    #[error("Checkpoint not found: `{0}`")]
+    CheckpointNotFound(String),
+
+    #[error("gRPC: Checkpoint not found: `{0}`")]
+    GrpcCheckpointNotFound(String),
+
+    #[error("gRPC: Connection error: `{0}`")]
+    GrpcConnectionError(String),
+
+    #[error("gRPC: Message error: `{0}`")]
+    GrpcMessageError(String),
 }
 
 impl From<tonic::Status> for IngestionError {

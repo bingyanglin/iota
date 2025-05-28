@@ -6545,6 +6545,7 @@ dependencies = [
  "object_store 0.10.2",
  "prometheus",
  "rand 0.8.5",
+ "reqwest 0.12.7",
  "serde",
  "serde_json",
  "tap",
@@ -7015,6 +7016,7 @@ dependencies = [
  "hex",
  "iota-config",
  "iota-data-ingestion-core",
+ "iota-gprc-api",
  "iota-json",
  "iota-json-rpc",
  "iota-json-rpc-api",
@@ -7052,8 +7054,11 @@ dependencies = [
  "test-cluster",
  "thiserror 1.0.64",
  "tokio",
+ "tokio-stream",
  "tokio-util 0.7.12",
+ "tonic 0.13.1",
  "tracing",
+ "tracing-subscriber",
  "url",
 ]
 
