@@ -27,26 +27,7 @@ message ListCoinsResponse {
     optional string next_cursor = 2;
 }
 
-message CoinEventGprc {
-    enum EventType {
-        EVENT_TYPE_UNSPECIFIED = 0;
-        MINT = 1;
-        BURN = 2;
-        TRANSFER = 3;
-    }
-    EventType event_type = 1;
-    string coin_type_tag = 2;
-    StringU64 amount = 3;
-    StringU64 timestamp_ms = 4;
-    // Add other event details like source/destination addresses
-}
-
-message SubscribeCoinEventsRequest {
-    optional string coin_type_tag_filter = 1;
-}
-
 service CoinsGprcService {
     rpc GetCoinInfo(GetCoinInfoRequest) returns (CoinInfoGprc);
     rpc ListCoins(ListCoinsRequest) returns (ListCoinsResponse);
-    rpc SubscribeCoinEvents(SubscribeCoinEventsRequest) returns (stream CoinEventGprc);
 } 

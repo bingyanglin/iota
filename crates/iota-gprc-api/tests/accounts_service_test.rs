@@ -8,7 +8,7 @@ use std::{
 use anyhow;
 use iota_gprc_api::{
     proto::iota::gprc::v1::{
-        GetAccountInfoRequest, ListAccountObjectsRequest, SubscribeAccountChangesRequest,
+        GetAccountInfoRequest, ListAccountObjectsRequest,
         accounts_gprc_service_client::AccountsGprcServiceClient,
     },
     server::{GrpcServer, StateReader},
@@ -327,29 +327,6 @@ async fn test_list_account_objects_unimplemented() {
             status
                 .message()
                 .contains("ListAccountObjects not implemented")
-        );
-    }
-    drop(shutdown_tx);
-}
-
-#[tokio::test]
-async fn test_subscribe_account_changes_unimplemented() {
-    let (mut client, _addr, shutdown_tx, _mock_state_reader) =
-        spawn_test_server_with_accounts_client().await;
-
-    let request = SubscribeAccountChangesRequest {
-        account_address: "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef"
-            .to_string(),
-    };
-
-    let result = client.subscribe_account_changes(request).await;
-    assert!(result.is_err());
-    if let Err(status) = result {
-        assert_eq!(status.code(), tonic::Code::Unimplemented);
-        assert!(
-            status
-                .message()
-                .contains("SubscribeAccountChanges not implemented")
         );
     }
     drop(shutdown_tx);

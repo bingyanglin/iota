@@ -9,7 +9,7 @@ use anyhow;
 use iota_gprc_api::{
     proto::iota::gprc::v1::{
         Direction as GrpcDirection, EpochIdGprc, GetEpochInfoRequest, ListEpochsRequest,
-        SubscribeNewEpochsRequest, epochs_gprc_service_client::EpochsGprcServiceClient,
+        epochs_gprc_service_client::EpochsGprcServiceClient,
     },
     server::{GrpcServer, StateReader},
 };
@@ -325,26 +325,6 @@ async fn test_list_epochs_unimplemented() {
     if let Err(status) = result {
         assert_eq!(status.code(), tonic::Code::Unimplemented);
         assert!(status.message().contains("ListEpochs not implemented"));
-    }
-    drop(shutdown_tx);
-}
-
-#[tokio::test]
-async fn test_subscribe_new_epochs_unimplemented() {
-    let (mut client, _addr, shutdown_tx, _mock_state_reader) =
-        spawn_test_server_with_epochs_client().await;
-
-    let request = SubscribeNewEpochsRequest {};
-
-    let result = client.subscribe_new_epochs(request).await;
-    assert!(result.is_err());
-    if let Err(status) = result {
-        assert_eq!(status.code(), tonic::Code::Unimplemented);
-        assert!(
-            status
-                .message()
-                .contains("SubscribeNewEpochs not implemented")
-        );
     }
     drop(shutdown_tx);
 }

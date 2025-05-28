@@ -1,14 +1,8 @@
-use std::{sync::Arc, time::Duration};
-
-use anyhow;
-use hex;
 use iota_types::{
     base_types::{IotaAddress, ObjectID, ObjectIDParseError, SequenceNumber},
-    object::Object as IotaObject,
-    parse_iota_address,
     storage::AccountOwnedObjectInfo,
 };
-use tokio::sync::{broadcast, mpsc};
+use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::{Request, Response, Status};
 
@@ -17,8 +11,7 @@ use crate::{
     error::GrpcApiError,
     proto::iota::gprc::v1::{
         GetObjectRequest, ListObjectsRequest, ListObjectsResponse, ObjectGprc,
-        StreamObjectsRequest, SubscribeObjectsByOwnerRequest,
-        object_gprc_service_server::ObjectGprcService,
+        StreamObjectsRequest, object_gprc_service_server::ObjectGprcService,
     },
     server::StateReader,
 };
@@ -29,95 +22,11 @@ const MAX_LIST_OBJECTS_LIMIT: u32 = 1000;
 #[derive(Clone)]
 pub struct ObjectServiceImpl {
     state_reader: StateReader,
-    object_event_sender: broadcast::Sender<(IotaAddress, Arc<IotaObject>)>,
 }
 
 impl ObjectServiceImpl {
     pub fn new(state_reader: StateReader) -> Self {
-        let (tx, _rx) = broadcast::channel::<(IotaAddress, Arc<IotaObject>)>(32);
-        let poller_tx = tx.clone();
-
-        // Mock poller task for object events
-        tokio::spawn(async move {
-            let mut version_counter: u64 = 1;
-            // Use a fixed owner address for mock events, e.g., the one from tests
-            let mock_owner_address_str =
-                "0xaabbccddeeff00112233445566778899aabbccddeeff00112233445566778899";
-            let mock_owner_address = match mock_owner_address_str.parse::<IotaAddress>() {
-                Ok(addr) => addr,
-                Err(_) => {
-                    eprintln!(
-                        "[ObjectPoller] Fatal: Could not parse mock owner address. Poller will not run."
-                    );
-                    return;
-                }
-            };
-            // Use a fixed object ID for mock events for simplicity, just change its
-            // version/content
-            let mock_object_id_str =
-                "0xdeadbeef00000000000000000000000000000000000000000000000000000000";
-            let _mock_object_id = match mock_object_id_str.parse::<ObjectID>() {
-                Ok(id) => id,
-                Err(_) => {
-                    eprintln!(
-                        "[ObjectPoller] Fatal: Could not parse mock object ID. Poller will not run."
-                    );
-                    return;
-                }
-            };
-
-            println!(
-                "[ObjectPoller] Started. Will generate mock objects for owner: 0x{}",
-                hex::encode(mock_owner_address.as_ref())
-            );
-
-            loop {
-                tokio::time::sleep(Duration::from_secs(2)).await; // Poll/generate every 2 seconds
-
-                // Create a mock object (simplified version of test's create_mock_object)
-                let mock_move_object_type_str = "0x42::example_module::ExamplePolledObject";
-                let struct_tag = mock_move_object_type_str
-                    .parse::<move_core_types::language_storage::StructTag>()
-                    .unwrap();
-                let move_object_type = iota_types::base_types::MoveObjectType::from(struct_tag);
-                let move_obj = iota_types::object::MoveObject::new_from_execution(
-                    move_object_type,
-                    iota_types::base_types::SequenceNumber::from_u64(version_counter),
-                    format!("polled_mock_contents_{}", version_counter).into_bytes(),
-                    &iota_protocol_config::ProtocolConfig::get_for_min_version(),
-                )
-                .unwrap();
-
-                let iota_object = iota_types::object::ObjectInner {
-                    data: iota_types::object::Data::Move(move_obj),
-                    owner: iota_types::object::Owner::AddressOwner(mock_owner_address),
-                    previous_transaction: iota_types::digests::TransactionDigest::genesis_marker(),
-                    storage_rebate: 100u64 + version_counter,
-                }
-                .into();
-
-                let object_arc = Arc::new(iota_object);
-
-                // println!(
-                //     "[ObjectPoller] Generated mock object version {} for owner {}",
-                //     version_counter, mock_owner_address.to_hex_literal()
-                // );
-
-                if poller_tx.send((mock_owner_address, object_arc)).is_err() {
-                    // All receivers dropped, which is fine if no one is
-                    // subscribed. The poller continues, new
-                    // subscribers will get new events.
-                    // println!("[ObjectPoller] No active subscribers for object
-                    // event. Polling continues.");
-                }
-                version_counter += 1;
-            }
-        });
-
-        Self {
-            state_reader,
-            object_event_sender: tx,
-        }
+        Self { state_reader }
     }
 }
 
@@ -224,61 +133,23 @@ impl ObjectGprcService for ObjectServiceImpl {
             })
         })?;
 
-        let limit = req_inner
+        let effective_limit_u32: u32 = req_inner
             .limit
             .unwrap_or(DEFAULT_LIST_OBJECTS_LIMIT)
             .min(MAX_LIST_OBJECTS_LIMIT);
-        if limit == 0 {
+        if effective_limit_u32 == 0 {
             return Err(Status::invalid_argument("limit cannot be zero"));
         }
 
-        let mut objects_gprc = Vec::with_capacity(limit as usize);
-        let mut next_cursor_object_id: Option<ObjectID> = None;
-
-        match self
+        // Collect object infos into a Vec first to make it Sendable before any .await
+        let object_infos: Vec<AccountOwnedObjectInfo> = match self
             .state_reader
             .account_owned_objects_info_iter(owner_address, cursor_object_id)
         {
-            Ok(iter) => {
-                for object_info in iter.take(limit as usize + 1) {
-                    if objects_gprc.len() < limit as usize {
-                        match self.state_reader.get_object(&object_info.object_id) {
-                            Ok(Some(core_object)) => {
-                                match convert_object_to_gprc(&object_info.object_id, &core_object) {
-                                    Ok(gprc_obj) => objects_gprc.push(gprc_obj),
-                                    Err(conv_err) => {
-                                        eprintln!(
-                                            "[gRPC ObjectService] Error converting object {}: {:?}",
-                                            object_info.object_id, conv_err
-                                        );
-                                        // Skip and log
-                                    }
-                                }
-                            }
-                            Ok(None) => {
-                                eprintln!(
-                                    "[gRPC ObjectService] Object {} (from owned list) not found during fetch.",
-                                    object_info.object_id
-                                );
-                                // Skip
-                            }
-                            Err(storage_err) => {
-                                eprintln!(
-                                    "[gRPC ObjectService] Error fetching object {}: {:?}",
-                                    object_info.object_id, storage_err
-                                );
-                                return Err(Status::internal(format!(
-                                    "Error fetching object data: {}",
-                                    storage_err
-                                )));
-                            }
-                        }
-                    } else {
-                        next_cursor_object_id = Some(object_info.object_id);
-                        break; // Limit reached
-                    }
-                }
-            }
+            Ok(iter) => iter.take(effective_limit_u32 as usize + 1).collect(), /* Collect one
+                                                                                 * more than limit
+                                                                                 * to determine
+                                                                                 * next_cursor */
             Err(storage_err) => {
                 eprintln!(
                     "[gRPC ObjectService] Error calling account_owned_objects_info_iter for {}: {:?}",
@@ -289,11 +160,54 @@ impl ObjectGprcService for ObjectServiceImpl {
                     storage_err
                 )));
             }
+        };
+
+        let mut collected_objects_gprc = Vec::new();
+        let mut next_cursor_gprc: Option<String> = None;
+
+        for (idx, object_info) in object_infos.iter().enumerate() {
+            if idx >= effective_limit_u32 as usize {
+                // This item is the +1 item, use its ID for next_cursor if we took
+                // effective_limit items
+                if collected_objects_gprc.len() == effective_limit_u32 as usize {
+                    next_cursor_gprc = Some(object_info.object_id.to_hex_literal());
+                }
+                break;
+            }
+
+            match self.state_reader.get_object(&object_info.object_id) {
+                Ok(Some(core_object)) => {
+                    match convert_object_to_gprc(&object_info.object_id, &core_object) {
+                        Ok(gprc_object) => {
+                            collected_objects_gprc.push(gprc_object);
+                        }
+                        Err(e) => {
+                            eprintln!(
+                                "[gRPC ObjectService] Error converting object {}: {:?}. Skipping.",
+                                object_info.object_id, e
+                            );
+                        }
+                    }
+                }
+                Ok(None) => {
+                    eprintln!(
+                        "[gRPC ObjectService] Object {} from AccountOwnedObjectInfo not found in store. Skipping.",
+                        object_info.object_id
+                    );
+                }
+                Err(e) => {
+                    eprintln!(
+                        "[gRPC ObjectService] Storage error fetching object {}: {:?}. Skipping.",
+                        object_info.object_id, e
+                    );
+                }
+            }
+            // Removed yield_now().await from here as we collected infos first
         }
 
         Ok(Response::new(ListObjectsResponse {
-            objects: objects_gprc,
-            next_cursor: next_cursor_object_id.map(|id| id.to_hex_literal()),
+            objects: collected_objects_gprc,
+            next_cursor: next_cursor_gprc,
         }))
     }
 
@@ -419,106 +333,5 @@ impl ObjectGprcService for ObjectServiceImpl {
         });
 
         Ok(Response::new(ReceiverStream::new(rx)))
-    }
-
-    type SubscribeObjectsByOwnerStream = ReceiverStream<Result<ObjectGprc, Status>>;
-
-    async fn subscribe_objects_by_owner(
-        &self,
-        request: Request<SubscribeObjectsByOwnerRequest>,
-    ) -> Result<Response<Self::SubscribeObjectsByOwnerStream>, Status> {
-        let req_inner = request.into_inner();
-        println!(
-            "[gRPC ObjectService] Received SubscribeObjectsByOwner request: {:?}",
-            req_inner
-        );
-
-        let owner_address_str = req_inner.owner_address;
-        let requested_owner_address: IotaAddress = match parse_iota_address(&owner_address_str) {
-            Ok(addr) => addr,
-            Err(e) => {
-                return Err(Status::invalid_argument(format!(
-                    "Invalid owner_address '{}': {}",
-                    owner_address_str, e
-                )));
-            }
-        };
-
-        let mut broadcast_rx = self.object_event_sender.subscribe();
-        let (tx_to_client, rx_from_task) = mpsc::channel(16); // Channel to client stream
-
-        tokio::spawn(async move {
-            println!(
-                "[gRPC SubscribeObjectsTask] Started for client subscribing to owner: 0x{}",
-                hex::encode(requested_owner_address.as_ref())
-            );
-            loop {
-                match broadcast_rx.recv().await {
-                    Ok((event_owner_address, object_arc)) => {
-                        if event_owner_address == requested_owner_address {
-                            // The object_arc is Arc<IotaObject>. We need its ID for conversion.
-                            // However, IotaObject doesn't directly store its ID.
-                            // The ID is context-dependent (how it was fetched/named).
-                            // For a streamed *new* object, its ID would be derived from its
-                            // content/creation tx. For this mock
-                            // poller, we used a fixed mock_object_id.
-                            // This highlights a slight conceptual mismatch: the poller sends
-                            // (Owner, Object),
-                            // but convert_object_to_gprc needs (ObjectID, &Object).
-                            // Let's use the mock_object_id that the poller is using, for
-                            // demonstration. A real system would have a
-                            // proper way to get/assign an ID to a new object event.
-
-                            let mock_polled_object_id_str = "0xdeadbeef00000000000000000000000000000000000000000000000000000000";
-                            let mock_polled_object_id =
-                                ObjectID::from_hex_literal(mock_polled_object_id_str).unwrap();
-
-                            match convert_object_to_gprc(&mock_polled_object_id, &object_arc) {
-                                Ok(gprc_object) => {
-                                    if tx_to_client.send(Ok(gprc_object)).await.is_err() {
-                                        println!(
-                                            "[gRPC SubscribeObjectsTask] Client for 0x{} disconnected. Halting.",
-                                            hex::encode(requested_owner_address.as_ref())
-                                        );
-                                        return; // Client disconnected
-                                    }
-                                }
-                                Err(e) => {
-                                    eprintln!(
-                                        "[gRPC SubscribeObjectsTask] Error converting object for 0x{}: {:?}. Skipping for client.",
-                                        hex::encode(requested_owner_address.as_ref()),
-                                        e
-                                    );
-                                    // Don't send error to client, just skip
-                                    // this problematic object
-                                }
-                            }
-                        }
-                    }
-                    Err(broadcast::error::RecvError::Lagged(n)) => {
-                        eprintln!(
-                            "[gRPC SubscribeObjectsTask] Client for 0x{} lagged by {} messages. Some objects were missed.",
-                            hex::encode(requested_owner_address.as_ref()),
-                            n
-                        );
-                        // Consider sending an error to the client if this is
-                        // critical
-                    }
-                    Err(broadcast::error::RecvError::Closed) => {
-                        println!(
-                            "[gRPC SubscribeObjectsTask] Broadcast channel closed. Terminating client subscription for 0x{}.",
-                            hex::encode(requested_owner_address.as_ref())
-                        );
-                        break; // Broadcaster (poller) stopped.
-                    }
-                }
-            }
-            println!(
-                "[gRPC SubscribeObjectsTask] Terminated for client 0x{}.",
-                hex::encode(requested_owner_address.as_ref())
-            );
-        });
-
-        Ok(Response::new(ReceiverStream::new(rx_from_task)))
     }
 }

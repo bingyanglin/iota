@@ -51,12 +51,6 @@ message StreamObjectsRequest {
     optional string start_after_object_id = 2;
 }
 
-// Request for subscribing to new or updated objects for a specific owner
-message SubscribeObjectsByOwnerRequest {
-    string owner_address = 1; // Required: Bech32m encoded IOTA address
-    // optional string start_after_object_id = 2; // Consider for future enhancement: Hex string ObjectID
-}
-
 // Service definition for Objects
 service ObjectGprcService {
     // Retrieves an object by its ID
@@ -71,7 +65,4 @@ service ObjectGprcService {
     // Depending on implementation, this could be current objects or a stream of new/updated objects.
     // For initial implementation, it will stream all current objects for the owner.
     rpc StreamObjects(StreamObjectsRequest) returns (stream ObjectGprc) {}
-
-    // Subscribe to new or updated objects for a specific owner
-    rpc SubscribeObjectsByOwner(SubscribeObjectsByOwnerRequest) returns (stream ObjectGprc) {}
 } 

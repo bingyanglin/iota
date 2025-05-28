@@ -8,8 +8,7 @@ use std::{
 use anyhow;
 use iota_gprc_api::{
     proto::iota::gprc::v1::{
-        GetCoinInfoRequest, ListCoinsRequest, SubscribeCoinEventsRequest,
-        coins_gprc_service_client::CoinsGprcServiceClient,
+        GetCoinInfoRequest, ListCoinsRequest, coins_gprc_service_client::CoinsGprcServiceClient,
     },
     server::{GrpcServer, StateReader},
 };
@@ -300,27 +299,6 @@ async fn test_list_coins_unimplemented() {
     if let Err(status) = result {
         assert_eq!(status.code(), tonic::Code::Unimplemented);
         assert!(status.message().contains("ListCoins not implemented"));
-    }
-    drop(shutdown_tx);
-}
-
-#[tokio::test]
-async fn test_subscribe_coin_events_unimplemented() {
-    let (mut client, shutdown_tx, _mock_state_reader) = spawn_test_server_with_coins_client().await;
-
-    let request = SubscribeCoinEventsRequest {
-        coin_type_tag_filter: None,
-    };
-
-    let result = client.subscribe_coin_events(request).await;
-    assert!(result.is_err());
-    if let Err(status) = result {
-        assert_eq!(status.code(), tonic::Code::Unimplemented);
-        assert!(
-            status
-                .message()
-                .contains("SubscribeCoinEvents not implemented")
-        );
     }
     drop(shutdown_tx);
 }

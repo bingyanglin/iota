@@ -1,11 +1,9 @@
-use tokio_stream::wrappers::ReceiverStream;
 use tonic::{Request, Response, Status};
 
 use crate::{
     proto::iota::gprc::v1::{
-        AccountChangeEventGprc, AccountInfoGprc, GetAccountInfoRequest, ListAccountObjectsRequest,
-        ListAccountObjectsResponse, SubscribeAccountChangesRequest,
-        accounts_gprc_service_server::AccountsGprcService,
+        AccountInfoGprc, GetAccountInfoRequest, ListAccountObjectsRequest,
+        ListAccountObjectsResponse, accounts_gprc_service_server::AccountsGprcService,
     },
     server::StateReader,
 };
@@ -44,20 +42,5 @@ impl AccountsGprcService for AccountsServiceImpl {
             request.get_ref()
         );
         Err(Status::unimplemented("ListAccountObjects not implemented"))
-    }
-
-    type SubscribeAccountChangesStream = ReceiverStream<Result<AccountChangeEventGprc, Status>>;
-
-    async fn subscribe_account_changes(
-        &self,
-        request: Request<SubscribeAccountChangesRequest>,
-    ) -> Result<Response<Self::SubscribeAccountChangesStream>, Status> {
-        println!(
-            "[gRPC AccountsService] Received SubscribeAccountChanges request: {:?}",
-            request.get_ref()
-        );
-        Err(Status::unimplemented(
-            "SubscribeAccountChanges not implemented",
-        ))
     }
 }

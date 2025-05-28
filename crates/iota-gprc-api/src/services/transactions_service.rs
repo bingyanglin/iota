@@ -1,7 +1,8 @@
 use std::convert::TryInto;
 
-// use anyhow; // For parsing error type -- No longer needed directly here
 use iota_types::digests::TransactionDigest; // For parsing transaction_id
+use tokio::sync::mpsc; // Added for channel in stream_transactions
+use tokio_stream::wrappers::ReceiverStream;
 use tonic::{Request, Response, Status};
 
 use crate::{
@@ -9,8 +10,12 @@ use crate::{
                                                                       * function */
     error::GrpcApiError, // Will be used for error conversion
     proto::iota::gprc::v1::{
-        Direction, GetTransactionRequest, ListTransactionsRequest, ListTransactionsResponse,
-        StreamTransactionsRequest, TransactionGprc,
+        Direction,
+        GetTransactionRequest,
+        ListTransactionsRequest,
+        ListTransactionsResponse,
+        StreamTransactionsRequest, // Added StreamTransactionsRequest
+        TransactionGprc,
         transaction_gprc_service_server::TransactionGprcService,
     },
     server::StateReader,
@@ -188,6 +193,8 @@ impl TransactionGprcService for TransactionServiceImpl {
         }
     }
 
+    type StreamTransactionsStream = ReceiverStream<Result<TransactionGprc, Status>>;
+
     async fn stream_transactions(
         &self,
         request: Request<StreamTransactionsRequest>,
@@ -232,7 +239,7 @@ impl TransactionGprcService for TransactionServiceImpl {
             };
 
         let state_reader = self.state_reader.clone();
-        let (tx, rx) = tokio::sync::mpsc::channel(128); // Increased buffer size
+        let (tx, rx) = mpsc::channel(128); // Increased buffer size
 
         tokio::spawn(async move {
             let mut current_cursor = initial_cursor_digest_opt;
@@ -244,21 +251,24 @@ impl TransactionGprcService for TransactionServiceImpl {
 
                 match state_reader.list_transactions(
                     current_cursor,
-                    STREAM_POLL_LIMIT,
-                    iota_types::storage::ListDirection::Ascending,
+                    STREAM_POLL_LIMIT, // Fetch a small number of transactions each poll
+                    iota_types::storage::ListDirection::Ascending, /* Always poll ascending from
+                                        * cursor */
                 ) {
                     Ok(core_transactions) => {
-                        if core_transactions.is_empty() && current_cursor.is_some() {
-                            // If we had a cursor and got nothing, we are likely at the tip.
-                            // Continue polling from the same cursor.
-                            continue;
-                        } else if core_transactions.is_empty() && current_cursor.is_none() {
-                            // Started from beginning and got nothing, DB might be empty.
-                            // Continue polling from None cursor.
+                        if core_transactions.is_empty() {
+                            // No new transactions since last poll with this cursor, continue
+                            // polling
                             continue;
                         }
 
                         for (digest, verified_tx) in core_transactions {
+                            // If the current_cursor was None, we list from the beginning.
+                            // If current_cursor was Some, list_transactions should return items
+                            // *after* it. We need to ensure we don't
+                            // re-send the cursor item itself if list_transactions is inclusive.
+                            // Assuming list_transactions is exclusive of the cursor for now.
+
                             match convert_verified_transaction_to_gprc(&digest, &verified_tx) {
                                 Ok(gprc_tx) => {
                                     if tx.send(Ok(gprc_tx)).await.is_err() {
@@ -314,12 +324,6 @@ impl TransactionGprcService for TransactionServiceImpl {
             }
         });
 
-        Ok(Response::new(tokio_stream::wrappers::ReceiverStream::new(
-            rx,
-        )))
+        Ok(Response::new(ReceiverStream::new(rx)))
     }
-
-    // Define the stream type for StreamTransactions
-    type StreamTransactionsStream =
-        tokio_stream::wrappers::ReceiverStream<Result<TransactionGprc, Status>>;
 }

@@ -11,22 +11,6 @@ message SystemInfoGprc {
 
 message GetSystemInfoRequest {}
 
-message SystemEventGprc {
-    enum EventType {
-        EVENT_TYPE_UNSPECIFIED = 0;
-        NODE_STATUS_CHANGED = 1;
-        // Add other event types
-    }
-    EventType event_type = 1;
-    string details_json = 2; // Generic details payload
-    StringU64 timestamp_ms = 3;
-}
-
-message SubscribeSystemEventsRequest {
-    // Potentially filters for event types
-}
-
 service SystemGprcService {
     rpc GetSystemInfo(GetSystemInfoRequest) returns (SystemInfoGprc);
-    rpc SubscribeSystemEvents(SubscribeSystemEventsRequest) returns (stream SystemEventGprc);
 } 

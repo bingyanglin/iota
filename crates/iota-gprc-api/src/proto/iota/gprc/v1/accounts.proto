@@ -29,27 +29,7 @@ message ListAccountObjectsResponse {
     optional string next_cursor = 2;
 }
 
-message AccountChangeEventGprc {
-    enum EventType {
-        EVENT_TYPE_UNSPECIFIED = 0;
-        BALANCE_CHANGE = 1;
-        OBJECT_OWNED_ADDED = 2;
-        OBJECT_OWNED_REMOVED = 3;
-        // Add other event types like sequence number update etc.
-    }
-    EventType event_type = 1;
-    string account_address = 2;
-    string details_json = 3; // Generic details payload, e.g., new balance, object_id
-    StringU64 timestamp_ms = 4;
-}
-
-message SubscribeAccountChangesRequest {
-    string account_address = 1;
-    // optional filters for event types
-}
-
 service AccountsGprcService {
     rpc GetAccountInfo(GetAccountInfoRequest) returns (AccountInfoGprc);
     rpc ListAccountObjects(ListAccountObjectsRequest) returns (ListAccountObjectsResponse);
-    rpc SubscribeAccountChanges(SubscribeAccountChangesRequest) returns (stream AccountChangeEventGprc);
 } 

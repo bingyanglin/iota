@@ -30,12 +30,7 @@ message ListEpochsResponse {
     optional string next_cursor = 2;
 }
 
-message SubscribeNewEpochsRequest {
-    // No specific parameters for now, streams all new epochs from current
-}
-
 service EpochsGprcService {
     rpc GetEpochInfo(GetEpochInfoRequest) returns (EpochInfoGprc);
     rpc ListEpochs(ListEpochsRequest) returns (ListEpochsResponse);
-    rpc SubscribeNewEpochs(SubscribeNewEpochsRequest) returns (stream EpochInfoGprc);
 } 

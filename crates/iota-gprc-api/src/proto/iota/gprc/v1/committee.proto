@@ -18,12 +18,7 @@ message GetCommitteeRequest {
     optional EpochIdGprc epoch_id = 1;
 }
 
-message StreamCommitteeRequest {
-    optional EpochIdGprc start_epoch = 1;
-}
-
 // Placeholder for Committee service
 service CommitteeGprcService {
     rpc GetCommittee(GetCommitteeRequest) returns (CommitteeGprc);
-    rpc StreamCommittee(StreamCommitteeRequest) returns (stream CommitteeGprc);
 } 

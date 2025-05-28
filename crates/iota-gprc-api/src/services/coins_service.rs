@@ -1,11 +1,10 @@
-use tokio_stream::wrappers::ReceiverStream;
 use tonic::{Request, Response, Status};
 
 use crate::{
     conversions::coins::convert_storage_coin_info_to_gprc,
     proto::iota::gprc::v1::{
-        CoinEventGprc, CoinInfoGprc, GetCoinInfoRequest, ListCoinsRequest, ListCoinsResponse,
-        SubscribeCoinEventsRequest, coins_gprc_service_server::CoinsGprcService,
+        CoinInfoGprc, GetCoinInfoRequest, ListCoinsRequest, ListCoinsResponse,
+        coins_gprc_service_server::CoinsGprcService,
     },
     server::StateReader,
 };
@@ -97,18 +96,5 @@ impl CoinsGprcService for CoinsServiceImpl {
             request.get_ref()
         );
         Err(Status::unimplemented("ListCoins not implemented"))
-    }
-
-    type SubscribeCoinEventsStream = ReceiverStream<Result<CoinEventGprc, Status>>;
-
-    async fn subscribe_coin_events(
-        &self,
-        request: Request<SubscribeCoinEventsRequest>,
-    ) -> Result<Response<Self::SubscribeCoinEventsStream>, Status> {
-        println!(
-            "[gRPC CoinsService] Received SubscribeCoinEvents request: {:?}",
-            request.get_ref()
-        );
-        Err(Status::unimplemented("SubscribeCoinEvents not implemented"))
     }
 }

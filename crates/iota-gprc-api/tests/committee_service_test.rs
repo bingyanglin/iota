@@ -6,8 +6,7 @@ use std::{
 
 use iota_gprc_api::{
     proto::iota::gprc::v1::{
-        EpochIdGprc, GetCommitteeRequest, StreamCommitteeRequest,
-        committee_gprc_service_client::CommitteeGprcServiceClient,
+        EpochIdGprc, GetCommitteeRequest, committee_gprc_service_client::CommitteeGprcServiceClient,
     },
     server::{GrpcServer, StateReader},
 };
@@ -401,85 +400,6 @@ async fn test_get_committee_found_and_not_found() {
     if let Err(status) = result_not_found {
         assert_eq!(status.code(), tonic::Code::NotFound);
         assert!(status.message().contains("Committee not found for epoch 3"));
-    }
-
-    drop(shutdown_tx);
-}
-
-#[tokio::test]
-async fn test_stream_committee_receives_items() {
-    let (mut client, _addr, shutdown_tx, _mock_state_reader_arc) =
-        spawn_test_server_with_committee_client().await;
-
-    // mock_state_reader_arc.set_epoch(1); // Ensure we start from a known epoch if
-    // needed Initially, mock state reader current_epoch is 0 (from default())
-    // Stream should start from current_latest_epoch (0) + 1 = 1.
-
-    let request = StreamCommitteeRequest {
-        start_epoch: None, // Let service determine start from latest + 1
-    };
-
-    let mut stream = client.stream_committee(request).await.unwrap().into_inner();
-
-    // 1. Expect Committee for Epoch 1
-    println!("[StreamCommitteeTest] Expecting committee for epoch 1...");
-    match tokio::time::timeout(Duration::from_secs(5), stream.message()).await {
-        Ok(Ok(Some(committee_gprc))) => {
-            assert_eq!(committee_gprc.epoch_id.unwrap().epoch, 1);
-            assert_eq!(committee_gprc.members.len(), 2); // From mock for epoch 1
-            println!("[StreamCommitteeTest] Received committee for epoch 1.");
-        }
-        Ok(Ok(None)) => panic!("[StreamCommitteeTest] Stream ended prematurely expecting epoch 1."),
-        Ok(Err(e)) => panic!("[StreamCommitteeTest] Error receiving epoch 1: {:?}", e),
-        Err(_) => panic!("[StreamCommitteeTest] Timeout waiting for epoch 1."),
-    }
-
-    // Advance mock state so that epoch 2 committee becomes available.
-    // The stream is polling for current_epoch_to_check = 1 + 1 = 2.
-    // mock_state_reader_arc.set_epoch(1); // This sets
-    // ReadStore.get_latest_epoch_id() to 1. The service logic uses this for
-    // initial_epoch if start_epoch is None. For polling, it increments its
-    // internal current_epoch_to_check. So, advancing the shared current_epoch
-    // isn't strictly necessary for the polling loop to find the next one, as
-    // get_committee(2) will provide it.
-
-    // 2. Expect Committee for Epoch 2
-    println!("[StreamCommitteeTest] Expecting committee for epoch 2...");
-    match tokio::time::timeout(Duration::from_secs(5), stream.message()).await {
-        Ok(Ok(Some(committee_gprc))) => {
-            assert_eq!(committee_gprc.epoch_id.unwrap().epoch, 2);
-            assert_eq!(committee_gprc.members.len(), 2); // From mock for epoch 2
-            println!("[StreamCommitteeTest] Received committee for epoch 2.");
-        }
-        Ok(Ok(None)) => panic!("[StreamCommitteeTest] Stream ended prematurely expecting epoch 2."),
-        Ok(Err(e)) => panic!("[StreamCommitteeTest] Error receiving epoch 2: {:?}", e),
-        Err(_) => panic!("[StreamCommitteeTest] Timeout waiting for epoch 2."),
-    }
-
-    // 3. Expect no more committees (epoch 3 is not defined in mock)
-    // The stream should keep polling but not find anything for epoch 3.
-    println!("[StreamCommitteeTest] Expecting no committee for epoch 3 (should timeout)...");
-    match tokio::time::timeout(Duration::from_secs(3), stream.message()).await {
-        Ok(Ok(Some(committee_gprc))) => {
-            panic!(
-                "[StreamCommitteeTest] Unexpected committee received for epoch: {:?}",
-                committee_gprc.epoch_id
-            );
-        }
-        Ok(Ok(None)) => {
-            // Stream ended, which is ok if the server decided to close after no new data.
-            println!("[StreamCommitteeTest] Stream ended as expected after epoch 2.");
-        }
-        Ok(Err(e)) => {
-            panic!(
-                "[StreamCommitteeTest] Error when expecting no new committee: {:?}",
-                e
-            );
-        }
-        Err(_) => {
-            // Timeout, this is the expected behavior if stream is still open and polling
-            println!("[StreamCommitteeTest] Timed out waiting for epoch 3, as expected.");
-        }
     }
 
     drop(shutdown_tx);

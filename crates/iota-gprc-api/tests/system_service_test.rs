@@ -8,8 +8,7 @@ use std::{
 use anyhow;
 use iota_gprc_api::{
     proto::iota::gprc::v1::{
-        GetSystemInfoRequest, SubscribeSystemEventsRequest,
-        system_gprc_service_client::SystemGprcServiceClient,
+        GetSystemInfoRequest, system_gprc_service_client::SystemGprcServiceClient,
     },
     server::{GrpcServer, StateReader},
 };
@@ -40,7 +39,6 @@ use move_core_types::language_storage::StructTag;
 use rand::thread_rng;
 use shared_crypto::intent::Intent;
 use tokio::{sync::broadcast, time::sleep};
-use tokio_stream::StreamExt;
 
 #[derive(Default)]
 struct MockRestStateReader {}
@@ -345,82 +343,6 @@ async fn test_get_system_info_success() {
         "Uptime ({}) should increase or stay the same ({}) on subsequent calls",
         uptime_val2,
         uptime_val
-    );
-
-    // Cleanly shut down the server
-    let _ = shutdown_tx.send(());
-    sleep(Duration::from_millis(100)).await; // Give server time to shutdown
-}
-
-#[tokio::test]
-async fn test_subscribe_system_events_receives_mock_events() {
-    let (mut client, _addr, shutdown_tx, _mock_state_reader) =
-        spawn_test_server_with_system_client().await;
-
-    let request = tonic::Request::new(SubscribeSystemEventsRequest {});
-    let response_result = client.subscribe_system_events(request).await;
-
-    assert!(
-        response_result.is_ok(),
-        "SubscribeSystemEvents RPC call failed: {:?}",
-        response_result.err()
-    );
-
-    let mut stream = response_result.unwrap().into_inner();
-    let mut received_events = Vec::new();
-
-    // The mock event generator in SystemServiceImpl sends an event every 10
-    // seconds. Try to receive 2 events, with a timeout longer than 20 seconds.
-    let timeout_duration = Duration::from_secs(25);
-
-    for i in 0..2 {
-        match tokio::time::timeout(timeout_duration, stream.next()).await {
-            Ok(Some(Ok(event))) => {
-                println!("[Test] Received system event: {:?}", event);
-                assert_eq!(
-                    event.event_type,
-                    iota_gprc_api::proto::iota::gprc::v1::system_event_gprc::EventType::NodeStatusChanged as i32
-                );
-                assert!(event.timestamp_ms.is_some());
-                let timestamp_value_str = event
-                    .timestamp_ms
-                    .as_ref()
-                    .expect("Timestamp should be present")
-                    .value
-                    .clone();
-                let _ = timestamp_value_str
-                    .parse::<u128>()
-                    .expect("Timestamp should be valid u128");
-
-                // Check details_json structure (simple check for now)
-                assert!(event.details_json.contains("\"status\": \"OK\""));
-                assert!(event.details_json.contains(&format!("\"tick\": {}", i + 1))); // Assuming tick starts at 1 for received events
-
-                received_events.push(event);
-            }
-            Ok(Some(Err(status))) => {
-                panic!("[Test] Error receiving system event: {:?}", status);
-            }
-            Ok(None) => {
-                panic!(
-                    "[Test] Stream closed prematurely after {} events.",
-                    received_events.len()
-                );
-            }
-            Err(_) => {
-                panic!(
-                    "[Test] Timeout waiting for system event #{}. Received {} events so far.",
-                    i + 1,
-                    received_events.len()
-                );
-            }
-        }
-    }
-
-    assert_eq!(
-        received_events.len(),
-        2,
-        "Should have received exactly 2 events."
     );
 
     // Cleanly shut down the server

@@ -1,10 +1,9 @@
-use tokio_stream::wrappers::ReceiverStream;
 use tonic::{Request, Response, Status};
 
 use crate::{
     proto::iota::gprc::v1::{
         EpochInfoGprc, GetEpochInfoRequest, ListEpochsRequest, ListEpochsResponse,
-        SubscribeNewEpochsRequest, epochs_gprc_service_server::EpochsGprcService,
+        epochs_gprc_service_server::EpochsGprcService,
     },
     server::StateReader,
 };
@@ -43,18 +42,5 @@ impl EpochsGprcService for EpochsServiceImpl {
             request.get_ref()
         );
         Err(Status::unimplemented("ListEpochs not implemented"))
-    }
-
-    type SubscribeNewEpochsStream = ReceiverStream<Result<EpochInfoGprc, Status>>;
-
-    async fn subscribe_new_epochs(
-        &self,
-        request: Request<SubscribeNewEpochsRequest>,
-    ) -> Result<Response<Self::SubscribeNewEpochsStream>, Status> {
-        println!(
-            "[gRPC EpochsService] Received SubscribeNewEpochs request: {:?}",
-            request.get_ref()
-        );
-        Err(Status::unimplemented("SubscribeNewEpochs not implemented"))
     }
 }
