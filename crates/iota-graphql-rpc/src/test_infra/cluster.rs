@@ -74,7 +74,6 @@ pub async fn start_cluster(
         IndexerTypeConfig::writer_mode(None, None, false /* use_grpc_streaming */),
         Some(data_ingestion_path),
         cancellation_token.clone(),
-        None, // remote_store_url_override
     )
     .await;
 
@@ -148,7 +147,6 @@ pub async fn serve_executor(
         ),
         Some(data_ingestion_path),
         cancellation_token.clone(),
-        None, // remote_store_url_override
     )
     .await;
 

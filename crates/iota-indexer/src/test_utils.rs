@@ -110,7 +110,6 @@ pub async fn start_test_indexer(
         reader_writer_config,
         data_ingestion_path,
         CancellationToken::new(),
-        None,
     )
     .await
 }
@@ -125,15 +124,13 @@ pub async fn start_test_indexer_impl(
     reader_writer_config: IndexerTypeConfig,
     data_ingestion_path: Option<PathBuf>,
     cancel: CancellationToken,
-    remote_store_url_override: Option<String>,
 ) -> (PgIndexerStore, JoinHandle<Result<(), IndexerError>>) {
     let mut config = IndexerConfig {
         db_url: Some(db_url.clone().into()),
-        remote_store_url: remote_store_url_override.or_else(|| {
-            data_ingestion_path
-                .is_none()
-                .then_some(format!("{}/api/v1", rpc_url))
-        }),
+        // As fallback sync mechanism enable Rest Api if `data_ingestion_path` was not provided
+        remote_store_url: data_ingestion_path
+            .is_none()
+            .then_some(format!("{rpc_url}/api/v1")),
         rpc_client_url: rpc_url,
         reset_db,
         fullnode_sync_worker: true,

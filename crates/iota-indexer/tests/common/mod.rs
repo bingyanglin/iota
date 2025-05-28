@@ -137,7 +137,7 @@ pub async fn start_test_cluster_with_read_write_indexer(
         None,
         cluster.rpc_url().to_string(),
         IndexerTypeConfig::writer_mode(None, epochs_to_keep, false, None),
-        Some(temp.clone()),
+        None,
     )
     .await;
 
@@ -325,7 +325,7 @@ pub fn rpc_call_error_msg_matches<T>(
 /// Simulacrum.
 pub async fn start_simulacrum_rest_api_with_write_indexer(
     sim: Arc<Simulacrum>,
-    _data_ingestion_path: PathBuf,
+    data_ingestion_path: PathBuf,
     server_url: Option<SocketAddr>,
     database_name: Option<&str>,
     db_init_hook: Option<DBInitHook>,
@@ -355,7 +355,7 @@ pub async fn start_simulacrum_rest_api_with_write_indexer(
             false,
             None,
         ),
-        None,
+        Some(data_ingestion_path),
     )
     .await;
     (server_handle, pg_store, pg_handle)

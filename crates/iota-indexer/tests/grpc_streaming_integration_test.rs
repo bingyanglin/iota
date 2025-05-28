@@ -272,8 +272,6 @@ async fn test_indexer_grpc_streaming_ingestion() -> Result<(), Box<dyn std::erro
         indexer_type_config,
         None, // data_ingestion_path - set to None so remote_store_url is attempted
         cancel.clone(),
-        Some(grpc_url.clone()), /* <--- This is where we'd pass remote_store_url_override if
-                                 * test_utils was updated */
     )
     .await;
 
