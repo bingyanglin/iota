@@ -17,6 +17,7 @@ tokio-stream = { workspace = true }
 thiserror = "1.0" # Added for GrpcApiError
 bcs = { workspace = true } # Added for BCS serialization
 anyhow = "1.0" # Added anyhow as a regular dependency
+hex = "0.4" # Added hex for address formatting
 
 iota-types = { path = "../iota-types" } # Adjust path as needed
 iota-sdk2 = { workspace = true }

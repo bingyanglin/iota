@@ -226,6 +226,7 @@ impl ValidatorConfigBuilder {
             enable_validator_tx_finalizer: true,
             verifier_signing_config: VerifierSigningConfig::default(),
             iota_names_config: None,
+            grpc_public_api_address: None,
         }
     }
 
@@ -520,6 +521,7 @@ impl FullnodeConfigBuilder {
             enable_validator_tx_finalizer: false,
             verifier_signing_config: VerifierSigningConfig::default(),
             iota_names_config: None,
+            grpc_public_api_address: None,
         }
     }
 

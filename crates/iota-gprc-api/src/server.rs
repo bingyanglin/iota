@@ -12,11 +12,21 @@ use tonic::transport::Server;
 use crate::services::checkpoints_service::CheckpointServiceImpl;
 use crate::{
     proto::iota::gprc::v1::{
+        accounts_gprc_service_server::AccountsGprcServiceServer,
         checkpoint_gprc_service_server::CheckpointGprcServiceServer,
+        coins_gprc_service_server::CoinsGprcServiceServer,
+        committee_gprc_service_server::CommitteeGprcServiceServer,
+        epochs_gprc_service_server::EpochsGprcServiceServer,
         object_gprc_service_server::ObjectGprcServiceServer,
+        system_gprc_service_server::SystemGprcServiceServer,
         transaction_gprc_service_server::TransactionGprcServiceServer,
     },
-    services::{objects_service::ObjectServiceImpl, transactions_service::TransactionServiceImpl},
+    services::{
+        accounts_service::AccountsServiceImpl, coins_service::CoinsServiceImpl,
+        committee_service::CommitteeServiceImpl, epochs_service::EpochsServiceImpl,
+        objects_service::ObjectServiceImpl, system_service::SystemServiceImpl,
+        transactions_service::TransactionServiceImpl,
+    },
 };
 
 // Define a placeholder trait and a concrete type for StateReader within this
@@ -52,18 +62,33 @@ pub struct GrpcServer {
     checkpoint_service: CheckpointServiceImpl,
     object_service: ObjectServiceImpl,
     transaction_service: TransactionServiceImpl,
+    committee_service: CommitteeServiceImpl,
+    system_service: SystemServiceImpl,
+    coins_service: CoinsServiceImpl,
+    epochs_service: EpochsServiceImpl,
+    accounts_service: AccountsServiceImpl,
 }
 
 impl GrpcServer {
     pub fn new(addr: SocketAddr, state_reader: StateReader) -> Self {
         let checkpoint_service = CheckpointServiceImpl::new(state_reader.clone());
         let object_service = ObjectServiceImpl::new(state_reader.clone());
-        let transaction_service = TransactionServiceImpl::new(state_reader);
+        let transaction_service = TransactionServiceImpl::new(state_reader.clone());
+        let committee_service = CommitteeServiceImpl::new(state_reader.clone());
+        let system_service = SystemServiceImpl::new(state_reader.clone());
+        let coins_service = CoinsServiceImpl::new(state_reader.clone());
+        let epochs_service = EpochsServiceImpl::new(state_reader.clone());
+        let accounts_service = AccountsServiceImpl::new(state_reader);
         Self {
             addr,
             checkpoint_service,
             object_service,
             transaction_service,
+            committee_service,
+            system_service,
+            coins_service,
+            epochs_service,
+            accounts_service,
         }
     }
 
@@ -79,6 +104,15 @@ impl GrpcServer {
             .add_service(ObjectGprcServiceServer::new(self.object_service.clone()))
             .add_service(TransactionGprcServiceServer::new(
                 self.transaction_service.clone(),
+            ))
+            .add_service(CommitteeGprcServiceServer::new(
+                self.committee_service.clone(),
+            ))
+            .add_service(SystemGprcServiceServer::new(self.system_service.clone()))
+            .add_service(CoinsGprcServiceServer::new(self.coins_service.clone()))
+            .add_service(EpochsGprcServiceServer::new(self.epochs_service.clone()))
+            .add_service(AccountsGprcServiceServer::new(
+                self.accounts_service.clone(),
             ))
             .serve_with_shutdown(self.addr, async move {
                 shutdown_rx.recv().await.ok();

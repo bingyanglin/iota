@@ -6,7 +6,8 @@ use std::{
 
 use iota_gprc_api::{
     proto::iota::gprc::v1::{
-        GetTransactionRequest, transaction_gprc_service_client::TransactionGprcServiceClient,
+        Direction, GetTransactionRequest, ListTransactionsRequest, StreamTransactionsRequest,
+        transaction_gprc_service_client::TransactionGprcServiceClient,
     },
     server::{GrpcServer, StateReader},
 };
@@ -35,10 +36,7 @@ use iota_types::{
     },
 };
 use move_core_types::language_storage::StructTag;
-use tokio::{
-    sync::broadcast,
-    time::{sleep, timeout},
-};
+use tokio::{sync::broadcast, time::sleep};
 
 #[derive(Default)]
 struct MockRestStateReader {
@@ -330,27 +328,37 @@ async fn spawn_test_server_with_transaction_client() -> (
 
 #[tokio::test]
 async fn test_get_transaction_found() {
-    let (mut client, _addr, shutdown_tx, _mock_state_reader_arc) =
+    let (mut client, _addr, shutdown_tx, _mock_state_reader) =
         spawn_test_server_with_transaction_client().await;
 
-    // Update expected tx_id_hex_str to match the new tx_id_arr
-    let tx_id_hex_str = "0x0000000000000000000000000000000000000000000000000000000000000001";
-    let mut tx_digest_bytes_arr = [0u8; 32];
-    tx_digest_bytes_arr[31] = 0x01;
+    // Known transaction ID from MockRestStateReader
+    let mut tx_id_arr = [0u8; 32];
+    tx_id_arr[31] = 0x01;
+    let tx_digest_bytes_vec = tx_id_arr.to_vec();
 
     let request = tonic::Request::new(GetTransactionRequest {
-        transaction_digest_bytes: tx_digest_bytes_arr.to_vec(), // Send as Vec<u8>
+        transaction_digest_bytes: tx_digest_bytes_vec,
     });
+    let response_result = client.get_transaction(request).await;
 
-    let response = timeout(Duration::from_secs(2), client.get_transaction(request))
-        .await
-        .expect("RPC call timed out")
-        .unwrap()
-        .into_inner();
+    assert!(
+        response_result.is_ok(),
+        "GetTransaction RPC call failed: {:?}",
+        response_result.err()
+    );
+    let response_tx = response_result.unwrap().into_inner();
 
-    assert_eq!(response.transaction_id_hex, tx_id_hex_str);
-    assert_eq!(response.payload_type, "VerifiedTransaction");
-    assert!(!response.raw_transaction.is_empty());
+    let expected_tx_id_hex = format!("{:#x}", ActualTransactionDigest::new(tx_id_arr));
+
+    assert_eq!(response_tx.transaction_id_hex, expected_tx_id_hex);
+    assert!(
+        response_tx
+            .payload_type
+            .starts_with("ProgrammableTransaction"),
+        "Payload type should be ProgrammableTransaction, got: {}",
+        response_tx.payload_type
+    );
+    assert!(!response_tx.raw_transaction.is_empty());
 
     let _ = shutdown_tx.send(());
 }
@@ -395,4 +403,331 @@ async fn test_get_transaction_empty_bytes() {
         );
     }
     let _ = shutdown_tx.send(());
+}
+
+#[tokio::test]
+async fn test_list_transactions_empty() {
+    let (mut client, _addr, shutdown_tx, _state_reader) =
+        spawn_test_server_with_transaction_client().await;
+
+    // Test with a cursor that won't be found to simulate an empty list scenario
+    // based on cursor logic
+    let request = ListTransactionsRequest {
+        cursor: Some(
+            "nonexistentcursor0123456789abcdef0123456789abcdef0123456789abcdef".to_string(),
+        ),
+        limit: Some(5),
+        direction: Some(Direction::Ascending.into()),
+    };
+
+    let response = client
+        .list_transactions(request)
+        .await
+        .unwrap()
+        .into_inner();
+    assert!(response.transactions.is_empty());
+    assert!(response.next_cursor.is_none());
+    drop(shutdown_tx); // Gracefully shutdown the server
+}
+
+// Helper to get the expected transaction ID hex for mock transaction `i`
+fn get_expected_tx_id_hex(i: u8) -> String {
+    let mut tx_id_arr = [0u8; 32];
+    tx_id_arr[0] = i;
+    format!("0x{}", hex::encode(tx_id_arr))
+}
+
+#[tokio::test]
+async fn test_list_transactions_default() {
+    let (mut client, _addr, shutdown_tx, _state_reader) =
+        spawn_test_server_with_transaction_client().await;
+
+    let request = ListTransactionsRequest {
+        cursor: None,
+        limit: None,     // No limit, should get all 5 mock transactions
+        direction: None, // Default to Ascending
+    };
+
+    let response = client
+        .list_transactions(request)
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(response.transactions.len(), 5);
+    assert_eq!(
+        response.transactions[0].transaction_id_hex,
+        get_expected_tx_id_hex(1)
+    );
+    assert_eq!(
+        response.transactions[4].transaction_id_hex,
+        get_expected_tx_id_hex(5)
+    );
+    assert!(response.next_cursor.is_none()); // Since all are returned
+
+    drop(shutdown_tx);
+}
+
+#[tokio::test]
+async fn test_list_transactions_with_limit() {
+    let (mut client, _addr, shutdown_tx, _state_reader) =
+        spawn_test_server_with_transaction_client().await;
+
+    let request = ListTransactionsRequest {
+        cursor: None,
+        limit: Some(2),
+        direction: Some(Direction::Ascending.into()),
+    };
+
+    let response = client
+        .list_transactions(request)
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(response.transactions.len(), 2);
+    assert_eq!(
+        response.transactions[0].transaction_id_hex,
+        get_expected_tx_id_hex(1)
+    );
+    assert_eq!(
+        response.transactions[1].transaction_id_hex,
+        get_expected_tx_id_hex(2)
+    );
+    assert_eq!(response.next_cursor, Some(get_expected_tx_id_hex(2))); // Cursor is the ID of the last item sent
+
+    drop(shutdown_tx);
+}
+
+#[tokio::test]
+async fn test_list_transactions_descending() {
+    let (mut client, _addr, shutdown_tx, _state_reader) =
+        spawn_test_server_with_transaction_client().await;
+
+    let request = ListTransactionsRequest {
+        cursor: None,
+        limit: Some(3),
+        direction: Some(Direction::Descending.into()),
+    };
+
+    let response = client
+        .list_transactions(request)
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(response.transactions.len(), 3);
+    // Transactions are 1,2,3,4,5. Reversed: 5,4,3,2,1. Limit 3: 5,4,3
+    assert_eq!(
+        response.transactions[0].transaction_id_hex,
+        get_expected_tx_id_hex(5)
+    );
+    assert_eq!(
+        response.transactions[1].transaction_id_hex,
+        get_expected_tx_id_hex(4)
+    );
+    assert_eq!(
+        response.transactions[2].transaction_id_hex,
+        get_expected_tx_id_hex(3)
+    );
+    assert_eq!(response.next_cursor, Some(get_expected_tx_id_hex(3)));
+
+    drop(shutdown_tx);
+}
+
+#[tokio::test]
+async fn test_list_transactions_pagination() {
+    let (mut client, _addr, shutdown_tx, _state_reader) =
+        spawn_test_server_with_transaction_client().await;
+
+    // Page 1: Limit 2, Ascending
+    let request1 = ListTransactionsRequest {
+        cursor: None,
+        limit: Some(2),
+        direction: Some(Direction::Ascending.into()),
+    };
+    let response1 = client
+        .list_transactions(request1)
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(response1.transactions.len(), 2);
+    assert_eq!(
+        response1.transactions[0].transaction_id_hex,
+        get_expected_tx_id_hex(1)
+    );
+    assert_eq!(
+        response1.transactions[1].transaction_id_hex,
+        get_expected_tx_id_hex(2)
+    );
+    let cursor1 = response1.next_cursor;
+    assert_eq!(cursor1, Some(get_expected_tx_id_hex(2)));
+
+    // Page 2: Limit 2, Ascending, using cursor from page 1
+    let request2 = ListTransactionsRequest {
+        cursor: cursor1,
+        limit: Some(2),
+        direction: Some(Direction::Ascending.into()),
+    };
+    let response2 = client
+        .list_transactions(request2)
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(response2.transactions.len(), 2);
+    assert_eq!(
+        response2.transactions[0].transaction_id_hex,
+        get_expected_tx_id_hex(3)
+    );
+    assert_eq!(
+        response2.transactions[1].transaction_id_hex,
+        get_expected_tx_id_hex(4)
+    );
+    let cursor2 = response2.next_cursor;
+    assert_eq!(cursor2, Some(get_expected_tx_id_hex(4)));
+
+    // Page 3: Limit 2, Ascending, using cursor from page 2
+    let request3 = ListTransactionsRequest {
+        cursor: cursor2,
+        limit: Some(2),
+        direction: Some(Direction::Ascending.into()),
+    };
+    let response3 = client
+        .list_transactions(request3)
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(response3.transactions.len(), 1);
+    assert_eq!(
+        response3.transactions[0].transaction_id_hex,
+        get_expected_tx_id_hex(5)
+    );
+    assert!(response3.next_cursor.is_none()); // No more items
+
+    drop(shutdown_tx);
+}
+
+#[tokio::test]
+async fn test_list_transactions_cursor_not_found() {
+    let (mut client, _addr, shutdown_tx, _state_reader) =
+        spawn_test_server_with_transaction_client().await;
+
+    let request = ListTransactionsRequest {
+        cursor: Some(
+            "nonexistent000000000000000000000000000000000000000000000000000000".to_string(),
+        ),
+        limit: Some(2),
+        direction: Some(Direction::Ascending.into()),
+    };
+
+    let response = client
+        .list_transactions(request)
+        .await
+        .unwrap()
+        .into_inner();
+    assert!(response.transactions.is_empty());
+    assert!(response.next_cursor.is_none());
+
+    drop(shutdown_tx);
+}
+
+#[tokio::test]
+async fn test_stream_transactions_receives_items() {
+    let (mut client, _addr, shutdown_tx, _state_reader) =
+        spawn_test_server_with_transaction_client().await;
+
+    let request = StreamTransactionsRequest {
+        start_from_transaction_id: None, // Test without specific start ID
+    };
+
+    let mut stream = client
+        .stream_transactions(request)
+        .await
+        .unwrap()
+        .into_inner();
+
+    let mut received_count = 0;
+    let mut last_id_byte: Option<u8> = None;
+
+    for _ in 0..3 {
+        // Try to receive 3 transactions
+        match tokio::time::timeout(Duration::from_secs(2), stream.message()).await {
+            Ok(Ok(Some(tx_gprc))) => {
+                received_count += 1;
+                println!("Received transaction: {}", tx_gprc.transaction_id_hex);
+                // Extract the first byte from the hex ID to check if it's changing
+                // The mock uses the first byte of the digest array (value of
+                // transaction_counter)
+                let current_id_first_byte_hex = tx_gprc
+                    .transaction_id_hex
+                    .chars()
+                    .skip(2)
+                    .take(2)
+                    .collect::<String>();
+                let current_id_byte = u8::from_str_radix(&current_id_first_byte_hex, 16).unwrap();
+
+                if let Some(last_byte) = last_id_byte {
+                    assert_ne!(
+                        current_id_byte, last_byte,
+                        "Received same transaction ID byte consecutively"
+                    );
+                }
+                last_id_byte = Some(current_id_byte);
+                assert!(
+                    current_id_byte >= 100,
+                    "Transaction ID byte should be from the streaming range"
+                );
+            }
+            Ok(Ok(None)) => {
+                panic!("Stream closed prematurely after {} items", received_count);
+            }
+            Ok(Err(e)) => {
+                panic!(
+                    "Error receiving from stream after {} items: {:?}",
+                    received_count, e
+                );
+            }
+            Err(_) => {
+                panic!(
+                    "Timeout waiting for transaction after {} items",
+                    received_count
+                );
+            }
+        }
+    }
+    assert_eq!(received_count, 3, "Should have received 3 transactions");
+
+    drop(stream); // Close the stream from client side
+    drop(shutdown_tx); // Shutdown server
+}
+
+#[tokio::test]
+async fn test_stream_transactions_with_start_id() {
+    let (mut client, _addr, shutdown_tx, _state_reader) =
+        spawn_test_server_with_transaction_client().await;
+
+    // The mock implementation currently ignores start_from_transaction_id,
+    // but we test that the request can be made and the stream works.
+    let request = StreamTransactionsRequest {
+        start_from_transaction_id: Some(get_expected_tx_id_hex(120)), // Example start ID
+    };
+
+    let mut stream = client
+        .stream_transactions(request)
+        .await
+        .unwrap()
+        .into_inner();
+
+    // Expect to receive at least one item, similar to the test above
+    match tokio::time::timeout(Duration::from_secs(2), stream.message()).await {
+        Ok(Ok(Some(tx_gprc))) => {
+            println!(
+                "Received transaction with start_id provided: {}",
+                tx_gprc.transaction_id_hex
+            );
+            assert!(!tx_gprc.transaction_id_hex.is_empty());
+        }
+        _ => {
+            panic!("Failed to receive any transaction when start_id was provided");
+        }
+    }
+    drop(stream);
+    drop(shutdown_tx);
 }

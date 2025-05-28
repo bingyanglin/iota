@@ -18,6 +18,11 @@ message StringEncodedUid {
     string id = 1;
 }
 
+// Corresponds to iota_types::committee::EpochId (u64)
+message EpochIdGprc {
+    uint64 epoch = 1;
+}
+
 // Placeholder for u64, often represented as strings in JSON APIs to avoid precision loss
 message StringU64 {
     string value = 1;

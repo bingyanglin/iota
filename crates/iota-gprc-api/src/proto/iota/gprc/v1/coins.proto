@@ -1,5 +1,52 @@
 syntax = "proto3";
 package iota.gprc.v1;
 
-// Placeholder for Coins service
-service CoinGprcService {} 
+import "iota/gprc/v1/common.proto";
+
+// Corresponds to iota_types::storage::CoinInfo
+message CoinInfoGprc {
+    string coin_type_tag = 1; // StructTag as string
+    StringU64 total_supply = 2;
+    StringU64 balance = 3; // Example: for a specific account, or maybe this is treasury balance
+    StringU256 treasury_balance = 4;
+    // Add other fields from CoinInfo as needed
+}
+
+message GetCoinInfoRequest {
+    string coin_type_tag = 1; // StructTag string
+}
+
+message ListCoinsRequest {
+    // Pagination if many coin types exist
+    optional StringU64 page_size = 1;
+    optional string cursor = 2; // Could be coin_type_tag of last item on prev page
+}
+
+message ListCoinsResponse {
+    repeated CoinInfoGprc coins = 1;
+    optional string next_cursor = 2;
+}
+
+message CoinEventGprc {
+    enum EventType {
+        EVENT_TYPE_UNSPECIFIED = 0;
+        MINT = 1;
+        BURN = 2;
+        TRANSFER = 3;
+    }
+    EventType event_type = 1;
+    string coin_type_tag = 2;
+    StringU64 amount = 3;
+    StringU64 timestamp_ms = 4;
+    // Add other event details like source/destination addresses
+}
+
+message SubscribeCoinEventsRequest {
+    optional string coin_type_tag_filter = 1;
+}
+
+service CoinsGprcService {
+    rpc GetCoinInfo(GetCoinInfoRequest) returns (CoinInfoGprc);
+    rpc ListCoins(ListCoinsRequest) returns (ListCoinsResponse);
+    rpc SubscribeCoinEvents(SubscribeCoinEventsRequest) returns (stream CoinEventGprc);
+} 

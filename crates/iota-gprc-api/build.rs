@@ -11,11 +11,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "objects.proto",
         "transactions.proto",
         // "info.proto",
-        // "committee.proto",
-        // "system.proto",
-        // "coins.proto",
-        // "epochs.proto",
-        // "accounts.proto",
+        "committee.proto",
+        "system.proto",
+        "coins.proto",
+        "epochs.proto",
+        "accounts.proto",
     ];
 
     let mut protos_to_compile_fullpath_str: Vec<String> = Vec::new();

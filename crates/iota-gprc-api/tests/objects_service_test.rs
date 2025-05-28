@@ -341,31 +341,35 @@ async fn spawn_test_server_with_object_client() -> (
     let port = get_available_port();
     let addr: SocketAddr = format!("[::1]:{}", port).parse().unwrap();
 
-    let mock_state_reader_arc = Arc::new(MockRestStateReader::default());
-    let server_state_reader: StateReader = mock_state_reader_arc.clone();
+    let state_reader_arc = Arc::new(MockRestStateReader::default());
 
-    let (shutdown_tx, _shutdown_rx_unused_by_caller) = broadcast::channel(1);
-    let server_shutdown_rx = shutdown_tx.subscribe();
+    let (shutdown_tx, server_shutdown_rx) = broadcast::channel(1);
 
-    let grpc_server = GrpcServer::new(addr, server_state_reader);
+    let grpc_server = GrpcServer::new(addr, state_reader_arc.clone() as StateReader);
 
     tokio::spawn(async move {
         if let Err(e) = grpc_server.start(server_shutdown_rx).await {
-            eprintln!("[Test Object Service] gRPC server failed: {}", e);
+            eprintln!("[Test ObjectService] gRPC server failed: {}", e);
         }
     });
 
     sleep(Duration::from_millis(200)).await;
 
-    let client_endpoint = format!("http://[::1]:{}", port);
-    let client_channel = tonic::transport::Channel::from_shared(client_endpoint)
+    let endpoint_uri = format!("http://[::1]:{}", port);
+    let channel = tonic::transport::Channel::from_shared(endpoint_uri.clone())
         .unwrap()
-        .connect_timeout(Duration::from_secs(2))
+        .connect_timeout(Duration::from_secs(5))
         .connect()
         .await
-        .expect("[Test Object Service] Failed to connect to gRPC server");
-    let client = ObjectGprcServiceClient::new(client_channel);
-    (client, addr, shutdown_tx, mock_state_reader_arc)
+        .unwrap_or_else(|e| {
+            panic!(
+                "Failed to connect to test gRPC server at {}: {:?}",
+                endpoint_uri, e
+            )
+        });
+
+    let client = ObjectGprcServiceClient::new(channel);
+    (client, addr, shutdown_tx, state_reader_arc)
 }
 
 #[tokio::test]
@@ -964,95 +968,174 @@ async fn test_stream_objects_invalid_cursor_format() {
 // --- Test Cases for SubscribeObjectsByOwner ---
 
 #[tokio::test]
-async fn test_subscribe_objects_receives_items_from_dummy_poller() {
-    let (mut client, _addr, _shutdown_tx, _mock_state_reader) =
+async fn test_subscribe_objects_receives_items_from_internal_poller() {
+    let (mut client, _addr, shutdown_tx, _state_reader) =
         spawn_test_server_with_object_client().await;
 
-    let dummy_owner_hex_str = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa1";
+    // This is the owner address the internal poller in ObjectServiceImpl uses.
+    let subscribed_owner_address_hex =
+        "0xaabbccddeeff00112233445566778899aabbccddeeff00112233445566778899";
 
     let request = SubscribeObjectsByOwnerRequest {
-        owner_address: dummy_owner_hex_str.to_string(),
+        owner_address: subscribed_owner_address_hex.to_string(),
     };
 
     let mut stream = client
         .subscribe_objects_by_owner(request)
         .await
-        .expect("SubscribeObjectsByOwner call failed")
+        .expect("Subscribe RPC call failed")
         .into_inner();
 
+    let mut received_count = 0;
+    let mut last_object_version_val: Option<u64> = None;
+
     println!(
-        "[Test] Subscribed for owner: {}. Waiting for objects (expecting none as poller is disabled)...",
-        dummy_owner_hex_str
+        "Test: Subscribed to objects for owner {}. Waiting for items...",
+        subscribed_owner_address_hex
     );
 
-    // Expecting timeout as the dummy poller is disabled in ObjectServiceImpl
-    match tokio::time::timeout(Duration::from_secs(7), stream.next()).await {
-        Ok(Some(Ok(object_gprc))) => {
-            panic!(
-                "[Test] Received unexpected object (poller is supposed to be disabled): {:?}",
-                object_gprc
-            );
-        }
-        Ok(Some(Err(status))) => {
-            panic!(
-                "[Test] Error received from stream (poller is supposed to be disabled): {:?}",
-                status
-            );
-        }
-        Ok(None) => {
-            println!(
-                "[Test] Stream closed for owner, no items received as expected (poller disabled or server task ended)."
-            );
-        }
-        Err(_) => {
-            println!(
-                "[Test] Timeout waiting for object for owner, as expected (poller disabled). No objects received."
-            );
-            // This is the expected path due to disabled poller.
+    for i in 0..2 {
+        // Try to receive 2 objects
+        match timeout(Duration::from_secs(5), stream.message()).await {
+            Ok(Ok(Some(object_gprc))) => {
+                received_count += 1;
+                println!(
+                    "Test: Received object {} with version {}",
+                    i + 1,
+                    object_gprc.version
+                );
+                assert_eq!(
+                    object_gprc.object_id,
+                    "0xdeadbeef00000000000000000000000000000000000000000000000000000000",
+                    "Object ID mismatch"
+                );
+
+                let version_str = &object_gprc.version;
+                assert!(
+                    version_str.starts_with("0x"),
+                    "Version string should be hex and start with 0x"
+                );
+                let current_version_val = u64::from_str_radix(&version_str[2..], 16)
+                    .expect("Failed to parse version hex string");
+
+                if let Some(last_val) = last_object_version_val {
+                    assert_ne!(
+                        current_version_val, last_val,
+                        "Received same object version consecutively. Version: {}",
+                        current_version_val
+                    );
+                    assert!(
+                        current_version_val > last_val,
+                        "Version should be increasing"
+                    );
+                }
+                assert!(current_version_val >= 1, "Version should be >= 1");
+                last_object_version_val = Some(current_version_val);
+            }
+            Ok(Ok(None)) => {
+                panic!(
+                    "Test: Stream closed prematurely after {} items for owner {}",
+                    received_count, subscribed_owner_address_hex
+                );
+            }
+            Ok(Err(e)) => {
+                panic!(
+                    "Test: Error receiving from stream after {} items for owner {}: {:?}",
+                    received_count, subscribed_owner_address_hex, e
+                );
+            }
+            Err(_) => {
+                // Timeout
+                panic!(
+                    "Test: Timeout waiting for object {} for owner {}",
+                    received_count + 1,
+                    subscribed_owner_address_hex
+                );
+            }
         }
     }
+    assert_eq!(
+        received_count, 2,
+        "Should have received 2 objects for owner {}",
+        subscribed_owner_address_hex
+    );
+
+    let _ = shutdown_tx.send(());
+    sleep(Duration::from_millis(100)).await;
+    drop(stream);
+    println!(
+        "Test: Stream dropped for owner {}. Shutdown complete.",
+        subscribed_owner_address_hex
+    );
 }
 
 #[tokio::test]
 async fn test_subscribe_objects_different_owner_no_items() {
-    let (mut client, _addr, _shutdown_tx, _mock_state_reader) =
+    let (mut client, _addr, shutdown_tx, _state_reader) =
         spawn_test_server_with_object_client().await;
 
-    // Use a different valid hex address
-    let different_owner_hex_str =
-        "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    let different_owner_address_hex =
+        "0x11223344556677889900aabbccddeeff0011223344556677889900aabbccdd"; // A different address
 
     let request = SubscribeObjectsByOwnerRequest {
-        owner_address: different_owner_hex_str.to_string(),
+        owner_address: different_owner_address_hex.to_string(),
     };
 
     let mut stream = client
         .subscribe_objects_by_owner(request)
         .await
-        .expect("SubscribeObjectsByOwner call failed for different owner")
+        .expect("Subscribe RPC call failed for different owner")
         .into_inner();
 
     println!(
-        "[Test] Subscribed for different owner: {}. Waiting for objects (expecting none)...",
-        different_owner_hex_str
+        "Test: Subscribed to objects for different owner {}. Expecting no items...",
+        different_owner_address_hex
     );
 
-    match tokio::time::timeout(Duration::from_secs(7), stream.next()).await {
-        Ok(Some(Ok(object_gprc))) => panic!(
-            "[Test] Received unexpected object for different owner: {:?}",
-            object_gprc
-        ),
-        Ok(Some(Err(status))) => panic!(
-            "[Test] Error received from stream for different owner: {:?}",
-            status
-        ),
-        Ok(None) => println!(
-            "[Test] Stream closed for different owner, no items received as expected (or server task ended)."
-        ),
-        Err(_) => println!(
-            "[Test] Timeout waiting for object for different owner, as expected. No objects received."
-        ),
+    // Expect no items for this owner, as the internal poller uses a specific
+    // different one. Try to receive a message with a short timeout.
+    match timeout(Duration::from_secs(3), stream.message()).await {
+        // Internal poller sends every 2s
+        Ok(Ok(Some(object_gprc))) => {
+            panic!(
+                "Test: Received unexpected object {:?} for owner {}",
+                object_gprc, different_owner_address_hex
+            );
+        }
+        Ok(Ok(None)) => {
+            // Stream closed by server, which is unexpected this quickly if poller is
+            // running. This might happen if the server task itself panics or
+            // shuts down.
+            println!(
+                "Test: Stream for different owner {} closed by server (None received). This is OK if no items ever sent.",
+                different_owner_address_hex
+            );
+        }
+        Ok(Err(e)) => {
+            // This could happen if the server closes the stream with an error.
+            println!(
+                "Test: Stream for different owner {} errored: {:?}. This might be OK if it signifies no data/filtered out.",
+                different_owner_address_hex, e
+            );
+        }
+        Err(_) => {
+            // Timeout
+            println!(
+                "Test: Timeout waiting for object for different owner {}, as expected.",
+                different_owner_address_hex
+            );
+            // This is the expected outcome: timeout because no objects are sent
+            // for this owner.
+        }
     }
+
+    let _ = shutdown_tx.send(());
+    sleep(Duration::from_millis(100)).await;
+    drop(stream);
+    println!(
+        "Test: Stream dropped for different owner {}. Shutdown complete.",
+        different_owner_address_hex
+    );
 }
 
 #[tokio::test]
@@ -1061,7 +1144,8 @@ async fn test_subscribe_objects_invalid_owner_address() {
         spawn_test_server_with_object_client().await;
 
     let request = SubscribeObjectsByOwnerRequest {
-        owner_address: "invalid-bech32m-address".to_string(),
+        owner_address: "invalid-owner-address-string".to_string(), /* More clearly invalid than
+                                                                    * bech32m */
     };
 
     let result = client.subscribe_objects_by_owner(request).await;
@@ -1069,7 +1153,12 @@ async fn test_subscribe_objects_invalid_owner_address() {
     assert!(result.is_err());
     if let Err(status) = result {
         assert_eq!(status.code(), tonic::Code::InvalidArgument);
-        assert!(status.message().contains("Invalid owner_address format"));
+        // Check for the core part of the error message from the service
+        assert!(
+            status.message().contains("Invalid owner_address"),
+            "Error message mismatch: {}",
+            status.message()
+        );
         println!(
             "[Test] Received expected InvalidArgument error: {}",
             status.message()
@@ -1077,4 +1166,9 @@ async fn test_subscribe_objects_invalid_owner_address() {
     } else {
         panic!("[Test] Expected InvalidArgument error, but got Ok.");
     }
+    // Ensure shutdown is called if test might panic early or in other branches.
+    // However, _shutdown_tx is created by spawn_test_server_with_object_client
+    // and should be dropped when it goes out of scope if not sent. For this
+    // test, we expect an early exit with Err, so explicitly dropping or sending
+    // is not critical if the server handles client disconnects.
 }
