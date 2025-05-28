@@ -7,6 +7,7 @@ use std::{
 };
 
 use futures::StreamExt;
+use iota_gprc_api::conversions::checkpoints::convert_verified_checkpoint_to_gprc_summary;
 use iota_gprc_api::{
     proto::iota::gprc::v1::{
         Direction,
@@ -122,10 +123,11 @@ async fn spawn_test_server() -> (
 
 #[tokio::test]
 async fn test_get_checkpoint_full_dummy() {
-    let (mut client, _addr, shutdown_tx, _mock_state_reader) = spawn_test_server().await;
+    let (mut client, _addr, shutdown_tx, mock_state_reader) = spawn_test_server().await;
 
     let request_id_str = "999";
     let request_seq_num = request_id_str.parse::<u64>().unwrap();
+    mock_state_reader.set_latest_sequence_number_for_test(request_seq_num + 10); // Ensure checkpoint exists
 
     let request = tonic::Request::new(GetCheckpointRequest {
         checkpoint_id: request_id_str.to_string(),
@@ -198,9 +200,11 @@ async fn test_get_checkpoint_full_dummy() {
 
 #[tokio::test]
 async fn test_get_checkpoint_dummy() {
-    let (mut client, _addr, shutdown_tx, _mock_state_reader) = spawn_test_server().await;
+    let (mut client, _addr, shutdown_tx, mock_state_reader) = spawn_test_server().await;
 
     let request_seq_num = 789u64;
+    mock_state_reader.set_latest_sequence_number_for_test(request_seq_num + 10); // Ensure checkpoint exists
+
     let request = tonic::Request::new(GetCheckpointRequest {
         checkpoint_id: request_seq_num.to_string(),
     });
@@ -252,9 +256,13 @@ async fn test_get_checkpoint_dummy() {
 
 #[tokio::test]
 async fn test_list_checkpoints_no_end_seq() {
-    let (mut client, _addr, shutdown_tx, _mock_state_reader) = spawn_test_server().await;
+    let (mut client, _addr, shutdown_tx, mock_state_reader) = spawn_test_server().await;
     let request_limit = 3u32;
     let start_seq_num_str = "200".to_string();
+    let start_seq_num_val = start_seq_num_str.parse::<u64>().unwrap();
+    mock_state_reader
+        .set_latest_sequence_number_for_test(start_seq_num_val + request_limit as u64 + 5); // Ensure checkpoints exist
+
     let request = tonic::Request::new(ListCheckpointsRequest {
         limit: Some(request_limit),
         start_sequence_number: Some(start_seq_num_str.clone()),
@@ -290,10 +298,13 @@ async fn test_list_checkpoints_no_end_seq() {
 
 #[tokio::test]
 async fn test_list_checkpoints_with_end_seq_within_limit() {
-    let (mut client, _addr, shutdown_tx, _mock_state_reader) = spawn_test_server().await;
+    let (mut client, _addr, shutdown_tx, mock_state_reader) = spawn_test_server().await;
     let request_limit = 10u32; // Limit is larger than the range
     let start_seq_num_str = "100".to_string();
     let end_seq_num_str = "102".to_string(); // Range of 3 items (100, 101, 102)
+    let end_seq_num_val = end_seq_num_str.parse::<u64>().unwrap();
+    mock_state_reader.set_latest_sequence_number_for_test(end_seq_num_val + 5); // Ensure checkpoints exist
+
     let request = tonic::Request::new(ListCheckpointsRequest {
         limit: Some(request_limit),
         start_sequence_number: Some(start_seq_num_str.clone()),
@@ -324,10 +335,13 @@ async fn test_list_checkpoints_with_end_seq_within_limit() {
 
 #[tokio::test]
 async fn test_list_checkpoints_with_end_seq_beyond_limit() {
-    let (mut client, _addr, shutdown_tx, _mock_state_reader) = spawn_test_server().await;
+    let (mut client, _addr, shutdown_tx, mock_state_reader) = spawn_test_server().await;
     let request_limit = 2u32; // Limit is smaller than the range
     let start_seq_num_str = "50".to_string();
     let end_seq_num_str = "55".to_string(); // Range 50-55
+    let end_seq_num_val = end_seq_num_str.parse::<u64>().unwrap();
+    mock_state_reader.set_latest_sequence_number_for_test(end_seq_num_val + 5); // Ensure checkpoints exist
+
     let request = tonic::Request::new(ListCheckpointsRequest {
         limit: Some(request_limit),
         start_sequence_number: Some(start_seq_num_str.clone()),
@@ -361,8 +375,11 @@ async fn test_list_checkpoints_with_end_seq_beyond_limit() {
 
 #[tokio::test]
 async fn test_list_checkpoints_end_seq_equals_start_seq() {
-    let (mut client, _addr, shutdown_tx, _mock_state_reader) = spawn_test_server().await;
+    let (mut client, _addr, shutdown_tx, mock_state_reader) = spawn_test_server().await;
     let start_seq_num_str = "300".to_string();
+    let start_seq_num_val = start_seq_num_str.parse::<u64>().unwrap();
+    mock_state_reader.set_latest_sequence_number_for_test(start_seq_num_val + 5); // Ensure checkpoint exists
+
     let request = tonic::Request::new(ListCheckpointsRequest {
         limit: Some(5), // Limit greater than 1
         start_sequence_number: Some(start_seq_num_str.clone()),
@@ -731,8 +748,10 @@ impl ActualReadStore for MockRestStateReader {
         sequence_number: CheckpointSequenceNumber,
     ) -> StorageResult<Option<VerifiedCheckpoint>> {
         // Return mock data for a range of sequence numbers to support list tests
-        if sequence_number <= 1000 {
-            // Arbitrary upper limit for mock
+        if sequence_number <= self.latest_sequence_number.load(Ordering::SeqCst)
+            && sequence_number != 0
+        {
+            // Assuming seq 0 is not a valid user-retrievable checkpoint for mocks
             Ok(Some(create_mock_verified_checkpoint(sequence_number, 1))) // Assuming epoch 1 for consistency
         } else {
             Ok(None)
@@ -919,9 +938,11 @@ fn create_mock_checkpoint_contents(_seq_num: CheckpointSequenceNumber) -> Checkp
 
 #[tokio::test]
 async fn test_get_checkpoint_retrieves_and_converts() {
-    let (mut client, _addr, shutdown_tx, _mock_state_reader) = spawn_test_server().await;
+    let (mut client, _addr, shutdown_tx, mock_state_reader) = spawn_test_server().await;
 
     let request_seq_num = 789u64;
+    mock_state_reader.set_latest_sequence_number_for_test(request_seq_num + 5); // Ensure checkpoint exists
+
     let request = tonic::Request::new(GetCheckpointRequest {
         checkpoint_id: request_seq_num.to_string(),
     });
@@ -972,6 +993,9 @@ async fn test_get_checkpoint_not_found() {
     let (mut client, _addr, shutdown_tx, _mock_state_reader) = spawn_test_server().await;
 
     let request_seq_num = 12345u64; // A sequence number not returned by mock
+    // DO NOT set latest_sequence_number_for_test here, we want it to be not found.
+    // The default latest_sequence_number is 0, so 12345 will not be found.
+
     let request = tonic::Request::new(GetCheckpointRequest {
         checkpoint_id: request_seq_num.to_string(),
     });
@@ -1093,76 +1117,349 @@ async fn test_stream_checkpoints_in_range_include_full_data() {
 async fn test_subscribe_new_checkpoints_include_full_data() {
     let (mut client, _addr, shutdown_tx, mock_state_reader) = spawn_test_server().await;
 
-    let initial_latest_seq = 20u64;
-    mock_state_reader.set_latest_sequence_number_for_test(initial_latest_seq);
+    let initial_latest_seq = 3;
+    let seq_to_subscribe_from = initial_latest_seq + 1; // 4
+    mock_state_reader.set_latest_sequence_number_for_test(initial_latest_seq); // Mock initially has up to 3
 
     let request = tonic::Request::new(SubscribeNewCheckpointsRequest {
-        start_from_sequence_number: Some((initial_latest_seq + 1).to_string()),
+        start_from_sequence_number: Some(seq_to_subscribe_from.to_string()), // Start from 4
         include_full_data: true,
     });
 
-    let stream_response = client.subscribe_new_checkpoints(request).await;
-    assert!(
-        stream_response.is_ok(),
-        "RPC call failed: {:?}",
-        stream_response.err()
-    );
-    let mut stream = stream_response.unwrap().into_inner();
+    let mut stream = client
+        .subscribe_new_checkpoints(request)
+        .await
+        .expect("SubscribeNewCheckpoints RPC call failed")
+        .into_inner();
 
-    // Simulate new checkpoints appearing
-    let new_seq_1 = initial_latest_seq + 1;
-    let new_seq_2 = initial_latest_seq + 2;
+    // Advance the sequence number to make item 4 available and trigger update
+    mock_state_reader.set_latest_sequence_number_for_test(seq_to_subscribe_from);
 
-    // Wait a moment for subscription to establish
-    sleep(Duration::from_millis(100)).await;
-    mock_state_reader.set_latest_sequence_number_for_test(new_seq_1);
-
+    // Wait for and verify the first item (full data)
     match timeout(Duration::from_secs(2), stream.next()).await {
-        Ok(Some(Ok(streamed_checkpoint))) => {
-            if let Some(CheckpointType::FullData(full_data)) = streamed_checkpoint.checkpoint_type {
-                assert_eq!(
-                    full_data.summary.as_ref().unwrap().sequence_number,
-                    new_seq_1
-                );
-                assert!(
-                    full_data.transactions.is_empty(),
-                    "Expected empty transactions for mock full data"
-                );
-            } else {
-                panic!(
-                    "Expected FullData variant for seq {}, got {:?}",
-                    new_seq_1, streamed_checkpoint.checkpoint_type
-                );
-            }
+        Ok(Some(Ok(streamed_item))) => {
+            assert_eq!(
+                streamed_item.checkpoint_type,
+                Some(CheckpointType::FullData(
+                    iota_gprc_api::proto::iota::gprc::v1::CheckpointDataGprc {
+                        summary: Some(
+                            convert_verified_checkpoint_to_gprc_summary(
+                                &create_mock_verified_checkpoint(seq_to_subscribe_from, 1)
+                            ) // Expecting seq 4
+                            .unwrap(),
+                        ),
+                        transactions: vec![],
+                    }
+                ))
+            );
         }
-        Ok(Some(Err(status))) => panic!("Stream item 1 was an error: {}", status),
-        Ok(None) => panic!("Stream ended prematurely before item 1"),
-        Err(_) => panic!("Timeout waiting for stream item 1 (seq {})", new_seq_1),
-    }
-
-    mock_state_reader.set_latest_sequence_number_for_test(new_seq_2);
-    match timeout(Duration::from_secs(2), stream.next()).await {
-        Ok(Some(Ok(streamed_checkpoint))) => {
-            if let Some(CheckpointType::FullData(full_data)) = streamed_checkpoint.checkpoint_type {
-                assert_eq!(
-                    full_data.summary.as_ref().unwrap().sequence_number,
-                    new_seq_2
-                );
-                assert!(
-                    full_data.transactions.is_empty(),
-                    "Expected empty transactions for mock full data"
-                );
-            } else {
-                panic!(
-                    "Expected FullData variant for seq {}, got {:?}",
-                    new_seq_2, streamed_checkpoint.checkpoint_type
-                );
-            }
-        }
-        Ok(Some(Err(status))) => panic!("Stream item 2 was an error: {}", status),
-        Ok(None) => panic!("Stream ended prematurely before item 2"),
-        Err(_) => panic!("Timeout waiting for stream item 2 (seq {})", new_seq_2),
+        Ok(Some(Err(e))) => panic!("Stream item error: {:?}", e),
+        Ok(None) => panic!("Stream closed unexpectedly"),
+        Err(_) => panic!("Timeout waiting for first item with full data"),
     }
 
     let _ = shutdown_tx.send(());
+}
+
+#[tokio::test]
+async fn test_subscribe_new_checkpoints_start_from_historical_and_continues() {
+    let (mut client, _addr, shutdown_tx, mock_state_reader) = spawn_test_server().await;
+
+    // Setup: Mock reader has checkpoints 1, 2, 3, 4, 5
+    let initial_latest_seq = 5;
+    mock_state_reader.set_latest_sequence_number_for_test(initial_latest_seq);
+
+    let start_streaming_from_seq = 3;
+    let request = tonic::Request::new(SubscribeNewCheckpointsRequest {
+        start_from_sequence_number: Some(start_streaming_from_seq.to_string()),
+        include_full_data: false,
+    });
+
+    let mut stream = client
+        .subscribe_new_checkpoints(request)
+        .await
+        .expect("SubscribeNewCheckpoints RPC call failed")
+        .into_inner();
+
+    // Expected historical items: 3, 4, 5
+    for i in start_streaming_from_seq..=initial_latest_seq {
+        match timeout(Duration::from_secs(1), stream.next()).await {
+            Ok(Some(Ok(streamed_item))) => {
+                assert_eq!(
+                    streamed_item.checkpoint_type,
+                    Some(CheckpointType::Summary(
+                        convert_verified_checkpoint_to_gprc_summary(
+                            &create_mock_verified_checkpoint(i, 1)
+                        ) // Assuming epoch 1
+                        .unwrap()
+                    ))
+                );
+            }
+            Ok(Some(Err(e))) => panic!("Stream item error for historical seq {}: {:?}", i, e),
+            Ok(None) => panic!(
+                "Stream closed unexpectedly while expecting historical seq {}",
+                i
+            ),
+            Err(_) => panic!("Timeout waiting for historical item seq {}", i),
+        }
+    }
+
+    // Action: Mock reader advances latest_sequence_number to 6, then 7
+    let live_seq_1 = initial_latest_seq + 1; // 6
+    mock_state_reader.set_latest_sequence_number_for_test(live_seq_1);
+
+    match timeout(Duration::from_secs(2), stream.next()).await {
+        Ok(Some(Ok(streamed_item))) => {
+            assert_eq!(
+                streamed_item.checkpoint_type,
+                Some(CheckpointType::Summary(
+                    convert_verified_checkpoint_to_gprc_summary(&create_mock_verified_checkpoint(
+                        live_seq_1, 1
+                    ))
+                    .unwrap()
+                ))
+            );
+        }
+        Ok(Some(Err(e))) => panic!("Stream item error for live seq {}: {:?}", live_seq_1, e),
+        Ok(None) => panic!(
+            "Stream closed unexpectedly while expecting live seq {}",
+            live_seq_1
+        ),
+        Err(_) => panic!("Timeout waiting for live item seq {}", live_seq_1),
+    }
+
+    let live_seq_2 = initial_latest_seq + 2; // 7
+    mock_state_reader.set_latest_sequence_number_for_test(live_seq_2);
+
+    match timeout(Duration::from_secs(2), stream.next()).await {
+        Ok(Some(Ok(streamed_item))) => {
+            assert_eq!(
+                streamed_item.checkpoint_type,
+                Some(CheckpointType::Summary(
+                    convert_verified_checkpoint_to_gprc_summary(&create_mock_verified_checkpoint(
+                        live_seq_2, 1
+                    ))
+                    .unwrap()
+                ))
+            );
+        }
+        Ok(Some(Err(e))) => panic!("Stream item error for live seq {}: {:?}", live_seq_2, e),
+        Ok(None) => panic!(
+            "Stream closed unexpectedly while expecting live seq {}",
+            live_seq_2
+        ),
+        Err(_) => panic!("Timeout waiting for live item seq {}", live_seq_2),
+    }
+
+    let _ = shutdown_tx.send(());
+}
+
+#[tokio::test]
+async fn test_subscribe_new_checkpoints_multiple_subscribers() {
+    let (mut client_a, _addr, shutdown_tx, mock_state_reader) = spawn_test_server().await;
+    let addr = _addr; // Use the same address for the second client
+
+    // Connect client B
+    let channel_b = tonic::transport::Channel::from_shared(format!("http://[::1]:{}", addr.port()))
+        .unwrap()
+        .connect_timeout(Duration::from_secs(1))
+        .connect()
+        .await
+        .expect("Failed to connect client B to test gRPC server");
+    let mut client_b = CheckpointGprcServiceClient::new(channel_b);
+
+    mock_state_reader.set_latest_sequence_number_for_test(0); // Start clean
+
+    let request_a = tonic::Request::new(SubscribeNewCheckpointsRequest {
+        start_from_sequence_number: None,
+        include_full_data: false,
+    });
+    let mut stream_a = client_a
+        .subscribe_new_checkpoints(request_a)
+        .await
+        .unwrap()
+        .into_inner();
+
+    let request_b = tonic::Request::new(SubscribeNewCheckpointsRequest {
+        start_from_sequence_number: None,
+        include_full_data: false,
+    });
+    let mut stream_b = client_b
+        .subscribe_new_checkpoints(request_b)
+        .await
+        .unwrap()
+        .into_inner();
+
+    // Publish checkpoint 1
+    mock_state_reader.set_latest_sequence_number_for_test(1);
+    for (client_name, stream) in [("A", &mut stream_a), ("B", &mut stream_b)].iter_mut() {
+        match timeout(Duration::from_secs(2), stream.next()).await {
+            Ok(Some(Ok(item))) => {
+                assert_eq!(
+                    item.checkpoint_type
+                        .as_ref()
+                        .unwrap()
+                        .as_summary()
+                        .unwrap()
+                        .sequence_number,
+                    1,
+                    "Client {} incorrect seq for item 1",
+                    client_name
+                );
+            }
+            _ => panic!("Client {} failed to receive item 1", client_name),
+        }
+    }
+
+    // Publish checkpoint 2
+    mock_state_reader.set_latest_sequence_number_for_test(2);
+    for (client_name, stream) in [("A", &mut stream_a), ("B", &mut stream_b)].iter_mut() {
+        match timeout(Duration::from_secs(2), stream.next()).await {
+            Ok(Some(Ok(item))) => {
+                assert_eq!(
+                    item.checkpoint_type
+                        .as_ref()
+                        .unwrap()
+                        .as_summary()
+                        .unwrap()
+                        .sequence_number,
+                    2,
+                    "Client {} incorrect seq for item 2",
+                    client_name
+                );
+            }
+            _ => panic!("Client {} failed to receive item 2", client_name),
+        }
+    }
+    let _ = shutdown_tx.send(());
+}
+
+#[tokio::test]
+async fn test_subscribe_new_checkpoints_no_new_items_timeout() {
+    let (mut client, _addr, shutdown_tx, mock_state_reader) = spawn_test_server().await;
+
+    mock_state_reader.set_latest_sequence_number_for_test(5); // Initial state
+
+    let request = tonic::Request::new(SubscribeNewCheckpointsRequest {
+        start_from_sequence_number: None, // Only interested in new items
+        include_full_data: false,
+    });
+
+    let mut stream = client
+        .subscribe_new_checkpoints(request)
+        .await
+        .expect("SubscribeNewCheckpoints RPC call failed")
+        .into_inner();
+
+    // Do not advance the sequence number. Expect a timeout.
+    match timeout(Duration::from_millis(500), stream.next()).await {
+        // Short timeout
+        Ok(Some(Ok(streamed_item))) => {
+            panic!("Received unexpected item: {:?}", streamed_item);
+        }
+        Ok(Some(Err(e))) => panic!("Stream returned an error: {:?}", e),
+        Ok(None) => panic!("Stream closed unexpectedly"),
+        Err(_) => {
+            // Timeout occurred, which is the expected behavior
+        }
+    }
+
+    let _ = shutdown_tx.send(());
+}
+
+#[tokio::test]
+async fn test_stream_checkpoints_in_range_invalid_start_greater_than_end() {
+    let (mut client, _addr, shutdown_tx, mock_state_reader) = spawn_test_server().await;
+
+    mock_state_reader.set_latest_sequence_number_for_test(5); // Some checkpoints exist
+
+    let request = tonic::Request::new(StreamCheckpointsInRangeRequest {
+        start_sequence_number: "4".to_string(),
+        end_sequence_number: Some("2".to_string()), // Invalid: start > end
+        include_full_data: false,
+    });
+
+    let response = client.stream_checkpoints_in_range(request).await;
+
+    assert!(
+        response.is_err(),
+        "Expected RPC call to fail for invalid range"
+    );
+    if let Err(status) = response {
+        assert_eq!(
+            status.code(),
+            tonic::Code::InvalidArgument,
+            "Expected InvalidArgument gRPC error code, got {:?}",
+            status.code()
+        );
+        assert!(
+            status
+                .message()
+                .contains("end_sequence_number cannot be less than start_sequence_number"),
+            "Error message did not contain expected text. Got: {}",
+            status.message()
+        );
+    } else {
+        panic!("Response was Ok, expected Err");
+    }
+
+    let _ = shutdown_tx.send(());
+}
+
+#[tokio::test]
+async fn test_stream_checkpoints_in_range_entirely_non_existent() {
+    let (mut client, _addr, shutdown_tx, mock_state_reader) = spawn_test_server().await;
+
+    mock_state_reader.set_latest_sequence_number_for_test(5); // Checkpoints 1-5 exist
+
+    let request = tonic::Request::new(StreamCheckpointsInRangeRequest {
+        start_sequence_number: "10".to_string(),
+        end_sequence_number: Some("12".to_string()), // Range 10-12, non-existent
+        include_full_data: false,
+    });
+
+    let mut stream = client
+        .stream_checkpoints_in_range(request)
+        .await
+        .expect("StreamCheckpointsInRange RPC call failed")
+        .into_inner();
+
+    // Expect no items and the stream to end cleanly
+    match timeout(Duration::from_millis(200), stream.next()).await {
+        Ok(None) => {
+            // Stream is empty and closed, correct for non-existent range
+        }
+        Ok(Some(Ok(item))) => panic!(
+            "Received unexpected item for non-existent range: {:?}",
+            item
+        ),
+        Ok(Some(Err(e))) => panic!("Stream error for non-existent range: {:?}", e),
+        Err(_) => panic!(
+            "Timeout waiting for stream end on non-existent range (implies stream did not close quickly)"
+        ),
+    }
+
+    let _ = shutdown_tx.send(());
+}
+
+// Helper to extract summary, assuming CheckpointType is an enum generated by
+// tonic/prost This might already exist or be done inline. For clarity in
+// multi_subscriber test:
+trait AsSummary {
+    fn as_summary(
+        &self,
+    ) -> Option<&iota_gprc_api::proto::iota::gprc::v1::SignedCheckpointSummaryGprc>;
+}
+
+impl AsSummary for iota_gprc_api::proto::iota::gprc::v1::streamed_checkpoint::CheckpointType {
+    fn as_summary(
+        &self,
+    ) -> Option<&iota_gprc_api::proto::iota::gprc::v1::SignedCheckpointSummaryGprc> {
+        match self {
+            iota_gprc_api::proto::iota::gprc::v1::streamed_checkpoint::CheckpointType::Summary(
+                s,
+            ) => Some(s),
+            _ => None,
+        }
+    }
 }
