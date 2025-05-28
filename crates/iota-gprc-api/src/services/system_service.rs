@@ -10,7 +10,8 @@ use crate::{
     server::StateReader,
 };
 
-const NODE_VERSION: &str = "iota-gprc-api-dev";
+// const NODE_VERSION: &str = "iota-gprc-api-dev"; // Replaced by
+// CARGO_PKG_VERSION
 
 #[derive(Clone)]
 pub struct SystemServiceImpl {
@@ -43,7 +44,7 @@ impl SystemGprcService for SystemServiceImpl {
         let uptime_ms = uptime_duration.as_millis();
 
         let system_info = SystemInfoGprc {
-            node_version: NODE_VERSION.to_string(),
+            node_version: env!("CARGO_PKG_VERSION").to_string(),
             uptime_ms: Some(StringU64 {
                 value: uptime_ms.to_string(),
             }),

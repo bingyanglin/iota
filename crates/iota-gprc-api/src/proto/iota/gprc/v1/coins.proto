@@ -8,8 +8,13 @@ message CoinInfoGprc {
     string coin_type_tag = 1; // StructTag as string
     StringU64 total_supply = 2;
     StringU64 balance = 3; // Example: for a specific account, or maybe this is treasury balance
-    StringU256 treasury_balance = 4;
-    // Add other fields from CoinInfo as needed
+    // StringU256 treasury_balance = 4; // Removed due to unclear source/redundancy and StringU256 type issues
+    optional string name = 5;
+    optional string symbol = 6;
+    optional uint32 decimals = 7; // u8 in Rust, uint32 is fine for proto
+    optional string description = 8;
+    optional string icon_url = 9;
+    optional string metadata_object_id = 10; // The ObjectID of the CoinMetadata object itself
 }
 
 message GetCoinInfoRequest {

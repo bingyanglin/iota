@@ -1,7 +1,14 @@
+use std::str::FromStr; // Added for CheckpointDigest::from_str
 use std::sync::Arc; // For Arc<VerifiedCheckpoint>
 use std::time::Duration; // For tokio::time::interval
 
-use iota_types::messages_checkpoint::VerifiedCheckpoint;
+use anyhow; // Ensure anyhow is in scope
+use iota_types::storage::error::Error as StorageError; // Direct import with alias
+use iota_types::{
+    digests::CheckpointDigest,                                     // Added
+    full_checkpoint_content::CheckpointData as CoreCheckpointData, // Alias to avoid conflict
+    messages_checkpoint::{CheckpointContents, VerifiedCheckpoint},
+};
 use tokio::sync::{broadcast, mpsc};
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::{Request, Response, Status};
@@ -22,7 +29,27 @@ use crate::{
         StreamedCheckpoint, SubscribeNewCheckpointsRequest,
         checkpoint_gprc_service_server::CheckpointGprcService,
     },
-}; // Import GrpcApiError for mapping // Ensure VerifiedCheckpoint is imported
+}; // Import GrpcApiError for mapping // Ensure VerifiedCheckpoint is imported // Alias for clarity
+
+// Helper enum for identifying checkpoint request type
+enum CheckpointIdentifier {
+    SequenceNumber(u64),
+    Digest(CheckpointDigest),
+}
+
+// Helper function to parse checkpoint_id string
+fn parse_checkpoint_id_str(id_str: &str) -> Result<CheckpointIdentifier, Status> {
+    if let Ok(seq_num) = id_str.parse::<u64>() {
+        Ok(CheckpointIdentifier::SequenceNumber(seq_num))
+    } else if let Ok(digest) = CheckpointDigest::from_str(id_str) {
+        Ok(CheckpointIdentifier::Digest(digest))
+    } else {
+        Err(Status::invalid_argument(format!(
+            "Invalid checkpoint_id format: '{}'. Expected u64 sequence number or hex digest.",
+            id_str
+        )))
+    }
+}
 
 #[derive(Clone)]
 pub struct CheckpointServiceImpl {
@@ -35,7 +62,7 @@ pub struct CheckpointServiceImpl {
 
 impl CheckpointServiceImpl {
     pub fn new(state_reader: StateReader) -> Self {
-        let (tx, _rx) = broadcast::channel::<Arc<VerifiedCheckpoint>>(32); // Buffer size 32, can be tuned
+        let (tx, _rx) = broadcast::channel::<Arc<VerifiedCheckpoint>>(32_usize); // Buffer size 32, can be tuned
 
         let poller_state_reader = state_reader.clone();
         let poller_tx = tx.clone();
@@ -137,98 +164,73 @@ impl CheckpointGprcService for CheckpointServiceImpl {
             request.get_ref()
         );
 
-        let req_inner = request.get_ref(); // Keep as ref if only reading checkpoint_id
-        let checkpoint_id_str = &req_inner.checkpoint_id;
+        let checkpoint_id_str = &request.get_ref().checkpoint_id;
+        let identifier = parse_checkpoint_id_str(checkpoint_id_str)?;
 
-        let seq_num = checkpoint_id_str.parse::<u64>().map_err(|e| {
-            Status::invalid_argument(format!(
-                "Could not parse checkpoint_id '{}' as u64: {}",
-                checkpoint_id_str, e
-            ))
-        })?;
+        let verified_checkpoint: VerifiedCheckpoint;
+        let checkpoint_contents: CheckpointContents;
 
-        // In a real implementation:
-        // 1. Use self.state_reader to fetch the actual checkpoint data from
-        //    storage/core. The RestStateReader trait has
-        //    `get_checkpoint_by_sequence_number` and
-        //    `get_full_checkpoint_contents_by_sequence_number`. However,
-        //    iota_types::full_checkpoint_content::CheckpointData expects
-        //    CertifiedCheckpointSummary and CheckpointContents. The method
-        //    `get_checkpoint_data(&self, checkpoint: VerifiedCheckpoint,
-        //    checkpoint_contents: CheckpointContents) ->
-        //    anyhow::Result<CheckpointData>` on RestStateReader seems most appropriate
-        //    if we fetch VerifiedCheckpoint and CheckpointContents separately.
+        match identifier {
+            CheckpointIdentifier::SequenceNumber(seq_num) => {
+                verified_checkpoint = self
+                    .state_reader
+                    .get_checkpoint_by_sequence_number(seq_num)
+                    .map_err(|e: StorageError| GrpcApiError::SystemError(anyhow::Error::new(e)))?
+                    .ok_or_else(|| {
+                        Status::not_found(format!(
+                            "Checkpoint with sequence number {} not found",
+                            seq_num
+                        ))
+                    })?;
 
-        let verified_checkpoint = self
-            .state_reader
-            .get_checkpoint_by_sequence_number(seq_num)
-            .map_err(|e| {
-                eprintln!(
-                    "[gRPC CheckpointService] Storage error fetching checkpoint {}: {:?}",
-                    seq_num, e
-                );
-                Status::internal(format!("Storage error fetching checkpoint: {}", e))
-            })?;
-
-        let verified_checkpoint = match verified_checkpoint {
-            Some(vc) => vc,
-            None => {
-                return Err(Status::not_found(format!(
-                    "Checkpoint with sequence number {} not found",
-                    seq_num
-                )));
+                checkpoint_contents = self.state_reader.get_checkpoint_contents_by_sequence_number(seq_num)
+                    .map_err(|e: StorageError| GrpcApiError::SystemError(anyhow::Error::new(e)))?
+                    .ok_or_else(|| {
+                        Status::not_found(format!(
+                            "Checkpoint contents for sequence number {} not found. This may indicate data inconsistency.",
+                            seq_num
+                        ))
+                    })?;
             }
-        };
+            CheckpointIdentifier::Digest(digest) => {
+                verified_checkpoint = self
+                    .state_reader
+                    .get_checkpoint_by_digest(&digest)
+                    .map_err(|e: StorageError| GrpcApiError::SystemError(anyhow::Error::new(e)))?
+                    .ok_or_else(|| {
+                        Status::not_found(format!(
+                            "Checkpoint with digest {} not found",
+                            digest.to_string()
+                        ))
+                    })?;
 
-        let checkpoint_contents = self
-            .state_reader
-            .get_checkpoint_contents_by_sequence_number(seq_num)
-            .map_err(|e| {
-                eprintln!(
-                    "[gRPC CheckpointService] Storage error fetching checkpoint contents {}: {:?}",
-                    seq_num, e
-                );
-                Status::internal(format!("Storage error fetching checkpoint contents: {}", e))
-            })?;
-
-        let checkpoint_contents = match checkpoint_contents {
-            Some(cc) => cc,
-            None => {
-                // This case should ideally not happen if the summary was found, implies data
-                // inconsistency
-                eprintln!(
-                    "[gRPC CheckpointService] Checkpoint contents for sequence number {} not found, though summary was present.",
-                    seq_num
-                );
-                return Err(Status::internal(format!(
-                    "Checkpoint contents for sequence number {} not found, data inconsistency?",
-                    seq_num
-                )));
-            }
-        };
-
-        // Now, use the state_reader's get_checkpoint_data method
-        match self
-            .state_reader
-            .get_checkpoint_data(verified_checkpoint, checkpoint_contents)
-        {
-            Ok(core_checkpoint_data) => {
-                let gprc_checkpoint_data =
-                    convert_full_checkpoint_data_to_gprc(&core_checkpoint_data)
-                        .map_err(GrpcApiError::from)?; // Convert custom error to tonic::Status
-                Ok(Response::new(gprc_checkpoint_data))
-            }
-            Err(e) => {
-                eprintln!(
-                    "[gRPC CheckpointService] Error constructing CheckpointData for {}: {:?}",
-                    seq_num, e
-                );
-                Err(Status::internal(format!(
-                    "Failed to construct full checkpoint data: {}",
-                    e
-                )))
+                checkpoint_contents = self.state_reader.get_checkpoint_contents_by_digest(&verified_checkpoint.inner().content_digest)
+                    .map_err(|e: StorageError| GrpcApiError::SystemError(anyhow::Error::new(e)))?
+                    .ok_or_else(|| {
+                        Status::not_found(format!(
+                            "Checkpoint contents for digest {} (from checkpoint {}) not found. This may indicate data inconsistency.",
+                            verified_checkpoint.inner().content_digest.to_string(),
+                            digest.to_string()
+                        ))
+                    })?;
             }
         }
+
+        let core_checkpoint_data: CoreCheckpointData = self
+            .state_reader
+            .get_checkpoint_data(verified_checkpoint.clone(), checkpoint_contents)
+            .map_err(|e| {
+                eprintln!(
+                    "[gRPC CheckpointService] Error constructing CheckpointData for {}: {:?}",
+                    checkpoint_id_str, e
+                );
+                Status::internal(format!("Failed to construct full checkpoint data: {}", e))
+            })?;
+
+        let gprc_checkpoint_data = convert_full_checkpoint_data_to_gprc(&core_checkpoint_data)
+            .map_err(|e| GrpcApiError::ConversionError(e.to_string()))?;
+
+        Ok(Response::new(gprc_checkpoint_data))
     }
 
     async fn get_checkpoint(
@@ -240,40 +242,42 @@ impl CheckpointGprcService for CheckpointServiceImpl {
             request.get_ref()
         );
 
-        let req_inner = request.into_inner();
-        let checkpoint_id_str = req_inner.checkpoint_id;
+        let checkpoint_id_str = &request.get_ref().checkpoint_id;
+        let identifier = parse_checkpoint_id_str(checkpoint_id_str)?;
 
-        let seq_num = checkpoint_id_str.parse::<u64>().map_err(|e| {
-            Status::invalid_argument(format!(
-                "Could not parse checkpoint_id '{}' as u64: {}",
-                checkpoint_id_str, e
-            ))
-        })?;
+        let verified_checkpoint: VerifiedCheckpoint;
 
-        // Use state_reader to fetch the actual checkpoint data
-        match self.state_reader.get_checkpoint_by_sequence_number(seq_num) {
-            Ok(Some(verified_checkpoint)) => {
-                // Convert the core Rust type to the gRPC type
-                let gprc_summary =
-                    convert_verified_checkpoint_to_gprc_summary(&verified_checkpoint)
-                        .map_err(GrpcApiError::from)?; // Convert your GrpcApiError to tonic::Status
-                Ok(Response::new(gprc_summary))
+        match identifier {
+            CheckpointIdentifier::SequenceNumber(seq_num) => {
+                verified_checkpoint = self
+                    .state_reader
+                    .get_checkpoint_by_sequence_number(seq_num)
+                    .map_err(|e: StorageError| GrpcApiError::SystemError(anyhow::Error::new(e)))?
+                    .ok_or_else(|| {
+                        Status::not_found(format!(
+                            "Checkpoint summary for sequence number {} not found",
+                            seq_num
+                        ))
+                    })?;
             }
-            Ok(None) => Err(Status::not_found(format!(
-                "Checkpoint with sequence number {} not found",
-                seq_num
-            ))),
-            Err(storage_err) => {
-                eprintln!(
-                    "[gRPC CheckpointService] Error fetching checkpoint {} from storage: {:?}",
-                    seq_num, storage_err
-                );
-                Err(Status::internal(format!(
-                    "Failed to retrieve checkpoint {}: {}",
-                    seq_num, storage_err
-                )))
+            CheckpointIdentifier::Digest(digest) => {
+                verified_checkpoint = self
+                    .state_reader
+                    .get_checkpoint_by_digest(&digest)
+                    .map_err(|e: StorageError| GrpcApiError::SystemError(anyhow::Error::new(e)))?
+                    .ok_or_else(|| {
+                        Status::not_found(format!(
+                            "Checkpoint summary for digest {} not found",
+                            digest.to_string()
+                        ))
+                    })?;
             }
         }
+
+        let gprc_summary = convert_verified_checkpoint_to_gprc_summary(&verified_checkpoint)
+            .map_err(|e| GrpcApiError::ConversionError(e.to_string()))?;
+
+        Ok(Response::new(gprc_summary))
     }
 
     async fn list_checkpoints(
@@ -286,7 +290,7 @@ impl CheckpointGprcService for CheckpointServiceImpl {
             req
         );
 
-        let limit = req.limit.map_or(10u32, |l| l.min(100).max(1)) as usize; // Default 10, min 1, max 100
+        let limit = req.limit.map_or(10_u32, |l: u32| l.min(100_u32).max(1_u32)) as usize; // Added explicit type for l
 
         let start_seq_num = req
             .start_sequence_number
@@ -623,32 +627,22 @@ impl CheckpointGprcService for CheckpointServiceImpl {
         let state_reader_clone_for_full_data = self.state_reader.clone();
 
         tokio::spawn(async move {
-            // Determine effective start sequence number. If client requested a start,
-            // only send checkpoints >= that. If not, send all new ones.
-            let mut next_expected_seq_num = requested_start_seq_opt.unwrap_or(0);
-            let mut initial_catch_up_done = requested_start_seq_opt.is_none();
-
-            println!(
-                "[gRPC Subscribe Task] Started for client. Requested start_seq: {:?}, include_full_data: {}. Effective next_expected: {}",
-                requested_start_seq_opt, include_full_data, next_expected_seq_num
-            );
-
             loop {
                 match broadcast_rx.recv().await {
                     Ok(verified_checkpoint_arc) => {
                         let checkpoint_seq_num_ref = verified_checkpoint_arc.sequence_number();
 
-                        if !initial_catch_up_done {
-                            if *checkpoint_seq_num_ref < next_expected_seq_num {
+                        // Filter based on start_from_sequence_number
+                        if let Some(start_from) = requested_start_seq_opt {
+                            if *checkpoint_seq_num_ref < start_from {
+                                // println!("[gRPC Subscribe Task] Skipping checkpoint {} as it is <
+                                // start_from_sequence_number {}.", *checkpoint_seq_num_ref,
+                                // start_from);
                                 continue;
                             }
-                            initial_catch_up_done = true;
-                            next_expected_seq_num = *checkpoint_seq_num_ref;
                         }
-
-                        if *checkpoint_seq_num_ref < next_expected_seq_num {
-                            continue;
-                        }
+                        // println!("[gRPC Subscribe Task] Processing checkpoint {} for client.",
+                        // *checkpoint_seq_num_ref);
 
                         let checkpoint_result: Result<StreamedCheckpoint, Status> =
                             if include_full_data {
@@ -713,9 +707,19 @@ impl CheckpointGprcService for CheckpointServiceImpl {
                                     return;
                                 }
                             }
-                            Err(_status) => {}
+                            Err(_status) => {
+                                // Error already logged by the conversion/fetch
+                                // logic if it was a skip.
+                                // If client disconnected, loop will break on
+                                // next send attempt or here.
+                                // If it was a genuine error that should be
+                                // propagated, it can be sent:
+                                // if tx_to_client.send(Err(status)).await.
+                                // is_err() { /*...*/ }
+                                // Current design: log and skip problematic
+                                // items, client sees no error for these.
+                            }
                         }
-                        next_expected_seq_num = *checkpoint_seq_num_ref + 1;
                     }
                     Err(broadcast::error::RecvError::Lagged(n)) => {
                         eprintln!(

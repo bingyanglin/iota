@@ -91,6 +91,7 @@ impl Indexer {
             batch_size: download_queue_size,
             timeout_secs: ingestion_reader_timeout_secs,
             data_limit,
+            use_grpc_streaming: config.use_grpc_streaming,
             ..Default::default()
         };
 

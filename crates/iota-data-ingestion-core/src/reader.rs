@@ -4,17 +4,24 @@
 
 use std::{collections::BTreeMap, ffi::OsString, fs, path::PathBuf, sync::Arc, time::Duration};
 
+use anyhow;
 use backoff::backoff::Backoff;
 use futures::StreamExt;
+use iota_gprc_api::{
+    conversions::checkpoints::convert_checkpoint_data_gprc_to_core,
+    proto::iota::gprc::v1::{
+        GetCheckpointRequest, SubscribeNewCheckpointsRequest,
+        checkpoint_gprc_service_client::CheckpointGprcServiceClient, streamed_checkpoint,
+    },
+};
 use iota_metrics::spawn_monitored_task;
-use iota_rest_api::Client;
+use iota_rest_api::Client as RestClient;
 use iota_storage::blob::Blob;
 use iota_types::{
     full_checkpoint_content::CheckpointData, messages_checkpoint::CheckpointSequenceNumber,
 };
 use notify::{RecursiveMode, Watcher};
 use object_store::{ObjectStore, path::Path};
-use tap::pipe::Pipe;
 use tokio::{
     sync::{
         mpsc::{self, error::TryRecvError},
@@ -22,7 +29,8 @@ use tokio::{
     },
     time::timeout,
 };
-use tracing::{debug, error, info};
+use tonic;
+use tracing::{debug, error, info, warn};
 
 use crate::{
     IngestionError, IngestionResult, create_remote_store_client,
@@ -70,6 +78,9 @@ pub struct ReaderOptions {
     ///
     /// Default: 0.
     pub data_limit: usize,
+    /// Whether to use gRPC streaming for fetching checkpoints if gRPC is
+    /// configured. Default: false (uses unary GetCheckpointFull calls).
+    pub use_grpc_streaming: bool,
 }
 
 impl Default for ReaderOptions {
@@ -79,14 +90,16 @@ impl Default for ReaderOptions {
             timeout_secs: 5,
             batch_size: 10,
             data_limit: 0,
+            use_grpc_streaming: false,
         }
     }
 }
 
 enum RemoteStore {
     ObjectStore(Box<dyn ObjectStore>),
-    Rest(iota_rest_api::Client),
-    Hybrid(Box<dyn ObjectStore>, iota_rest_api::Client),
+    Rest(RestClient),
+    Grpc(CheckpointGprcServiceClient<tonic::transport::Channel>),
+    Hybrid(Box<dyn ObjectStore>, RestClient),
 }
 
 impl CheckpointReader {
@@ -138,7 +151,7 @@ impl CheckpointReader {
     }
 
     async fn fetch_from_full_node(
-        client: &Client,
+        client: &RestClient,
         checkpoint_number: CheckpointSequenceNumber,
     ) -> IngestionResult<(Arc<CheckpointData>, usize)> {
         let checkpoint = client.get_full_checkpoint(checkpoint_number).await?;
@@ -146,8 +159,23 @@ impl CheckpointReader {
         Ok((Arc::new(checkpoint), size))
     }
 
+    async fn fetch_from_full_node_grpc(
+        client: &mut CheckpointGprcServiceClient<tonic::transport::Channel>,
+        checkpoint_number: CheckpointSequenceNumber,
+    ) -> IngestionResult<(Arc<CheckpointData>, usize)> {
+        let request = tonic::Request::new(GetCheckpointRequest {
+            checkpoint_id: checkpoint_number.to_string(),
+        });
+        let response = client.get_checkpoint_full(request).await?.into_inner();
+        let core_checkpoint_data = convert_checkpoint_data_gprc_to_core(response).map_err(|e| {
+            IngestionError::Upstream(anyhow::anyhow!("gRPC conversion error: {}", e))
+        })?;
+        let size = bcs::serialized_size(&core_checkpoint_data)?;
+        Ok((Arc::new(core_checkpoint_data), size))
+    }
+
     async fn remote_fetch_checkpoint_internal(
-        store: &RemoteStore,
+        store: &mut RemoteStore,
         checkpoint_number: CheckpointSequenceNumber,
     ) -> IngestionResult<(Arc<CheckpointData>, usize)> {
         match store {
@@ -156,6 +184,9 @@ impl CheckpointReader {
             }
             RemoteStore::Rest(client) => {
                 Self::fetch_from_full_node(client, checkpoint_number).await
+            }
+            RemoteStore::Grpc(client) => {
+                Self::fetch_from_full_node_grpc(client, checkpoint_number).await
             }
             RemoteStore::Hybrid(store, client) => {
                 match Self::fetch_from_full_node(client, checkpoint_number).await {
@@ -167,7 +198,7 @@ impl CheckpointReader {
     }
 
     async fn remote_fetch_checkpoint(
-        store: &RemoteStore,
+        store: &mut RemoteStore,
         checkpoint_number: CheckpointSequenceNumber,
     ) -> IngestionResult<(Arc<CheckpointData>, usize)> {
         let mut backoff = backoff::ExponentialBackoff::default();
@@ -195,56 +226,199 @@ impl CheckpointReader {
         }
     }
 
-    fn start_remote_fetcher(
+    async fn start_remote_fetcher(
         &mut self,
-    ) -> mpsc::Receiver<IngestionResult<(Arc<CheckpointData>, usize)>> {
+    ) -> IngestionResult<mpsc::Receiver<IngestionResult<(Arc<CheckpointData>, usize)>>> {
         let batch_size = self.options.batch_size;
-        let start_checkpoint = self.current_checkpoint_number;
+        let start_checkpoint_from_config = self.current_checkpoint_number;
         let (sender, receiver) = mpsc::channel(batch_size);
-        let url = self
-            .remote_store_url
-            .clone()
-            .expect("remote store url must be set");
-        let store = if let Some((fn_url, remote_url)) = url.split_once('|') {
+        let url = self.remote_store_url.clone().ok_or_else(|| {
+            IngestionError::Upstream(anyhow::anyhow!("Remote store URL not configured"))
+        })?;
+
+        let use_grpc_streaming = self.options.use_grpc_streaming;
+        let reader_options_clone = self.options.clone();
+
+        let mut store_for_task = if let Some((fn_url, remote_url)) = url.split_once('|') {
             let object_store = create_remote_store_client(
                 remote_url.to_string(),
                 self.remote_store_options.clone(),
                 self.options.timeout_secs,
-            )
-            .expect("failed to create remote store client");
-            RemoteStore::Hybrid(object_store, iota_rest_api::Client::new(fn_url))
+            )?;
+            RemoteStore::Hybrid(object_store, RestClient::new(fn_url.to_string()))
+        } else if url.starts_with("grpc://") {
+            match CheckpointGprcServiceClient::connect(url.clone()).await {
+                Ok(client) => RemoteStore::Grpc(client),
+                Err(e) => {
+                    return Err(IngestionError::Upstream(anyhow::anyhow!(
+                        "Failed to connect to gRPC endpoint {}: {}",
+                        url,
+                        e
+                    )));
+                }
+            }
         } else if url.ends_with("/api/v1") {
-            RemoteStore::Rest(iota_rest_api::Client::new(url))
+            RemoteStore::Rest(RestClient::new(url.to_string()))
         } else {
             let object_store = create_remote_store_client(
-                url,
+                url.to_string(),
                 self.remote_store_options.clone(),
                 self.options.timeout_secs,
-            )
-            .expect("failed to create remote store client");
+            )?;
             RemoteStore::ObjectStore(object_store)
         };
 
-        spawn_monitored_task!(async move {
-            let mut checkpoint_stream = (start_checkpoint..u64::MAX)
-                .map(|checkpoint_number| Self::remote_fetch_checkpoint(&store, checkpoint_number))
-                .pipe(futures::stream::iter)
-                .buffered(batch_size);
+        spawn_monitored_task!({
+            let mut current_checkpoint_to_fetch = start_checkpoint_from_config;
+            async move {
+                if use_grpc_streaming && matches!(store_for_task, RemoteStore::Grpc(_)) {
+                    if let RemoteStore::Grpc(mut client) = store_for_task {
+                        info!(
+                            "Starting gRPC streaming from checkpoint: {}",
+                            current_checkpoint_to_fetch
+                        );
+                        let request = tonic::Request::new(SubscribeNewCheckpointsRequest {
+                            start_from_sequence_number: Some(
+                                current_checkpoint_to_fetch.to_string(),
+                            ),
+                            include_full_data: true,
+                        });
 
-            while let Some(checkpoint) = checkpoint_stream.next().await {
-                if sender.send(checkpoint).await.is_err() {
-                    info!("remote reader dropped");
-                    break;
+                        match client.subscribe_new_checkpoints(request).await {
+                            Ok(response) => {
+                                let mut stream = response.into_inner();
+                                while let Some(item_result) = stream.next().await {
+                                    match item_result {
+                                        Ok(streamed_checkpoint) => {
+                                            if let Some(checkpoint_type) =
+                                                streamed_checkpoint.checkpoint_type
+                                            {
+                                                match checkpoint_type {
+                                                    streamed_checkpoint::CheckpointType::FullData(gprc_data) => {
+                                                        let seq_num = gprc_data.summary.as_ref().map_or(0, |s| s.sequence_number);
+                                                        match convert_checkpoint_data_gprc_to_core(gprc_data) {
+                                                            Ok(core_data) => {
+                                                                let size = bcs::serialized_size(&core_data).unwrap_or(0);
+                                                                if sender.send(Ok((Arc::new(core_data), size))).await.is_err() {
+                                                                    error!("Checkpoint receiver closed, terminating gRPC stream.");
+                                                                    break;
+                                                                }
+                                                                current_checkpoint_to_fetch = seq_num + 1;
+                                                            }
+                                                            Err(e) => {
+                                                                error!("gRPC stream: Failed to convert checkpoint {}: {:?}", seq_num, e);
+                                                                if sender.send(Err(IngestionError::Upstream(anyhow::anyhow!("gRPC conversion error: {}", e)))).await.is_err() {
+                                                                    break;
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+                                                    streamed_checkpoint::CheckpointType::Summary(summary_data) => {
+                                                        info!(
+                                                            "gRPC stream: Received summary for checkpoint {}, skipping as full data is expected.",
+                                                            summary_data.sequence_number
+                                                        );
+                                                    }
+                                                }
+                                            }
+                                        }
+                                        Err(status) => {
+                                            error!(
+                                                "gRPC stream error: {:?}. Attempting to re-establish.",
+                                                status
+                                            );
+                                            if sender
+                                                .send(Err(IngestionError::Upstream(
+                                                    anyhow::anyhow!(
+                                                        "gRPC stream error: {}",
+                                                        status
+                                                    ),
+                                                )))
+                                                .await
+                                                .is_err()
+                                            {
+                                                break;
+                                            }
+                                            break;
+                                        }
+                                    }
+                                }
+                                info!(
+                                    "gRPC checkpoint stream ended. Next expected checkpoint if resumed: {}",
+                                    current_checkpoint_to_fetch
+                                );
+                            }
+                            Err(status) => {
+                                error!(
+                                    "Failed to subscribe to gRPC checkpoint stream: {:?}",
+                                    status
+                                );
+                                let _ = sender
+                                    .send(Err(IngestionError::Upstream(anyhow::anyhow!(
+                                        "Failed to subscribe to gRPC stream: {}",
+                                        status
+                                    ))))
+                                    .await;
+                            }
+                        }
+                        return;
+                    } else {
+                        warn!("gRPC streaming mode with non-Grpc store, this is unexpected.");
+                    }
+                }
+
+                info!(
+                    "Entering polling mode for remote fetcher. Current start checkpoint: {}. Streaming: {}",
+                    current_checkpoint_to_fetch, use_grpc_streaming
+                );
+
+                loop {
+                    let mut sent_any_success_in_batch = false;
+                    if reader_options_clone.batch_size == 0 {
+                        tokio::time::sleep(Duration::from_millis(100)).await;
+                        current_checkpoint_to_fetch += 1;
+                        continue;
+                    }
+
+                    for i in 0..reader_options_clone.batch_size {
+                        let checkpoint_num_to_fetch = current_checkpoint_to_fetch + i as u64;
+                        let result = Self::remote_fetch_checkpoint(
+                            &mut store_for_task,
+                            checkpoint_num_to_fetch,
+                        )
+                        .await;
+
+                        let result_is_ok = result.is_ok();
+                        if sender.send(result).await.is_err() {
+                            info!(
+                                "Remote reader checkpoint receiver closed, terminating polling task."
+                            );
+                            return;
+                        }
+                        if result_is_ok {
+                            sent_any_success_in_batch = true;
+                        }
+                    }
+
+                    if !sent_any_success_in_batch && reader_options_clone.batch_size > 0 {
+                        debug!(
+                            "All fetches in batch failed, adding small delay before next batch."
+                        );
+                        tokio::time::sleep(Duration::from_millis(500)).await;
+                    }
+
+                    current_checkpoint_to_fetch += reader_options_clone.batch_size as u64;
                 }
             }
         });
-        receiver
+
+        Ok(receiver)
     }
 
-    fn remote_fetch(&mut self) -> Vec<Arc<CheckpointData>> {
+    async fn remote_fetch(&mut self) -> IngestionResult<Vec<Arc<CheckpointData>>> {
         let mut checkpoints = vec![];
         if self.remote_fetcher_receiver.is_none() {
-            self.remote_fetcher_receiver = Some(self.start_remote_fetcher());
+            self.remote_fetcher_receiver = Some(self.start_remote_fetcher().await?);
         }
         while !self.exceeds_capacity(self.current_checkpoint_number + checkpoints.len() as u64) {
             match self.remote_fetcher_receiver.as_mut().unwrap().try_recv() {
@@ -265,7 +439,7 @@ impl CheckpointReader {
                 Err(TryRecvError::Empty) => break,
             }
         }
-        checkpoints
+        Ok(checkpoints)
     }
 
     async fn sync(&mut self) -> IngestionResult<()> {
@@ -284,10 +458,9 @@ impl CheckpointReader {
                 || checkpoints[0].checkpoint_summary.sequence_number
                     > self.current_checkpoint_number)
         {
-            checkpoints = self.remote_fetch();
+            checkpoints = self.remote_fetch().await?;
             read_source = "remote";
         } else {
-            // cancel remote fetcher execution because local reader has made progress
             self.remote_fetcher_receiver = None;
         }
 
@@ -436,10 +609,341 @@ impl DataLimiter {
     }
 
     fn gc(&mut self, watermark: CheckpointSequenceNumber) {
-        if self.limit == 0 {
-            return;
+        while self
+            .queue
+            .first_key_value()
+            .map_or(false, |(seq, _)| *seq < watermark)
+        {
+            if let Some((_, size)) = self.queue.pop_first() {
+                self.in_progress -= size;
+            }
         }
-        self.queue = self.queue.split_off(&watermark);
-        self.in_progress = self.queue.values().sum();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{net::SocketAddr, str::FromStr, sync::Arc, time::Duration};
+
+    use iota_gprc_api::proto::iota::gprc::v1::{
+        CheckpointDataGprc, CheckpointDigestGprc, CheckpointPageGprc, CheckpointTransactionGprc,
+        GetCheckpointRequest, ListCheckpointsRequest, SignedCheckpointSummaryGprc,
+        StreamCheckpointsInRangeRequest, StreamedCheckpoint, SubscribeNewCheckpointsRequest,
+        VerifiedTransactionGprc,
+        checkpoint_gprc_service_server::{CheckpointGprcService, CheckpointGprcServiceServer},
+    };
+    use iota_types::{
+        base_types::{IotaAddress, ObjectID, ObjectRef, SequenceNumber as TxSequenceNumber},
+        digests::ObjectDigest,
+        transaction::TransactionData,
+    };
+    use tokio::sync::Mutex;
+    use tokio_stream::wrappers::ReceiverStream;
+    use tonic::{Status, transport::Server};
+
+    use super::*;
+
+    fn mock_object_id_reader_test() -> ObjectID {
+        ObjectID::from_str("0x0000000000000000000000000000000000000000000000000000000000000002")
+            .unwrap()
+    }
+
+    fn mock_iota_address_reader_test() -> IotaAddress {
+        IotaAddress::from(mock_object_id_reader_test())
+    }
+
+    fn mock_object_ref_reader_test() -> ObjectRef {
+        (
+            mock_object_id_reader_test(),
+            TxSequenceNumber::from(0),
+            ObjectDigest::random(),
+        )
+    }
+
+    fn mock_raw_tx_bytes() -> Vec<u8> {
+        let sender = mock_iota_address_reader_test();
+        let recipient = mock_iota_address_reader_test();
+        let object_to_transfer = mock_object_ref_reader_test();
+        let gas_payment_object = mock_object_ref_reader_test();
+        let gas_budget = 10_000;
+        let gas_price = 1;
+
+        let tx_data = TransactionData::new_transfer(
+            recipient,
+            object_to_transfer,
+            sender,
+            gas_payment_object,
+            gas_budget,
+            gas_price,
+        );
+        bcs::to_bytes(&tx_data).expect("BCS serialization of mock TransactionData failed")
+    }
+
+    #[derive(Debug, Default)]
+    struct MockCheckpointService {
+        mock_response: Arc<Mutex<Option<CheckpointDataGprc>>>,
+        expected_sequence_number: Option<u64>,
+    }
+
+    impl MockCheckpointService {
+        fn new(response: CheckpointDataGprc, expected_seq_num: u64) -> Self {
+            Self {
+                mock_response: Arc::new(Mutex::new(Some(response))),
+                expected_sequence_number: Some(expected_seq_num),
+            }
+        }
+    }
+
+    #[tonic::async_trait]
+    impl CheckpointGprcService for MockCheckpointService {
+        type StreamCheckpointsInRangeStream =
+            tokio_stream::wrappers::ReceiverStream<Result<StreamedCheckpoint, Status>>;
+        type SubscribeNewCheckpointsStream =
+            tokio_stream::wrappers::ReceiverStream<Result<StreamedCheckpoint, Status>>;
+
+        async fn get_checkpoint_full(
+            &self,
+            request: tonic::Request<GetCheckpointRequest>,
+        ) -> Result<tonic::Response<CheckpointDataGprc>, tonic::Status> {
+            let req_inner = request.into_inner();
+            println!(
+                "MockService: Received GetCheckpointFull for id: {}",
+                req_inner.checkpoint_id
+            );
+
+            if let Some(expected_seq) = self.expected_sequence_number {
+                let requested_seq = req_inner
+                    .checkpoint_id
+                    .parse::<u64>()
+                    .map_err(|_| Status::invalid_argument("Invalid checkpoint_id format"))?;
+                if requested_seq != expected_seq {
+                    return Err(Status::invalid_argument(format!(
+                        "Expected seq {}, got {}",
+                        expected_seq, requested_seq
+                    )));
+                }
+            }
+
+            let mut mock_response_guard = self.mock_response.lock().await;
+            if let Some(response) = mock_response_guard.take() {
+                // Take the response to simulate it being consumed
+                Ok(tonic::Response::new(response))
+            } else {
+                Err(tonic::Status::not_found(
+                    "Checkpoint not found or already served",
+                ))
+            }
+        }
+
+        async fn get_checkpoint(
+            &self,
+            _request: tonic::Request<GetCheckpointRequest>,
+        ) -> Result<tonic::Response<SignedCheckpointSummaryGprc>, tonic::Status> {
+            println!("MockService: Received GetCheckpoint (summary)");
+            // For this test suite, we are focused on GetCheckpoint logic becomes relevant
+            // for the reader.
+            Err(tonic::Status::unimplemented(
+                "get_checkpoint (summary) not fully implemented in this mock for reader tests",
+            ))
+        }
+
+        async fn list_checkpoints(
+            &self,
+            _request: tonic::Request<ListCheckpointsRequest>,
+        ) -> Result<tonic::Response<CheckpointPageGprc>, tonic::Status> {
+            Err(tonic::Status::unimplemented(
+                "list_checkpoints not implemented in mock",
+            ))
+        }
+
+        async fn stream_checkpoints_in_range(
+            &self,
+            _request: tonic::Request<StreamCheckpointsInRangeRequest>,
+        ) -> Result<tonic::Response<Self::StreamCheckpointsInRangeStream>, Status> {
+            Err(tonic::Status::unimplemented(
+                "stream_checkpoints_in_range not implemented in mock",
+            ))
+        }
+
+        async fn subscribe_new_checkpoints(
+            &self,
+            request: tonic::Request<SubscribeNewCheckpointsRequest>,
+        ) -> Result<tonic::Response<Self::SubscribeNewCheckpointsStream>, Status> {
+            println!(
+                "MockService: Received SubscribeNewCheckpoints: {:?}",
+                request.get_ref()
+            );
+            let req_inner = request.into_inner();
+            let start_from_seq = req_inner
+                .start_from_sequence_number
+                .and_then(|s| s.parse::<u64>().ok())
+                .unwrap_or(0);
+
+            // For the test, let's stream a few checkpoints starting from `start_from_seq`
+            let (tx, rx) = mpsc::channel(10); // Buffer size for the stream
+            let num_checkpoints_to_stream = 3;
+
+            let _mock_response_template = self.mock_response.clone(); // Prefix with _
+
+            tokio::spawn(async move {
+                for i in 0..num_checkpoints_to_stream {
+                    let current_seq = start_from_seq + i;
+                    // Create a mock StreamedCheckpoint with FullData
+                    // Use the mock_response logic if available, or create fresh mock data.
+                    // For simplicity, creating fresh mock_checkpoint_data_gprc here.
+                    let gprc_data = mock_checkpoint_data_gprc(current_seq);
+
+                    let streamed_item = StreamedCheckpoint {
+                        checkpoint_type: Some(streamed_checkpoint::CheckpointType::FullData(
+                            gprc_data,
+                        )),
+                    };
+                    if tx.send(Ok(streamed_item)).await.is_err() {
+                        // Receiver dropped, stop sending
+                        println!("MockService: Stream receiver dropped.");
+                        break;
+                    }
+                    // Simulate some delay between streaming items
+                    tokio::time::sleep(Duration::from_millis(50)).await;
+                }
+                println!("MockService: Finished streaming mock checkpoints.");
+                // Dropping tx will close the stream on the client side
+            });
+
+            Ok(tonic::Response::new(ReceiverStream::new(rx)))
+        }
+    }
+
+    // Helper to create a mock CheckpointDataGprc
+    fn mock_checkpoint_data_gprc(sequence_number: u64) -> CheckpointDataGprc {
+        CheckpointDataGprc {
+            summary: Some(SignedCheckpointSummaryGprc {
+                epoch: 0,
+                sequence_number,
+                network_total_transactions: 100 + sequence_number,
+                content_digest: Some(CheckpointDigestGprc { digest: vec![1; 32] }),
+                previous_digest: if sequence_number > 0 {
+                    Some(CheckpointDigestGprc { digest: vec![2; 32] })
+                } else {
+                    None
+                },
+            }),
+            transactions: vec![CheckpointTransactionGprc {
+                content: Some(
+                    iota_gprc_api::proto::iota::gprc::v1::checkpoint_transaction_gprc::Content::FullTransaction(
+                        VerifiedTransactionGprc { raw_tx: mock_raw_tx_bytes() },
+                    ),
+                ),
+            }],
+        }
+    }
+
+    // Helper to start the mock server
+    async fn start_mock_server(
+        service: MockCheckpointService,
+    ) -> Result<SocketAddr, anyhow::Error> {
+        let initial_addr: SocketAddr = "127.0.0.1:0".parse()?; // For TcpListener
+        let listener = tokio::net::TcpListener::bind(initial_addr).await?;
+        let actual_addr = listener.local_addr()?; // Get the OS-assigned port
+
+        let server_builder =
+            Server::builder().add_service(CheckpointGprcServiceServer::new(service));
+
+        tokio::spawn(async move {
+            if let Err(e) = server_builder
+                .serve_with_incoming(tokio_stream::wrappers::TcpListenerStream::new(listener))
+                .await
+            {
+                eprintln!("Mock server error: {:?}", e);
+            }
+        });
+
+        Ok(actual_addr) // Return the actual address
+    }
+
+    #[tokio::test]
+    async fn test_remote_fetch_checkpoint_grpc_success() {
+        let seq_num = 5u64;
+        let mock_gprc_data = mock_checkpoint_data_gprc(seq_num);
+        let mock_service = MockCheckpointService::new(mock_gprc_data.clone(), seq_num);
+        let server_addr = start_mock_server(mock_service)
+            .await
+            .expect("Mock server failed to start");
+        let grpc_url = format!("grpc://{}", server_addr);
+        let mut remote_store = match CheckpointGprcServiceClient::connect(grpc_url.clone()).await {
+            Ok(client) => RemoteStore::Grpc(client),
+            Err(e) => panic!("Failed to connect to test gRPC server {}: {}", grpc_url, e),
+        };
+        let (checkpoint_data_arc, _size) =
+            CheckpointReader::remote_fetch_checkpoint_internal(&mut remote_store, seq_num)
+                .await
+                .unwrap();
+        assert_eq!(
+            checkpoint_data_arc.checkpoint_summary.sequence_number,
+            seq_num
+        );
+        let core_expected_data: iota_types::full_checkpoint_content::CheckpointData =
+            convert_checkpoint_data_gprc_to_core(mock_gprc_data).unwrap();
+        assert_eq!(
+            checkpoint_data_arc.checkpoint_summary.data(),
+            core_expected_data.checkpoint_summary.data()
+        );
+    }
+
+    #[tokio::test]
+    async fn test_grpc_streaming_fetch() -> Result<(), Box<dyn std::error::Error>> {
+        let start_seq = 10u64;
+        // The mock_response in MockCheckpointService isn't directly used by
+        // subscribe_new_checkpoints, as it generates its own stream. So, the
+        // specific data doesn't matter for the constructor here.
+        let mock_service = MockCheckpointService::default(); // Or new with any dummy data
+        let server_addr = start_mock_server(mock_service).await?;
+        let grpc_url = format!("grpc://{}", server_addr);
+
+        let temp_dir = tempfile::tempdir()?;
+        let (mut reader, _checkpoint_receiver, _processed_sender, _exit_sender) =
+            CheckpointReader::initialize(
+                temp_dir.path().to_path_buf(),
+                start_seq, // Start current_checkpoint_number from here
+                Some(grpc_url.clone()),
+                vec![],
+                ReaderOptions {
+                    use_grpc_streaming: true,
+                    batch_size: 1, // Keep low for predictable stream item count
+                    ..Default::default()
+                },
+            );
+
+        let mut actual_stream_receiver = reader.start_remote_fetcher().await.unwrap();
+        let mut received_count = 0;
+        let expected_stream_count = 3; // Mock service streams 3 items
+
+        for i in 0..expected_stream_count {
+            match timeout(Duration::from_secs(2), actual_stream_receiver.recv()).await {
+                Ok(Some(Ok((checkpoint_data, _size)))) => {
+                    assert_eq!(
+                        checkpoint_data.checkpoint_summary.sequence_number,
+                        start_seq + i as u64
+                    );
+                    received_count += 1;
+                }
+                Ok(Some(Err(e))) => panic!("Stream received an error: {:?}", e),
+                Ok(None) => panic!("Stream closed earlier than expected."),
+                Err(_) => panic!("Timeout waiting for checkpoint from stream"),
+            }
+        }
+        assert_eq!(received_count, expected_stream_count);
+
+        // Check that the stream can close gracefully
+        match timeout(Duration::from_millis(200), actual_stream_receiver.recv()).await {
+            Ok(None) => { /* Expected: stream closed after mock server finishes */ }
+            Ok(Some(_)) => panic!("Stream sent more items than expected."),
+            Err(_) => {
+                // Timeout is also acceptable if stream is just idle
+                info!("Stream idle as expected after items.");
+            }
+        }
+
+        Ok(())
     }
 }

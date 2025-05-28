@@ -1,6 +1,7 @@
 use std::{
     collections::BTreeMap,
     net::{SocketAddr, TcpListener},
+    str::FromStr,
     sync::{Arc, Mutex},
     time::Duration,
 };
@@ -12,15 +13,16 @@ use iota_gprc_api::{
     },
     server::{GrpcServer, StateReader},
 };
+use iota_protocol_config::ProtocolConfig;
 use iota_types::{
     base_types::{
         // AuthorityName,
-        IotaAddress,
+        // IotaAddress,
         MoveObjectType,
         ObjectID,
         SequenceNumber, // , StructTag
     },
-    coin::TreasuryCap,
+    coin::{CoinMetadata, TreasuryCap},
     committee::{Committee, EpochId /* , StakeUnit, TOTAL_VOTING_POWER */},
     digests::{
         ChainIdentifier, CheckpointContentsDigest, CheckpointDigest, TransactionDigest,
@@ -28,10 +30,11 @@ use iota_types::{
     },
     effects::{TransactionEffects, TransactionEvents},
     full_checkpoint_content::CheckpointData,
+    id::UID,
     messages_checkpoint::{
         CheckpointContents, CheckpointSequenceNumber, FullCheckpointContents, VerifiedCheckpoint,
     },
-    object::{MoveObject, Object, /* ObjectInner, */ Owner},
+    object::{Data, MoveObject, Object, /* ObjectInner, */ Owner},
     storage::{
         AccountOwnedObjectInfo, CoinInfo as CoreStorageCoinInfo, DynamicFieldIndexInfo,
         DynamicFieldKey, ListDirection, ObjectKey, ObjectStore as ActualObjectStore,
@@ -42,6 +45,20 @@ use iota_types::{
 };
 use move_core_types::language_storage::StructTag;
 use tokio::{sync::broadcast, time::sleep};
+
+// Define a mock ObjectID for IOTA coin metadata
+const MOCK_IOTA_METADATA_ID_STR: &str =
+    "0xdeadbeef00000000000000000000000000000000000000000000000000000001";
+const MOCK_IOTA_TREASURY_ID_STR: &str =
+    "0xdeadbeef00000000000000000000000000000000000000000000000000000002";
+
+fn get_mock_iota_metadata_id() -> ObjectID {
+    ObjectID::from_hex_literal(MOCK_IOTA_METADATA_ID_STR).unwrap()
+}
+
+fn get_mock_iota_treasury_id() -> ObjectID {
+    ObjectID::from_hex_literal(MOCK_IOTA_TREASURY_ID_STR).unwrap()
+}
 
 #[derive(Default)]
 struct MockCoinState {
@@ -286,20 +303,23 @@ async fn spawn_test_server_with_coins_client() -> (
 // }
 
 #[tokio::test]
-async fn test_list_coins_unimplemented() {
+async fn test_list_coins_returns_empty_as_placeholder() {
     let (mut client, shutdown_tx, _mock_state_reader) = spawn_test_server_with_coins_client().await;
 
     let request = ListCoinsRequest {
         page_size: None,
         cursor: None,
     };
-
     let result = client.list_coins(request).await;
-    assert!(result.is_err());
-    if let Err(status) = result {
-        assert_eq!(status.code(), tonic::Code::Unimplemented);
-        assert!(status.message().contains("ListCoins not implemented"));
-    }
+
+    assert!(
+        result.is_ok(),
+        "ListCoins should now return Ok an empty list as a placeholder"
+    );
+    let response = result.unwrap().into_inner();
+    assert!(response.coins.is_empty(), "Expected empty coins list");
+    assert!(response.next_cursor.is_none(), "Expected no next_cursor");
+
     drop(shutdown_tx);
 }
 
@@ -307,63 +327,86 @@ async fn test_list_coins_unimplemented() {
 async fn test_get_coin_info_success() {
     let (mut client, shutdown_tx, mock_state_reader) = spawn_test_server_with_coins_client().await;
 
-    let coin_tag_str = "0x1::coin::Coin<0x2::custom::Token>";
-    let coin_tag: StructTag = coin_tag_str.parse().unwrap();
-    let token_tag: StructTag = "0x2::custom::Token".parse().unwrap(); // The inner type for TreasuryCap<T>
+    let test_coin_type_tag_str = "0x2::iota::IOTA";
+    let test_coin_type_tag = StructTag::from_str(test_coin_type_tag_str).unwrap();
 
-    // Prepare mock TreasuryCap object
-    let treasury_cap_id = ObjectID::random();
-    let treasury_cap_data = TreasuryCap {
-        id: iota_types::id::UID::new(treasury_cap_id),
-        total_supply: iota_types::balance::Supply {
-            value: 1_000_000_000,
-        },
+    let mock_metadata_id = get_mock_iota_metadata_id();
+    let mock_treasury_id = get_mock_iota_treasury_id();
+
+    // 1. Setup Mock CoreStorageCoinInfo
+    let core_coin_info = CoreStorageCoinInfo {
+        coin_metadata_object_id: Some(mock_metadata_id),
+        treasury_object_id: Some(mock_treasury_id),
     };
+    mock_state_reader.add_coin_info(test_coin_type_tag.clone(), core_coin_info);
 
-    let treasury_cap_move_obj = MoveObject::new_from_execution(
-        treasury_cap_type_tag(token_tag), // Use the inner token_tag for TreasuryCap<Token>
-        SequenceNumber::from(1u64),
-        bcs::to_bytes(&treasury_cap_data).unwrap(),
-        &iota_protocol_config::ProtocolConfig::get_for_min_version(),
+    // 2. Setup Mock CoinMetadata Object
+    let iota_metadata = iota_types::coin::CoinMetadata {
+        id: UID::new(mock_metadata_id), // The ID of this metadata object itself
+        decimals: 6,
+        name: "Iota".to_string(),
+        symbol: "IOTA".to_string(),
+        description: "The native IOTA token".to_string(),
+        icon_url: None,
+    };
+    let metadata_bcs = bcs::to_bytes(&iota_metadata).unwrap();
+    let metadata_move_object = MoveObject::new_from_execution(
+        MoveObjectType::from(CoinMetadata::type_(test_coin_type_tag.clone())),
+        SequenceNumber::from_u64(0), // version for genesis object
+        metadata_bcs,
+        &ProtocolConfig::get_for_min_version(), // protocol_config
     )
     .unwrap();
-    let treasury_object = Object::new_move(
-        treasury_cap_move_obj,
-        Owner::AddressOwner(IotaAddress::random_for_testing_only()),
-        TransactionDigest::random(),
+    let metadata_object = Object::new_from_genesis(
+        Data::Move(metadata_move_object),
+        Owner::Immutable,
+        TransactionDigest::ZERO, // previous_transaction for genesis object
     );
+    mock_state_reader.add_object(mock_metadata_id, metadata_object);
 
-    mock_state_reader.add_object(treasury_cap_id, treasury_object);
-
-    // Prepare mock CoreStorageCoinInfo
-    let core_coin_info = CoreStorageCoinInfo {
-        coin_metadata_object_id: None, // Not testing metadata in this specific test for simplicity
-        treasury_object_id: Some(treasury_cap_id),
+    // 3. Setup Mock TreasuryCap Object (needed for total_supply)
+    let treasury_cap = TreasuryCap {
+        id: UID::new(mock_treasury_id),
+        total_supply: iota_types::balance::Supply { value: 1_000_000 },
     };
-    mock_state_reader.add_coin_info(coin_tag.clone(), core_coin_info);
-
-    let request = tonic::Request::new(GetCoinInfoRequest {
-        coin_type_tag: coin_tag_str.to_string(),
-    });
-    let response = client
-        .get_coin_info(request)
-        .await
-        .expect("RPC call failed");
-    let coin_info_gprc = response.into_inner();
-
-    assert_eq!(coin_info_gprc.coin_type_tag, coin_tag_str);
-    assert!(
-        coin_info_gprc.total_supply.is_some(),
-        "Total supply should be present"
+    let treasury_bcs = bcs::to_bytes(&treasury_cap).unwrap();
+    let treasury_move_object = MoveObject::new_from_execution(
+        MoveObjectType::from(TreasuryCap::type_(test_coin_type_tag.clone())),
+        SequenceNumber::from_u64(0), // version for genesis object
+        treasury_bcs,
+        &ProtocolConfig::get_for_min_version(), // protocol_config
+    )
+    .unwrap();
+    let treasury_object = Object::new_from_genesis(
+        Data::Move(treasury_move_object),
+        Owner::Shared {
+            initial_shared_version: SequenceNumber::from_u64(0),
+        }, // Example owner
+        TransactionDigest::ZERO, // previous_transaction for genesis object
     );
-    assert_eq!(coin_info_gprc.total_supply.unwrap().value, "1000000000");
-    assert!(
-        coin_info_gprc.balance.is_none(),
-        "Balance should be None as per current conversion"
+    mock_state_reader.add_object(mock_treasury_id, treasury_object);
+
+    let request = GetCoinInfoRequest {
+        coin_type_tag: test_coin_type_tag_str.to_string(),
+    };
+    let response = client.get_coin_info(request).await.unwrap().into_inner();
+
+    assert_eq!(response.coin_type_tag, test_coin_type_tag_str);
+    assert_eq!(response.total_supply.unwrap().value, "1000000");
+    assert!(response.balance.is_none());
+
+    // Metadata assertions
+    assert_eq!(response.name.as_deref(), Some("Iota"));
+    assert_eq!(response.symbol.as_deref(), Some("IOTA"));
+    assert_eq!(response.decimals, Some(6));
+    assert_eq!(
+        response.description.as_deref(),
+        Some("The native IOTA token")
     );
-    assert!(
-        coin_info_gprc.treasury_balance.is_none(),
-        "TreasuryBalance should be None as per current conversion"
+    assert!(response.icon_url.is_none());
+    assert_eq!(
+        response.metadata_object_id.as_deref(),
+        Some(MOCK_IOTA_METADATA_ID_STR)
     );
 
     let _ = shutdown_tx.send(()); // Shutdown server
@@ -404,15 +447,4 @@ async fn test_get_coin_info_invalid_tag() {
     }
     let _ = shutdown_tx.send(());
     sleep(Duration::from_millis(50)).await;
-}
-
-fn treasury_cap_type_tag(coin_struct_tag: StructTag) -> MoveObjectType {
-    MoveObjectType::from(StructTag {
-        address: iota_types::IOTA_FRAMEWORK_ADDRESS, // from iota_types::coin
-        module: iota_types::coin::COIN_MODULE_NAME.to_owned(),
-        name: iota_types::coin::COIN_TREASURE_CAP_NAME.to_owned(),
-        type_params: vec![move_core_types::language_storage::TypeTag::Struct(
-            Box::new(coin_struct_tag),
-        )],
-    })
 }

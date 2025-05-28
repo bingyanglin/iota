@@ -30,6 +30,26 @@ The subscription logic for new checkpoints should draw inspiration from similar 
   * `TransactionGprcService`:
     * Unary RPCs: `GetTransaction`.
       * `GetTransactionRequest` uses `bytes transaction_digest_bytes` for the ID.
+    * `ListTransactions` and `StreamTransactions` RPCs are implemented and use the `state_reader` to fetch and stream transaction data (StreamTransactions uses a polling mechanism). (Unit tests use a `MockRestStateReader`).
+  * `CommitteeGprcService`:
+    * `GetCommittee` RPC is implemented and uses the `state_reader`.
+  * `SystemGprcService` (`SystemServiceImpl`):
+    * `GetSystemInfo` RPC is implemented:
+      * Returns node version (currently placeholder) and uptime.
+      * Tested.
+  * `CoinsGprcService` (`CoinsServiceImpl`):
+    * `GetCoinInfo` RPC is implemented:
+      * Takes a `coin_type_tag` string.
+      * Fetches `iota_types::storage::CoinInfo` and attempts to resolve the `treasury_object_id` to a `TreasuryCap` object to retrieve `total_supply`.
+      * Does not currently populate `CoinMetadata` details (like name, symbol, decimals).
+      * Tested (success, not found, invalid tag).
+    * `ListCoins` RPC remains a stub (returns `Unimplemented`).
+  * `EpochsGprcService`:
+    * `GetEpochInfo` RPC is implemented: Fetches committee info for a given or latest epoch.
+    * `ListEpochs` RPC remains a stub (returns an empty list).
+  * `AccountsGprcService`:
+    * `GetAccountInfo` RPC is a stub (returns placeholder data).
+    * `ListAccountObjects` RPC is implemented: Fetches and paginates objects owned by an account.
 * **Proto Definitions:** Located in `src/proto/iota/gprc/v1/`.
 * **Build System:** `build.rs` compiles `.proto` files using `tonic-build`.
 * **Testing:** Unit tests for implemented services (`CheckpointGprcService`, `ObjectGprcService`, `TransactionGprcService`) are available in the `tests/` directory, running against a `MockRestStateReader`. All tests are currently passing.
@@ -114,26 +134,9 @@ Therefore, to use the public gRPC API, ensure the `grpc_public_api_address` is c
   * `TransactionGprcService` (`TransactionServiceImpl`) has been implemented with the `GetTransaction` RPC.
     * This RPC takes `bytes transaction_digest_bytes` in the request and converts `iota_types::transaction::VerifiedTransaction` to `TransactionGprc`.
     * Unit tests for `GetTransaction` are implemented and pass using the `MockRestStateReader`.
+    * `ListTransactions` and `StreamTransactions` are also implemented (as noted in "Current Status").
 
   * **Current Implementations (Continued from above & new):**
-    * `TransactionGprcService`:
-      * `GetTransaction` RPC is implemented (as mentioned under "Implement Other gRPC Services").
-      * `ListTransactions` and `StreamTransactions` RPCs are implemented and use the `state_reader` to fetch and stream transaction data (StreamTransactions uses a polling mechanism). (Unit tests use a `MockRestStateReader`).
-    * `CommitteeGprcService`:
-      * `GetCommittee` RPC is implemented and uses the `state_reader`.
-    * `SystemGprcService` (`SystemServiceImpl`):
-      * `GetSystemInfo` RPC is implemented:
-        * Returns node version (currently placeholder) and uptime.
-        * Tested.
-    * `CoinsGprcService` (`CoinsServiceImpl`):
-      * `GetCoinInfo` RPC is implemented:
-        * Takes a `coin_type_tag` string.
-        * Fetches `iota_types::storage::CoinInfo` and attempts to resolve the `treasury_object_id` to a `TreasuryCap` object to retrieve `total_supply`.
-        * Does not currently populate `CoinMetadata` details (like name, symbol, decimals).
-        * Tested (success, not found, invalid tag).
-      * `ListCoins` RPC remains a stub (returns `Unimplemented`).
-    * Other Services (`EpochsGprcService`, `AccountsGprcService`):
-      * Basic stub implementations are in place.
     * Error Handling & Conversions:
       * Basic `GrpcApiError` and `From<GrpcApiError> for tonic::Status` implemented.
       * Conversion functions are in `src/conversions/` for checkpoints, objects, and transactions.
@@ -147,7 +150,8 @@ Therefore, to use the public gRPC API, ensure the `grpc_public_api_address` is c
     * `SystemGprcService`:
       * Integrate `GetSystemInfo` with actual node build version and potentially other system metrics from the `state_reader` if available.
     * Other Services (`EpochsGprcService`, `AccountsGprcService`):
-      * Implement the actual logic for data fetching and conversions for their respective RPCs.
+      * `EpochsGprcService`: Implement `ListEpochs` RPC.
+      * `AccountsGprcService`: Implement `GetAccountInfo` RPC with actual data fetching.
     * Error Handling & Conversions:
       * Expand error types and ensure comprehensive error handling across all services.
       * Create and complete conversion modules for all necessary types for future services.

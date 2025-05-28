@@ -29,14 +29,18 @@ tokio-stream.workspace = true
 tokio-util.workspace = true
 tracing.workspace = true
 url.workspace = true
+tonic.workspace = true
 
 # internal dependencies
 iota-config.workspace = true
 iota-metrics.workspace = true
 iota-protocol-config.workspace = true
 iota-rest-api.workspace = true
+iota-gprc-api.workspace = true
 iota-storage.workspace = true
 iota-types.workspace = true
 
 [dev-dependencies]
 rand.workspace = true
+tokio-test = "0.4"
+tonic = { workspace = true, features = ["transport", "server"] }

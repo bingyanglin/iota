@@ -95,6 +95,18 @@ impl CoinsGprcService for CoinsServiceImpl {
             "[gRPC CoinsService] Received ListCoins request: {:?}",
             request.get_ref()
         );
-        Err(Status::unimplemented("ListCoins not implemented"))
+
+        // TODO: Implementing a full ListCoins RPC requires a method on StateReader
+        // (or an underlying storage mechanism accessible via StateReader)
+        // to iterate through all known coin types.
+        // Currently, StateReader only supports get_coin_info for a *specific*
+        // StructTag. For this PoC, we return an empty list.
+        // Pagination parameters (page_size, cursor) from ListCoinsRequest are ignored
+        // for now.
+
+        Ok(Response::new(ListCoinsResponse {
+            coins: Vec::new(), // Empty list
+            next_cursor: None, // No next cursor
+        }))
     }
 }

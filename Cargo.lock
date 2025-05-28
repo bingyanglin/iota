@@ -6535,6 +6535,7 @@ dependencies = [
  "fastcrypto",
  "futures",
  "iota-config",
+ "iota-gprc-api",
  "iota-metrics",
  "iota-protocol-config",
  "iota-rest-api",
@@ -6551,7 +6552,9 @@ dependencies = [
  "thiserror 1.0.64",
  "tokio",
  "tokio-stream",
+ "tokio-test",
  "tokio-util 0.7.12",
+ "tonic 0.13.1",
  "tracing",
  "url",
 ]
@@ -6835,7 +6838,9 @@ dependencies = [
  "move-core-types",
  "prost",
  "rand 0.8.5",
+ "roaring",
  "serde",
+ "serde_json",
  "shared-crypto",
  "thiserror 1.0.64",
  "tokio",
@@ -15094,6 +15099,19 @@ dependencies = [
  "pin-project-lite",
  "tokio",
  "tokio-util 0.7.12",
+]
+
+[[package]]
+name = "tokio-test"
+version = "0.4.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2468baabc3311435b55dd935f702f42cd1b8abb7e754fb7dfb16bd36aa88f9f7"
+dependencies = [
+ "async-stream",
+ "bytes",
+ "futures-core",
+ "tokio",
+ "tokio-stream",
 ]
 
 [[package]]

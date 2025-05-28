@@ -18,6 +18,8 @@ thiserror.workspace = true
 bcs.workspace = true
 anyhow.workspace = true
 hex.workspace = true
+serde_json.workspace = true
+roaring.workspace = true
 
 iota-types.workspace = true
 iota-sdk2.workspace = true

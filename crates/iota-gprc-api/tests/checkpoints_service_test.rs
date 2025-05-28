@@ -553,7 +553,7 @@ async fn test_get_checkpoint_invalid_id_parse() {
     assert!(
         status_full
             .message()
-            .contains("Could not parse checkpoint_id")
+            .contains("Invalid checkpoint_id format")
     );
     assert!(status_full.message().contains(&format!("{}", request_id)));
 
@@ -571,7 +571,7 @@ async fn test_get_checkpoint_invalid_id_parse() {
     assert!(
         status_summary
             .message()
-            .contains("Could not parse checkpoint_id")
+            .contains("Invalid checkpoint_id format")
     );
     assert!(
         status_summary

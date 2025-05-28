@@ -55,3 +55,14 @@ pub enum IngestionError {
     #[error("reading historical data failed: `{0}`")]
     HistoryRead(String),
 }
+
+impl From<tonic::Status> for IngestionError {
+    fn from(status: tonic::Status) -> Self {
+        IngestionError::Upstream(anyhow::anyhow!(
+            "gRPC call failed: {}. Code: {}, Message: {}",
+            status.message(),
+            status.code(),
+            status.details().escape_ascii()
+        ))
+    }
+}

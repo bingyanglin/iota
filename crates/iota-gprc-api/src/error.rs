@@ -20,6 +20,9 @@ pub enum GrpcApiError {
     #[error("Serialization error: {0}")]
     SerializationError(String),
 
+    #[error("Deserialization error: {0}")]
+    DeserializationError(String),
+
     #[error("Underlying system error: {0}")] // New variant for anyhow::Error
     SystemError(#[from] anyhow::Error),
     // Add other error types as needed
@@ -38,6 +41,9 @@ impl From<GrpcApiError> for tonic::Status {
             }
             GrpcApiError::SerializationError(msg) => {
                 tonic::Status::internal(format!("Serialization failed: {}", msg))
+            }
+            GrpcApiError::DeserializationError(msg) => {
+                tonic::Status::internal(format!("Deserialization failed: {}", msg))
             }
             GrpcApiError::SystemError(err) => {
                 // Handle new variant

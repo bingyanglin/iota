@@ -1,20 +1,22 @@
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, VecDeque},
     net::{SocketAddr, TcpListener},
-    sync::Arc,
+    str::FromStr,
+    sync::{Arc, Mutex},
     time::Duration,
 };
 
 use anyhow;
 use iota_gprc_api::{
     proto::iota::gprc::v1::{
-        GetAccountInfoRequest, ListAccountObjectsRequest,
+        GetAccountInfoRequest, ListAccountObjectsRequest, StringU64,
         accounts_gprc_service_client::AccountsGprcServiceClient,
     },
     server::{GrpcServer, StateReader},
 };
 use iota_types::{
-    base_types::{AuthorityName, ObjectID, SequenceNumber},
+    base_types::{AuthorityName, IotaAddress, MoveObjectType, ObjectID, SequenceNumber},
+    coin::Coin,
     committee::{Committee, EpochId, StakeUnit, TOTAL_VOTING_POWER},
     crypto::{AuthorityKeyPair, AuthoritySignInfo, AuthorityStrongQuorumSignInfo, KeypairTraits},
     digests::{
@@ -29,20 +31,89 @@ use iota_types::{
         CheckpointContents, CheckpointSequenceNumber, CheckpointSummary, FullCheckpointContents,
         VerifiedCheckpoint,
     },
-    object::Object,
+    object::{Data, MoveObject, Object, Owner},
     storage::{
         AccountOwnedObjectInfo, CoinInfo, DynamicFieldIndexInfo, DynamicFieldKey, ListDirection,
         ObjectKey, ObjectStore, ReadStore, RestStateReader, error::Result as StorageResult,
     },
     transaction::VerifiedTransaction,
 };
-use move_core_types::language_storage::StructTag;
+use move_core_types::language_storage::{StructTag, TypeTag};
 use rand::thread_rng;
 use shared_crypto::intent::Intent;
 use tokio::{sync::broadcast, time::sleep};
 
+fn mock_object_id(id: u8) -> ObjectID {
+    ObjectID::new([id; ObjectID::LENGTH])
+}
+
+fn mock_coin_object(id_byte: u8, version_u64: u64, owner_address: IotaAddress) -> Object {
+    let object_id = mock_object_id(id_byte);
+    let aptos_coin_struct_tag = StructTag::from_str("0x1::aptos_coin::AptosCoin").unwrap();
+    let coin_type_tag = TypeTag::Struct(Box::new(aptos_coin_struct_tag.clone()));
+    let move_object_type = MoveObjectType::from(aptos_coin_struct_tag);
+
+    let move_object = MoveObject::new_coin(
+        move_object_type,
+        SequenceNumber::from(version_u64),
+        object_id,
+        100u64,
+    );
+    Object::new_move(
+        move_object,
+        Owner::AddressOwner(owner_address),
+        TransactionDigest::ZERO,
+    )
+}
+
 #[derive(Default)]
-struct MockRestStateReader {}
+struct MockAccountData {
+    objects: BTreeMap<ObjectID, Object>,
+    owned_by_account: BTreeMap<IotaAddress, VecDeque<AccountOwnedObjectInfo>>,
+}
+
+struct MockRestStateReader {
+    data: Arc<Mutex<MockAccountData>>,
+}
+
+impl Default for MockRestStateReader {
+    fn default() -> Self {
+        Self {
+            data: Arc::new(Mutex::new(MockAccountData::default())),
+        }
+    }
+}
+
+impl MockRestStateReader {
+    fn add_object(&self, object: Object) {
+        let mut data = self.data.lock().unwrap();
+        let object_id = object.id();
+        let owner_address = match object.owner {
+            Owner::AddressOwner(addr) => addr,
+            _ => IotaAddress::ZERO,
+        };
+
+        let type_ = match &object.data {
+            Data::Move(mv) => mv.type_().clone(),
+            Data::Package(_) => MoveObjectType::from(
+                StructTag::from_str("0x1::module::PACKAGE_PLACEHOLDER").unwrap(),
+            ),
+        };
+
+        data.objects.insert(object_id, object.clone());
+
+        let info = AccountOwnedObjectInfo {
+            object_id,
+            version: object.version(),
+            owner: owner_address,
+            type_,
+        };
+        data.owned_by_account
+            .entry(owner_address)
+            .or_default()
+            .push_back(info);
+    }
+}
 
 fn create_mock_verified_checkpoint(
     seq_num: CheckpointSequenceNumber,
@@ -175,8 +246,9 @@ impl ReadStore for MockRestStateReader {
 }
 
 impl ObjectStore for MockRestStateReader {
-    fn get_object(&self, _object_id: &ObjectID) -> StorageResult<Option<Object>> {
-        Ok(None)
+    fn get_object(&self, object_id: &ObjectID) -> StorageResult<Option<Object>> {
+        let data = self.data.lock().unwrap();
+        Ok(data.objects.get(object_id).cloned())
     }
     fn get_object_by_key(
         &self,
@@ -208,10 +280,43 @@ impl RestStateReader for MockRestStateReader {
     }
     fn account_owned_objects_info_iter(
         &self,
-        _owner: iota_types::base_types::IotaAddress,
-        _cursor: Option<ObjectID>,
+        owner: iota_types::base_types::IotaAddress,
+        cursor: Option<ObjectID>,
     ) -> StorageResult<Box<dyn Iterator<Item = AccountOwnedObjectInfo> + '_>> {
-        Ok(Box::new(std::iter::empty()))
+        let data_guard = self.data.lock().unwrap();
+
+        let owned_infos_for_account: VecDeque<AccountOwnedObjectInfo> = data_guard
+            .owned_by_account
+            .get(&owner)
+            .map(|original_deque| {
+                original_deque
+                    .iter()
+                    .map(|info| {
+                        // Manually "clone" AccountOwnedObjectInfo as it does not derive Clone
+                        // directly and VecDeque<T>.cloned() requires T:
+                        // Clone.
+                        AccountOwnedObjectInfo {
+                            owner: info.owner,         // IotaAddress is Copy
+                            object_id: info.object_id, // ObjectID is Copy
+                            version: info.version,     // SequenceNumber is Copy
+                            type_: info.type_.clone(), // MoveObjectType is Clone
+                        }
+                    })
+                    .collect::<VecDeque<AccountOwnedObjectInfo>>()
+            })
+            .unwrap_or_default();
+
+        let start_index = if let Some(cursor_id) = cursor {
+            owned_infos_for_account
+                .iter()
+                .position(|info| info.object_id == cursor_id)
+                .map_or(0, |idx| idx + 1)
+        } else {
+            0
+        };
+
+        let iter = owned_infos_for_account.into_iter().skip(start_index);
+        Ok(Box::new(iter))
     }
     fn dynamic_field_iter(
         &self,
@@ -290,44 +395,165 @@ async fn spawn_test_server_with_accounts_client() -> (
 }
 
 #[tokio::test]
-async fn test_get_account_info_unimplemented() {
+async fn test_get_account_info_placeholder() {
     let (mut client, _addr, shutdown_tx, _mock_state_reader) =
         spawn_test_server_with_accounts_client().await;
 
+    let test_address_str = "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef";
     let request = GetAccountInfoRequest {
-        address: "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef".to_string(),
+        address: test_address_str.to_string(),
     };
 
-    let result = client.get_account_info(request).await;
-    assert!(result.is_err());
-    if let Err(status) = result {
-        assert_eq!(status.code(), tonic::Code::Unimplemented);
-        assert!(status.message().contains("GetAccountInfo not implemented"));
-    }
-    drop(shutdown_tx);
+    let response = client.get_account_info(request).await.unwrap().into_inner();
+
+    assert_eq!(response.address, test_address_str);
+    assert_eq!(
+        response.balance,
+        Some(StringU64 {
+            value: "0".to_string()
+        })
+    );
+    assert_eq!(
+        response.sequence_number,
+        Some(StringU64 {
+            value: "0".to_string()
+        })
+    );
+
+    let _ = shutdown_tx.send(());
 }
 
 #[tokio::test]
-async fn test_list_account_objects_unimplemented() {
+async fn test_list_account_objects_empty() {
     let (mut client, _addr, shutdown_tx, _mock_state_reader) =
         spawn_test_server_with_accounts_client().await;
 
+    let test_address = IotaAddress::new([0u8; 32]);
+
     let request = ListAccountObjectsRequest {
-        owner_address: "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef"
-            .to_string(),
+        owner_address: test_address.to_string(),
         page_size: None,
         cursor: None,
     };
 
-    let result = client.list_account_objects(request).await;
-    assert!(result.is_err());
-    if let Err(status) = result {
-        assert_eq!(status.code(), tonic::Code::Unimplemented);
-        assert!(
-            status
-                .message()
-                .contains("ListAccountObjects not implemented")
-        );
+    let response = client
+        .list_account_objects(request)
+        .await
+        .unwrap()
+        .into_inner();
+    assert!(response.objects.is_empty());
+    assert!(response.next_cursor.is_none());
+
+    let _ = shutdown_tx.send(());
+}
+
+#[tokio::test]
+async fn test_list_account_objects_success_simple() {
+    let (mut client, _addr, shutdown_tx, mock_state_reader) =
+        spawn_test_server_with_accounts_client().await;
+
+    let owner_addr = IotaAddress::new([1u8; 32]);
+    let obj1 = mock_coin_object(1, 0, owner_addr);
+    let obj2 = mock_coin_object(2, 0, owner_addr);
+    mock_state_reader.add_object(obj1.clone());
+    mock_state_reader.add_object(obj2.clone());
+
+    let request = ListAccountObjectsRequest {
+        owner_address: owner_addr.to_string(),
+        page_size: None,
+        cursor: None,
+    };
+
+    let response = client
+        .list_account_objects(request)
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(response.objects.len(), 2);
+    assert!(response.next_cursor.is_none());
+
+    assert_eq!(response.objects[0].object_id, obj1.id().to_hex_literal());
+    assert_eq!(response.objects[1].object_id, obj2.id().to_hex_literal());
+
+    let _ = shutdown_tx.send(());
+}
+
+#[tokio::test]
+async fn test_list_account_objects_pagination() {
+    let (mut client, _addr, shutdown_tx, mock_state_reader) =
+        spawn_test_server_with_accounts_client().await;
+
+    let owner_addr = IotaAddress::new([2u8; 32]);
+    let obj_ids: Vec<ObjectID> = (1..=7)
+        .map(|i| mock_coin_object(i as u8, 0, owner_addr).id())
+        .collect();
+
+    for i in 0..7 {
+        mock_state_reader.add_object(mock_coin_object(i as u8 + 1, 0, owner_addr));
     }
-    drop(shutdown_tx);
+
+    let request1 = ListAccountObjectsRequest {
+        owner_address: owner_addr.to_string(),
+        page_size: Some(StringU64 {
+            value: "3".to_string(),
+        }),
+        cursor: None,
+    };
+    let response1 = client
+        .list_account_objects(request1)
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(response1.objects.len(), 3);
+    assert!(response1.next_cursor.is_some());
+    assert_eq!(
+        response1.next_cursor.as_ref().unwrap(),
+        &response1.objects[2].object_id
+    );
+
+    assert_eq!(response1.objects[0].object_id, obj_ids[0].to_hex_literal());
+    assert_eq!(response1.objects[1].object_id, obj_ids[1].to_hex_literal());
+    assert_eq!(response1.objects[2].object_id, obj_ids[2].to_hex_literal());
+
+    let request2 = ListAccountObjectsRequest {
+        owner_address: owner_addr.to_string(),
+        page_size: Some(StringU64 {
+            value: "3".to_string(),
+        }),
+        cursor: response1.next_cursor.clone(),
+    };
+    let response2 = client
+        .list_account_objects(request2)
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(response2.objects.len(), 3);
+    assert!(response2.next_cursor.is_some());
+    assert_eq!(
+        response2.next_cursor.as_ref().unwrap(),
+        &response2.objects[2].object_id
+    );
+
+    assert_eq!(response2.objects[0].object_id, obj_ids[3].to_hex_literal());
+    assert_eq!(response2.objects[1].object_id, obj_ids[4].to_hex_literal());
+    assert_eq!(response2.objects[2].object_id, obj_ids[5].to_hex_literal());
+
+    let request3 = ListAccountObjectsRequest {
+        owner_address: owner_addr.to_string(),
+        page_size: Some(StringU64 {
+            value: "3".to_string(),
+        }),
+        cursor: response2.next_cursor.clone(),
+    };
+    let response3 = client
+        .list_account_objects(request3)
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(response3.objects.len(), 1);
+    assert!(response3.next_cursor.is_none());
+
+    assert_eq!(response3.objects[0].object_id, obj_ids[6].to_hex_literal());
+
+    let _ = shutdown_tx.send(());
 }

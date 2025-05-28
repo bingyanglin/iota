@@ -304,21 +304,19 @@ async fn test_get_system_info_success() {
         "GetSystemInfo RPC call failed: {:?}",
         response_result.err()
     );
-    let system_info = response_result.unwrap().into_inner();
+    let response = response_result.unwrap().into_inner();
 
-    // Check node_version (using the placeholder from system_service.rs)
-    assert_eq!(system_info.node_version, "iota-gprc-api-dev");
-
-    // Check uptime_ms
-    assert!(
-        system_info.uptime_ms.is_some(),
-        "uptime_ms should be present"
+    assert_eq!(
+        response.node_version,
+        env!("CARGO_PKG_VERSION"), // Expect actual crate version
+        "Node version should match CARGO_PKG_VERSION"
     );
-    let uptime_str = system_info.uptime_ms.as_ref().unwrap().value.clone();
-    let uptime_val = uptime_str
+    assert!(response.uptime_ms.is_some(), "Uptime should be present");
+    let first_uptime_str = response.uptime_ms.as_ref().unwrap().value.clone();
+    let first_uptime_val = first_uptime_str
         .parse::<u128>()
-        .expect("uptime_ms should be a valid u128 string"); // Use u128 for millis
-    assert!(uptime_val > 0, "uptime_ms should be positive");
+        .expect("uptime_ms should be a valid u128 string");
+    assert!(first_uptime_val > 0, "uptime_ms should be positive");
 
     // Test idempotency: call again and check uptime increases or stays same
     sleep(Duration::from_millis(10)).await; // Ensure a small duration passes for uptime to potentially change
@@ -339,10 +337,10 @@ async fn test_get_system_info_success() {
         .parse::<u128>()
         .expect("uptime_ms (2nd call) should be a valid u128 string");
     assert!(
-        uptime_val2 >= uptime_val,
+        uptime_val2 >= first_uptime_val,
         "Uptime ({}) should increase or stay the same ({}) on subsequent calls",
         uptime_val2,
-        uptime_val
+        first_uptime_val
     );
 
     // Cleanly shut down the server

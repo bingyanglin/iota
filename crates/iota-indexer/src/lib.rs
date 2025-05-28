@@ -87,6 +87,8 @@ pub struct IndexerConfig {
     pub data_ingestion_path: Option<PathBuf>,
     #[arg(long)]
     pub analytical_worker: bool,
+    #[arg(long, default_value_t = false)]
+    pub use_grpc_streaming: bool,
     #[command(flatten)]
     pub iota_names_options: IotaNamesOptions,
 }
@@ -161,6 +163,7 @@ impl Default for IndexerConfig {
             rpc_server_worker: true,
             data_ingestion_path: None,
             analytical_worker: false,
+            use_grpc_streaming: false,
             iota_names_options: IotaNamesOptions::default(),
         }
     }
