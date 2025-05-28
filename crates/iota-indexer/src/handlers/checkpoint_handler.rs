@@ -13,7 +13,7 @@ use iota_types::{
     base_types::ObjectID,
     dynamic_field::{DynamicFieldInfo, DynamicFieldType},
     effects::TransactionEffectsAPI,
-    event::SystemEpochInfoEvent,
+    event::{SystemEpochInfoEvent, SystemEpochInfoEventV1, SystemEpochInfoEventV2},
     iota_system_state::{IotaSystemStateTrait, get_iota_system_state},
     messages_checkpoint::{
         CertifiedCheckpointSummary, CheckpointContents, CheckpointSequenceNumber,
@@ -27,7 +27,7 @@ use move_core_types::{
     language_storage::{StructTag, TypeTag},
 };
 use tokio_util::sync::CancellationToken;
-use tracing::{error, info};
+use tracing::info;
 
 use crate::{
     db::ConnectionPool,
@@ -38,11 +38,12 @@ use crate::{
         tx_processor::{EpochEndIndexingObjectStore, TxChangesProcessor},
     },
     metrics::IndexerMetrics,
-    models::{display::StoredDisplay, epoch::StoredEpochInfo, obj_indices::StoredObjectVersion},
+    models::{display::StoredDisplay, obj_indices::StoredObjectVersion},
     store::{IndexerStore, PgIndexerStore},
     types::{
         EventIndex, IndexedCheckpoint, IndexedDeletedObject, IndexedEpochInfo, IndexedEvent,
-        IndexedObject, IndexedPackage, IndexedTransaction, IndexerResult, TxIndex,
+        IndexedObject, IndexedPackage, IndexedTransaction, IndexerResult,
+        IotaSystemStateSummaryView, TxIndex,
     },
 };
 
@@ -98,11 +99,6 @@ impl Worker for CheckpointHandler {
         &self,
         checkpoint: Arc<CheckpointData>,
     ) -> Result<Self::Message, Self::Error> {
-        let cp_seq = checkpoint.checkpoint_summary.sequence_number;
-        info!(
-            "CheckpointHandler: process_checkpoint called for checkpoint sequence number: {}",
-            cp_seq
-        );
         self.metrics
             .latest_fullnode_checkpoint_sequence_number
             .set(checkpoint.checkpoint_summary.sequence_number as i64);
@@ -126,38 +122,21 @@ impl Worker for CheckpointHandler {
             checkpoint.checkpoint_summary.timestamp_ms
         );
 
-        info!(
-            "CheckpointHandler: About to call Self::index_checkpoint for cp_seq: {}",
-            cp_seq
-        );
-        let checkpoint_data_to_commit = Self::index_checkpoint(
+        let checkpoint_data = Self::index_checkpoint(
             self.state.clone().into(),
             &checkpoint,
             Arc::new(self.metrics.clone()),
             Self::index_packages(slice::from_ref(&checkpoint), &self.metrics),
         )
         .await?;
-        info!(
-            "CheckpointHandler: Self::index_checkpoint SUCCEEDED for cp_seq: {}. Attempting to send to committer.",
-            cp_seq
-        );
-
         self.indexed_checkpoint_sender
-            .send(checkpoint_data_to_commit)
+            .send(checkpoint_data)
             .await
-            .map_err(|e| {
-                error!(
-                    "CheckpointHandler: FAILED to send checkpoint data for cp_seq: {} to committer. Error: {:?}",
-                    cp_seq, e
-                );
+            .map_err(|_| {
                 IndexerError::MpscChannel(
-                    format!("Failed to send checkpoint data for cp_seq: {} to committer", cp_seq)
+                    "Failed to send checkpoint data, receiver half closed".into(),
                 )
             })?;
-        info!(
-            "CheckpointHandler: SUCCESSFULLY sent checkpoint data for cp_seq: {} to committer.",
-            cp_seq
-        );
         Ok(())
     }
 }
@@ -196,136 +175,94 @@ impl CheckpointHandler {
                 last_epoch: None,
                 new_epoch: IndexedEpochInfo::from_new_system_state_summary(
                     &system_state,
-                    0,    // first_checkpoint_id
-                    None, // event is None for genesis
+                    0, // first_checkpoint_id
+                    None,
                 ),
-                network_total_transactions: 0, // Corrected: For genesis
+                network_total_transactions: 0,
             }));
         }
 
-        // This line will only be reached if not genesis (sequence_number != 0)
-        let previous_epoch_id = checkpoint_summary.epoch() - 1;
-        let prev_epoch_db_info_opt: Option<StoredEpochInfo> =
-            state.get_epoch_info_by_id(previous_epoch_id).await?;
-
-        if prev_epoch_db_info_opt.is_none() {
-            error!(
-                previous_epoch_id,
-                "Previous epoch info not found in DB, skip epoch indexing."
-            );
+        // If not end of epoch, return
+        if checkpoint_summary.end_of_epoch_data.is_none() {
             return Ok(None);
         }
-        let prev_epoch_stored_info = prev_epoch_db_info_opt.unwrap();
 
-        let network_total_tx_num_at_prev_epoch_end = state
-            .get_network_total_transactions_by_end_of_epoch(previous_epoch_id)
-            .await?;
-
-        if let Some(_end_of_epoch_data) = &checkpoint_summary.end_of_epoch_data {
-            // _end_of_epoch_data is used by from_end_of_epoch_data indirectly via
-            // checkpoint_summary
-            info!(
-                epoch_id = checkpoint_summary.epoch(),
-                "Processing end of epoch data"
-            );
-            let system_state =
-                get_iota_system_state(&checkpoint_object_store)?.into_iota_system_state_summary();
-
-            let system_epoch_info_event = transactions // Use the `transactions` from checkpoint data
-                .iter()
-                .find_map(|tx| {
-                    tx.events.as_ref().and_then(|events_wrapper| {
-                        events_wrapper
-                            .data
-                            .iter()
-                            .find_map(|event| SystemEpochInfoEvent::try_from(event.clone()).ok())
-                    })
-                });
-
-            if system_epoch_info_event.is_none() {
-                error!(
-                    "SystemEpochInfoEvent not found for epoch {} at checkpoint {}",
-                    checkpoint_summary.epoch(),
+        let system_state =
+            get_iota_system_state(&checkpoint_object_store)?.into_iota_system_state_summary();
+        let event = transactions
+            .iter()
+            .flat_map(|t| t.events.as_ref().map(|e| &e.data))
+            .flatten()
+            .find(|ev| ev.is_system_epoch_info_event_v1() || ev.is_system_epoch_info_event_v2())
+            .map(|ev| {
+                if ev.is_system_epoch_info_event_v2() {
+                    SystemEpochInfoEvent::V2(
+                        bcs::from_bytes::<SystemEpochInfoEventV2>(&ev.contents).expect(
+                            "event deserialization should succeed as type was pre-validated",
+                        ),
+                    )
+                } else {
+                    SystemEpochInfoEvent::V1(
+                        bcs::from_bytes::<SystemEpochInfoEventV1>(&ev.contents).expect(
+                            "event deserialization should succeed as type was pre-validated",
+                        ),
+                    )
+                }
+            })
+            .unwrap_or_else(|| {
+                panic!(
+                    "Can't find SystemEpochInfoEvent in epoch end checkpoint {}",
                     checkpoint_summary.sequence_number()
-                );
-                return Ok(None);
+                )
+            });
+
+        // Now we just entered epoch X, we want to calculate the diff between
+        // TotalTransactionsByEndOfEpoch(X-1) and TotalTransactionsByEndOfEpoch(X-2).
+        // Note that on the indexer's chain-reading side, this is not guaranteed
+        // to have the latest data. Rather than impose a wait on the reading
+        // side, however, we overwrite this on the persisting side, where we can
+        // guarantee that the previous epoch's checkpoints have been written to
+        // db.
+
+        let epoch = system_state.epoch();
+        let network_tx_count_prev_epoch = match epoch {
+            // If first epoch change, this number is 0
+            1 => Ok(0),
+            _ => {
+                let last_epoch = epoch - 2;
+                state
+                    .get_network_total_transactions_by_end_of_epoch(last_epoch)
+                    .await
             }
-            let system_epoch_info_event_ref = system_epoch_info_event.as_ref().unwrap();
+        }?;
 
-            let new_epoch = IndexedEpochInfo::from_end_of_epoch_data(
+        Ok(Some(EpochToCommit {
+            last_epoch: Some(IndexedEpochInfo::from_end_of_epoch_data(
                 &system_state,
-                checkpoint_summary,          // Correct: pass the full summary
-                system_epoch_info_event_ref, // Correct: pass the event
-                network_total_tx_num_at_prev_epoch_end, // Correct: pass the calculated total
-            );
-
-            // Construct IndexedEpochInfo for the *previous* epoch to pass to
-            // EpochToCommit.last_epoch This requires converting StoredEpochInfo
-            // to IndexedEpochInfo. For simplicity, if a direct conversion isn't
-            // trivial, we might need to re-fetch or adapt.
-            // Assuming StoredEpochInfo can be (or is already) suitable for what
-            // persist_epoch needs for the last epoch. For now, let's try to
-            // create a minimal IndexedEpochInfo for the last_epoch if possible,
-            // or check if persist_epoch can work with just the epoch number for
-            // `last_epoch`. Given the definition of EpochToCommit, it needs
-            // Option<IndexedEpochInfo>. We will create one from
-            // `prev_epoch_stored_info`
-            let last_indexed_epoch_info = IndexedEpochInfo {
-                // This is a simplified representation
-                epoch: prev_epoch_stored_info.epoch as u64,
-                first_checkpoint_id: prev_epoch_stored_info.first_checkpoint_id as u64,
-                epoch_start_timestamp: prev_epoch_stored_info.epoch_start_timestamp as u64,
-                reference_gas_price: prev_epoch_stored_info.reference_gas_price as u64,
-                protocol_version: prev_epoch_stored_info.protocol_version as u64,
-                total_stake: prev_epoch_stored_info.total_stake as u64,
-                storage_fund_balance: prev_epoch_stored_info.storage_fund_balance as u64,
-                system_state: prev_epoch_stored_info.system_state.clone(), // This is Vec<u8>
-                // Fields below are Option<u64> and are for the *end* of that epoch
-                epoch_total_transactions: prev_epoch_stored_info
-                    .epoch_total_transactions
-                    .map(|v| v as u64),
-                last_checkpoint_id: prev_epoch_stored_info.last_checkpoint_id.map(|v| v as u64),
-                epoch_end_timestamp: prev_epoch_stored_info.epoch_end_timestamp.map(|v| v as u64),
-                storage_charge: prev_epoch_stored_info.storage_charge.map(|v| v as u64),
-                storage_rebate: prev_epoch_stored_info.storage_rebate.map(|v| v as u64),
-                total_gas_fees: prev_epoch_stored_info.total_gas_fees.map(|v| v as u64),
-                total_stake_rewards_distributed: prev_epoch_stored_info
-                    .total_stake_rewards_distributed
-                    .map(|v| v as u64),
-                epoch_commitments: prev_epoch_stored_info
-                    .epoch_commitments
-                    .as_ref()
-                    .and_then(|bytes| bcs::from_bytes(bytes).ok()),
-                burnt_tokens_amount: prev_epoch_stored_info.burnt_tokens_amount.map(|v| v as u64),
-                minted_tokens_amount: prev_epoch_stored_info
-                    .minted_tokens_amount
-                    .map(|v| v as u64),
-                tips_amount: None, /* StoredEpochInfo doesn't have tips_amount directly, assume
-                                    * None or calculate if needed */
-            };
-
-            Ok(Some(EpochToCommit {
-                last_epoch: Some(last_indexed_epoch_info), // Corrected: pass IndexedEpochInfo
-                new_epoch,
-                network_total_transactions: checkpoint_summary.network_total_transactions,
-            }))
-        } else {
-            Ok(None)
-        }
+                checkpoint_summary,
+                &event,
+                network_tx_count_prev_epoch,
+            )),
+            new_epoch: IndexedEpochInfo::from_new_system_state_summary(
+                &system_state,
+                checkpoint_summary.sequence_number + 1, // first_checkpoint_id
+                Some(&event),
+            ),
+            network_total_transactions: checkpoint_summary.network_total_transactions,
+        }))
     }
 
     fn derive_object_versions(
         object_history_changes: &TransactionObjectChangesToCommit,
     ) -> Vec<StoredObjectVersion> {
-        object_history_changes
-            .changed_objects
-            .iter()
-            .map(|obj| StoredObjectVersion {
-                object_id: obj.object.id().to_vec(),
-                object_version: obj.object.version().value() as i64,
-                cp_sequence_number: obj.checkpoint_sequence_number as i64,
-            })
-            .collect()
+        let mut object_versions = vec![];
+        for changed_obj in object_history_changes.changed_objects.iter() {
+            object_versions.push(changed_obj.into());
+        }
+        for deleted_obj in object_history_changes.deleted_objects.iter() {
+            object_versions.push(deleted_obj.into());
+        }
+        object_versions
     }
 
     async fn index_checkpoint(

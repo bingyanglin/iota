@@ -11,7 +11,6 @@ use crate::{
     handlers::{EpochToCommit, TransactionObjectChangesToCommit},
     models::{
         display::StoredDisplay,
-        epoch::StoredEpochInfo,
         event_indices::OptimisticEventIndices,
         events::OptimisticEvent,
         obj_indices::StoredObjectVersion,
@@ -130,11 +129,6 @@ pub trait IndexerStore: Any + Clone + Sync + Send + 'static {
         &self,
         epoch: u64,
     ) -> Result<u64, IndexerError>;
-
-    async fn get_epoch_info_by_id(
-        &self,
-        epoch_id: u64,
-    ) -> Result<Option<StoredEpochInfo>, IndexerError>;
 
     async fn refresh_participation_metrics(&self) -> Result<(), IndexerError>;
 
