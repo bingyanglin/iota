@@ -1,7 +1,7 @@
 use std::{
     collections::BTreeMap,
     net::{SocketAddr, TcpListener},
-    sync::Arc,
+    sync::{Arc, Mutex},
     time::Duration,
 };
 
@@ -14,87 +14,65 @@ use iota_gprc_api::{
     server::{GrpcServer, StateReader},
 };
 use iota_types::{
-    base_types::{AuthorityName, ObjectID, SequenceNumber},
-    committee::{Committee, EpochId, StakeUnit, TOTAL_VOTING_POWER},
-    crypto::{AuthorityKeyPair, AuthoritySignInfo, AuthorityStrongQuorumSignInfo, KeypairTraits},
+    base_types::{
+        // AuthorityName,
+        IotaAddress,
+        MoveObjectType,
+        ObjectID,
+        SequenceNumber, // , StructTag
+    },
+    coin::TreasuryCap,
+    committee::{Committee, EpochId /* , StakeUnit, TOTAL_VOTING_POWER */},
     digests::{
         ChainIdentifier, CheckpointContentsDigest, CheckpointDigest, TransactionDigest,
         TransactionEventsDigest,
     },
     effects::{TransactionEffects, TransactionEvents},
     full_checkpoint_content::CheckpointData,
-    gas::GasCostSummary,
-    message_envelope::{Envelope, Message, VerifiedEnvelope},
     messages_checkpoint::{
-        CheckpointContents, CheckpointSequenceNumber, CheckpointSummary, FullCheckpointContents,
-        VerifiedCheckpoint,
+        CheckpointContents, CheckpointSequenceNumber, FullCheckpointContents, VerifiedCheckpoint,
     },
-    object::Object,
+    object::{MoveObject, Object, /* ObjectInner, */ Owner},
     storage::{
-        AccountOwnedObjectInfo, CoinInfo, DynamicFieldIndexInfo, DynamicFieldKey, ListDirection,
-        ObjectKey, ObjectStore, ReadStore, RestStateReader, error::Result as StorageResult,
+        AccountOwnedObjectInfo, CoinInfo as CoreStorageCoinInfo, DynamicFieldIndexInfo,
+        DynamicFieldKey, ListDirection, ObjectKey, ObjectStore as ActualObjectStore,
+        ReadStore as ActualReadStore, RestStateReader as ActualRestStateReader,
+        error::Result as StorageResult,
     },
     transaction::VerifiedTransaction,
 };
 use move_core_types::language_storage::StructTag;
-use rand::thread_rng;
-use shared_crypto::intent::Intent;
 use tokio::{sync::broadcast, time::sleep};
 
 #[derive(Default)]
-struct MockRestStateReader {}
-
-fn create_mock_verified_checkpoint(
-    seq_num: CheckpointSequenceNumber,
-    epoch_id: EpochId,
-) -> VerifiedCheckpoint {
-    let summary = CheckpointSummary {
-        epoch: epoch_id,
-        sequence_number: seq_num,
-        network_total_transactions: 1000 + seq_num,
-        content_digest: CheckpointContentsDigest::new([0u8; 32]),
-        previous_digest: if seq_num > 0 {
-            Some(CheckpointDigest::new([1u8; 32]))
-        } else {
-            None
-        },
-        epoch_rolling_gas_cost_summary: GasCostSummary::default(),
-        timestamp_ms: std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .expect("Time went backwards")
-            .as_millis() as u64,
-        checkpoint_commitments: vec![],
-        end_of_epoch_data: None,
-        version_specific_data: vec![],
-    };
-
-    let keypair: AuthorityKeyPair = AuthorityKeyPair::generate(&mut thread_rng());
-    let authority_name = AuthorityName::from(keypair.public());
-    let stake: StakeUnit = TOTAL_VOTING_POWER;
-    let committee = Committee::new(epoch_id, BTreeMap::from([(authority_name, stake)]));
-
-    let sign_info = AuthoritySignInfo::new(
-        epoch_id,
-        &summary,
-        Intent::iota_app(CheckpointSummary::SCOPE),
-        authority_name,
-        &keypair,
-    );
-
-    let auth_strong_quorum_sig =
-        AuthorityStrongQuorumSignInfo::new_from_auth_sign_infos(vec![sign_info], &committee)
-            .expect("Mock AuthStrongQuorumSignInfo creation failed");
-
-    let envelope = Envelope::new_from_data_and_sig(summary, auth_strong_quorum_sig);
-    VerifiedEnvelope::new_unchecked(envelope)
+struct MockCoinState {
+    coin_infos: BTreeMap<StructTag, CoreStorageCoinInfo>,
+    objects: BTreeMap<ObjectID, Object>,
 }
 
-impl ReadStore for MockRestStateReader {
+#[derive(Default)]
+struct MockRestStateReader {
+    mock_state: Arc<Mutex<MockCoinState>>,
+}
+
+impl MockRestStateReader {
+    fn add_coin_info(&self, tag: StructTag, info: CoreStorageCoinInfo) {
+        let mut state = self.mock_state.lock().unwrap();
+        state.coin_infos.insert(tag, info);
+    }
+
+    fn add_object(&self, object_id: ObjectID, object: Object) {
+        let mut state = self.mock_state.lock().unwrap();
+        state.objects.insert(object_id, object);
+    }
+}
+
+impl ActualReadStore for MockRestStateReader {
     fn get_committee(&self, _epoch: EpochId) -> StorageResult<Option<Arc<Committee>>> {
         Ok(None)
     }
     fn get_latest_checkpoint(&self) -> StorageResult<VerifiedCheckpoint> {
-        Ok(create_mock_verified_checkpoint(0, 0))
+        unimplemented!()
     }
     fn get_latest_checkpoint_sequence_number(&self) -> StorageResult<CheckpointSequenceNumber> {
         Ok(0)
@@ -103,10 +81,10 @@ impl ReadStore for MockRestStateReader {
         Ok(0)
     }
     fn get_highest_verified_checkpoint(&self) -> StorageResult<VerifiedCheckpoint> {
-        Ok(create_mock_verified_checkpoint(0, 0))
+        unimplemented!()
     }
     fn get_highest_synced_checkpoint(&self) -> StorageResult<VerifiedCheckpoint> {
-        Ok(create_mock_verified_checkpoint(0, 0))
+        unimplemented!()
     }
     fn get_lowest_available_checkpoint(&self) -> StorageResult<CheckpointSequenceNumber> {
         Ok(0)
@@ -170,13 +148,14 @@ impl ReadStore for MockRestStateReader {
         _checkpoint: VerifiedCheckpoint,
         _checkpoint_contents: CheckpointContents,
     ) -> anyhow::Result<CheckpointData> {
-        Err(anyhow::anyhow!("Mock: get_checkpoint_data not implemented"))
+        Err(anyhow::anyhow!("Unimplemented"))
     }
 }
 
-impl ObjectStore for MockRestStateReader {
-    fn get_object(&self, _object_id: &ObjectID) -> StorageResult<Option<Object>> {
-        Ok(None)
+impl ActualObjectStore for MockRestStateReader {
+    fn get_object(&self, object_id: &ObjectID) -> StorageResult<Option<Object>> {
+        let state = self.mock_state.lock().unwrap();
+        Ok(state.objects.get(object_id).cloned())
     }
     fn get_object_by_key(
         &self,
@@ -193,7 +172,11 @@ impl ObjectStore for MockRestStateReader {
     }
 }
 
-impl RestStateReader for MockRestStateReader {
+impl ActualRestStateReader for MockRestStateReader {
+    fn get_coin_info(&self, coin_type: &StructTag) -> StorageResult<Option<CoreStorageCoinInfo>> {
+        let state = self.mock_state.lock().unwrap();
+        Ok(state.coin_infos.get(coin_type).cloned())
+    }
     fn get_transaction_checkpoint(
         &self,
         _digest: &TransactionDigest,
@@ -204,14 +187,14 @@ impl RestStateReader for MockRestStateReader {
         Ok(0)
     }
     fn get_chain_identifier(&self) -> StorageResult<ChainIdentifier> {
-        Ok(ChainIdentifier::from(CheckpointDigest::new([0u8; 32])))
+        unimplemented!()
     }
     fn account_owned_objects_info_iter(
         &self,
         _owner: iota_types::base_types::IotaAddress,
         _cursor: Option<ObjectID>,
     ) -> StorageResult<Box<dyn Iterator<Item = AccountOwnedObjectInfo> + '_>> {
-        Ok(Box::new(std::iter::empty()))
+        unimplemented!()
     }
     fn dynamic_field_iter(
         &self,
@@ -219,10 +202,7 @@ impl RestStateReader for MockRestStateReader {
         _cursor: Option<ObjectID>,
     ) -> StorageResult<Box<dyn Iterator<Item = (DynamicFieldKey, DynamicFieldIndexInfo)> + '_>>
     {
-        Ok(Box::new(std::iter::empty()))
-    }
-    fn get_coin_info(&self, _coin_type: &StructTag) -> StorageResult<Option<CoinInfo>> {
-        Ok(None)
+        unimplemented!()
     }
     fn get_epoch_last_checkpoint(
         &self,
@@ -250,7 +230,6 @@ fn get_available_port() -> u16 {
 
 async fn spawn_test_server_with_coins_client() -> (
     CoinsGprcServiceClient<tonic::transport::Channel>,
-    SocketAddr,
     broadcast::Sender<()>,
     Arc<MockRestStateReader>,
 ) {
@@ -286,31 +265,30 @@ async fn spawn_test_server_with_coins_client() -> (
         });
 
     let client = CoinsGprcServiceClient::new(client_channel);
-    (client, addr, shutdown_tx, mock_state_reader_arc)
+    (client, shutdown_tx, mock_state_reader_arc)
 }
 
-#[tokio::test]
-async fn test_get_coin_info_unimplemented() {
-    let (mut client, _addr, shutdown_tx, _mock_state_reader) =
-        spawn_test_server_with_coins_client().await;
-
-    let request = GetCoinInfoRequest {
-        coin_type_tag: "0x1::sui::SUI".to_string(), // Example tag
-    };
-
-    let result = client.get_coin_info(request).await;
-    assert!(result.is_err());
-    if let Err(status) = result {
-        assert_eq!(status.code(), tonic::Code::Unimplemented);
-        assert!(status.message().contains("GetCoinInfo not implemented"));
-    }
-    drop(shutdown_tx);
-}
+// #[tokio::test]
+// async fn test_get_coin_info_unimplemented() {
+// let (mut client, shutdown_tx, _mock_state_reader) =
+// spawn_test_server_with_coins_client().await;
+//
+// let request = GetCoinInfoRequest {
+// coin_type_tag: "0x1::sui::SUI".to_string(), // Example tag
+// };
+//
+// let result = client.get_coin_info(request).await;
+// assert!(result.is_err());
+// if let Err(status) = result {
+// assert_eq!(status.code(), tonic::Code::Unimplemented); // This was the old
+// check assert!(status.message().contains("GetCoinInfo not implemented"));
+// }
+// drop(shutdown_tx);
+// }
 
 #[tokio::test]
 async fn test_list_coins_unimplemented() {
-    let (mut client, _addr, shutdown_tx, _mock_state_reader) =
-        spawn_test_server_with_coins_client().await;
+    let (mut client, shutdown_tx, _mock_state_reader) = spawn_test_server_with_coins_client().await;
 
     let request = ListCoinsRequest {
         page_size: None,
@@ -328,8 +306,7 @@ async fn test_list_coins_unimplemented() {
 
 #[tokio::test]
 async fn test_subscribe_coin_events_unimplemented() {
-    let (mut client, _addr, shutdown_tx, _mock_state_reader) =
-        spawn_test_server_with_coins_client().await;
+    let (mut client, shutdown_tx, _mock_state_reader) = spawn_test_server_with_coins_client().await;
 
     let request = SubscribeCoinEventsRequest {
         coin_type_tag_filter: None,
@@ -346,4 +323,118 @@ async fn test_subscribe_coin_events_unimplemented() {
         );
     }
     drop(shutdown_tx);
+}
+
+#[tokio::test]
+async fn test_get_coin_info_success() {
+    let (mut client, shutdown_tx, mock_state_reader) = spawn_test_server_with_coins_client().await;
+
+    let coin_tag_str = "0x1::coin::Coin<0x2::custom::Token>";
+    let coin_tag: StructTag = coin_tag_str.parse().unwrap();
+    let token_tag: StructTag = "0x2::custom::Token".parse().unwrap(); // The inner type for TreasuryCap<T>
+
+    // Prepare mock TreasuryCap object
+    let treasury_cap_id = ObjectID::random();
+    let treasury_cap_data = TreasuryCap {
+        id: iota_types::id::UID::new(treasury_cap_id),
+        total_supply: iota_types::balance::Supply {
+            value: 1_000_000_000,
+        },
+    };
+
+    let treasury_cap_move_obj = MoveObject::new_from_execution(
+        treasury_cap_type_tag(token_tag), // Use the inner token_tag for TreasuryCap<Token>
+        SequenceNumber::from(1u64),
+        bcs::to_bytes(&treasury_cap_data).unwrap(),
+        &iota_protocol_config::ProtocolConfig::get_for_min_version(),
+    )
+    .unwrap();
+    let treasury_object = Object::new_move(
+        treasury_cap_move_obj,
+        Owner::AddressOwner(IotaAddress::random_for_testing_only()),
+        TransactionDigest::random(),
+    );
+
+    mock_state_reader.add_object(treasury_cap_id, treasury_object);
+
+    // Prepare mock CoreStorageCoinInfo
+    let core_coin_info = CoreStorageCoinInfo {
+        coin_metadata_object_id: None, // Not testing metadata in this specific test for simplicity
+        treasury_object_id: Some(treasury_cap_id),
+    };
+    mock_state_reader.add_coin_info(coin_tag.clone(), core_coin_info);
+
+    let request = tonic::Request::new(GetCoinInfoRequest {
+        coin_type_tag: coin_tag_str.to_string(),
+    });
+    let response = client
+        .get_coin_info(request)
+        .await
+        .expect("RPC call failed");
+    let coin_info_gprc = response.into_inner();
+
+    assert_eq!(coin_info_gprc.coin_type_tag, coin_tag_str);
+    assert!(
+        coin_info_gprc.total_supply.is_some(),
+        "Total supply should be present"
+    );
+    assert_eq!(coin_info_gprc.total_supply.unwrap().value, "1000000000");
+    assert!(
+        coin_info_gprc.balance.is_none(),
+        "Balance should be None as per current conversion"
+    );
+    assert!(
+        coin_info_gprc.treasury_balance.is_none(),
+        "TreasuryBalance should be None as per current conversion"
+    );
+
+    let _ = shutdown_tx.send(()); // Shutdown server
+    sleep(Duration::from_millis(50)).await;
+}
+
+#[tokio::test]
+async fn test_get_coin_info_not_found() {
+    let (mut client, shutdown_tx, _mock_state_reader) = spawn_test_server_with_coins_client().await;
+    let coin_tag_str = "0x3::nonexistent::Coin";
+
+    let request = tonic::Request::new(GetCoinInfoRequest {
+        coin_type_tag: coin_tag_str.to_string(),
+    });
+    let response = client.get_coin_info(request).await;
+
+    assert!(response.is_err());
+    if let Err(status) = response {
+        assert_eq!(status.code(), tonic::Code::NotFound);
+    }
+    let _ = shutdown_tx.send(());
+    sleep(Duration::from_millis(50)).await;
+}
+
+#[tokio::test]
+async fn test_get_coin_info_invalid_tag() {
+    let (mut client, shutdown_tx, _mock_state_reader) = spawn_test_server_with_coins_client().await;
+    let invalid_tag_str = "not-a-valid-tag";
+
+    let request = tonic::Request::new(GetCoinInfoRequest {
+        coin_type_tag: invalid_tag_str.to_string(),
+    });
+    let response = client.get_coin_info(request).await;
+
+    assert!(response.is_err());
+    if let Err(status) = response {
+        assert_eq!(status.code(), tonic::Code::InvalidArgument);
+    }
+    let _ = shutdown_tx.send(());
+    sleep(Duration::from_millis(50)).await;
+}
+
+fn treasury_cap_type_tag(coin_struct_tag: StructTag) -> MoveObjectType {
+    MoveObjectType::from(StructTag {
+        address: iota_types::IOTA_FRAMEWORK_ADDRESS, // from iota_types::coin
+        module: iota_types::coin::COIN_MODULE_NAME.to_owned(),
+        name: iota_types::coin::COIN_TREASURE_CAP_NAME.to_owned(),
+        type_params: vec![move_core_types::language_storage::TypeTag::Struct(
+            Box::new(coin_struct_tag),
+        )],
+    })
 }

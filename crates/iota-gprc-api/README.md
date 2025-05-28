@@ -26,7 +26,7 @@ The subscription logic for new checkpoints should draw inspiration from similar 
       * `SubscribeNewCheckpoints` uses an internal pub/sub mechanism for reactive client updates, while the service itself polls the `state_reader`.
   * `ObjectGprcService`:
     * Unary RPCs: `GetObject`, `ListObjects`.
-    * Server-streaming RPCs: `StreamObjects` (lists current objects), `SubscribeObjectsByOwner` (subscribes to new/updated objects for an owner).
+    * Server-streaming RPCs: `StreamObjects` (lists current objects).
   * `TransactionGprcService`:
     * Unary RPCs: `GetTransaction`.
       * `GetTransactionRequest` uses `bytes transaction_digest_bytes` for the ID.
@@ -116,21 +116,49 @@ Therefore, to use the public gRPC API, ensure the `grpc_public_api_address` is c
     * Unit tests for `GetTransaction` are implemented and pass using the `MockRestStateReader`.
   * `ObjectGprcService` (`ObjectServiceImpl`) has a new `SubscribeObjectsByOwner` RPC for reactive updates.
     * A dummy poller was used for testing the mechanism; a real event source or more sophisticated mock for object changes would be needed for full end-to-end testing of this RPC.
-  * **Next Steps & Current Implementations:**
+
+  * **Current Implementations (Continued from above & new):**
     * `TransactionGprcService`:
-        * `ListTransactions` and `StreamTransactions` RPCs are implemented and use the `state_reader` to fetch and stream transaction data. (Unit tests use a `MockRestStateReader`).
-    * Further develop the `SubscribeObjectsByOwner` RPC, particularly integrating with a real event source for object changes if the node's state management provides it.
+      * `GetTransaction` RPC is implemented (as mentioned under "Implement Other gRPC Services").
+      * `ListTransactions` and `StreamTransactions` RPCs are implemented and use the `state_reader` to fetch and stream transaction data. (Unit tests use a `MockRestStateReader`).
     * `CommitteeGprcService`:
-        * `GetCommittee` RPC is implemented and uses the `state_reader`.
-        * `StreamCommittee` RPC is implemented and uses the `state_reader` with a polling mechanism.
-    * Other Services (`SystemGprcService`, `CoinsGprcService`, `EpochsGprcService`, `AccountsGprcService`):
-        * Basic stub implementations are in place.
-        * Next steps involve implementing the actual logic for data fetching and conversions for their respective RPCs (e.g., `GetSystemInfo` for `SystemGprcService`, `GetCoinInfo` for `CoinsGprcService`, etc.).
-* **Error Handling & Conversions (Ongoing):**
-  * Basic `GrpcApiError` and `From<GrpcApiError> for tonic::Status` implemented.
-  * Conversion functions are in `src/conversions/` for checkpoints, objects, and transactions.
-  * **Next Steps:**
-    * Expand error types and ensure comprehensive error handling across all services.
-    * Create and complete conversion modules for all necessary types for future services.
+      * `GetCommittee` RPC is implemented and uses the `state_reader`.
+      * `StreamCommittee` RPC is implemented and uses the `state_reader` with a polling mechanism.
+    * `SystemGprcService` (`SystemServiceImpl`):
+      * `GetSystemInfo` RPC is implemented:
+        * Returns node version (currently placeholder) and uptime.
+        * Tested.
+      * `SubscribeSystemEvents` RPC is implemented:
+        * Streams mock `NodeStatusChanged` events periodically.
+        * Tested.
+    * `CoinsGprcService` (`CoinsServiceImpl`):
+      * `GetCoinInfo` RPC is implemented:
+        * Takes a `coin_type_tag` string.
+        * Fetches `iota_types::storage::CoinInfo` and attempts to resolve the `treasury_object_id` to a `TreasuryCap` object to retrieve `total_supply`.
+        * Does not currently populate `CoinMetadata` details (like name, symbol, decimals).
+        * Tested (success, not found, invalid tag).
+      * `ListCoins` RPC remains a stub (returns `Unimplemented`).
+      * `SubscribeCoinEvents` RPC remains a stub (returns `Unimplemented`).
+    * Other Services (`EpochsGprcService`, `AccountsGprcService`):
+      * Basic stub implementations are in place.
+    * Error Handling & Conversions:
+      * Basic `GrpcApiError` and `From<GrpcApiError> for tonic::Status` implemented.
+      * Conversion functions are in `src/conversions/` for checkpoints, objects, and transactions.
+
+  * **Next Steps & Ongoing Development:**
+    * `ObjectGprcService`:
+      * Further develop the `StreamObjects` RPC.
+    * `CoinsGprcService`:
+      * Implement `ListCoins` RPC.
+      * Enhance `GetCoinInfo` to also fetch and convert `CoinMetadata` (name, symbol, decimals, etc.) using the `coin_metadata_object_id` from `iota_types::storage::CoinInfo`.
+    * `SystemGprcService`:
+      * Integrate `GetSystemInfo` with actual node build version and potentially other system metrics from the `state_reader` if available.
+    * Other Services (`EpochsGprcService`, `AccountsGprcService`):
+      * Implement the actual logic for data fetching and conversions for their respective RPCs.
+    * Error Handling & Conversions:
+      * Expand error types and ensure comprehensive error handling across all services.
+      * Create and complete conversion modules for all necessary types for future services.
+
 * **Parity Testing:** Conduct thorough testing to ensure parity with the existing REST API where functionalities overlap, once services are implemented with real data.
 * **Integration with `iota-indexer`:** Modify `iota-indexer` to optionally use this gRPC API for checkpoint synchronization, particularly leveraging the `SubscribeNewCheckpoints` RPC.
+* **Add Copyright**

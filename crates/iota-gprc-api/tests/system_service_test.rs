@@ -40,6 +40,7 @@ use move_core_types::language_storage::StructTag;
 use rand::thread_rng;
 use shared_crypto::intent::Intent;
 use tokio::{sync::broadcast, time::sleep};
+use tokio_stream::StreamExt;
 
 #[derive(Default)]
 struct MockRestStateReader {}
@@ -290,37 +291,139 @@ async fn spawn_test_server_with_system_client() -> (
 }
 
 #[tokio::test]
-async fn test_get_system_info_unimplemented() {
+async fn test_get_system_info_success() {
     let (mut client, _addr, shutdown_tx, _mock_state_reader) =
         spawn_test_server_with_system_client().await;
 
-    let request = GetSystemInfoRequest {};
+    // Brief pause to ensure uptime is non-zero.
+    sleep(Duration::from_millis(20)).await; // Increased sleep slightly
 
-    let result = client.get_system_info(request).await;
-    assert!(result.is_err());
-    if let Err(status) = result {
-        assert_eq!(status.code(), tonic::Code::Unimplemented);
-        assert!(status.message().contains("GetSystemInfo not implemented"));
-    }
-    drop(shutdown_tx);
+    let request = tonic::Request::new(GetSystemInfoRequest {});
+    let response_result = client.get_system_info(request).await;
+
+    assert!(
+        response_result.is_ok(),
+        "GetSystemInfo RPC call failed: {:?}",
+        response_result.err()
+    );
+    let system_info = response_result.unwrap().into_inner();
+
+    // Check node_version (using the placeholder from system_service.rs)
+    assert_eq!(system_info.node_version, "iota-gprc-api-dev");
+
+    // Check uptime_ms
+    assert!(
+        system_info.uptime_ms.is_some(),
+        "uptime_ms should be present"
+    );
+    let uptime_str = system_info.uptime_ms.as_ref().unwrap().value.clone();
+    let uptime_val = uptime_str
+        .parse::<u128>()
+        .expect("uptime_ms should be a valid u128 string"); // Use u128 for millis
+    assert!(uptime_val > 0, "uptime_ms should be positive");
+
+    // Test idempotency: call again and check uptime increases or stays same
+    sleep(Duration::from_millis(10)).await; // Ensure a small duration passes for uptime to potentially change
+    let response2_result = client.get_system_info(GetSystemInfoRequest {}).await;
+    assert!(
+        response2_result.is_ok(),
+        "GetSystemInfo (2nd call) RPC call failed: {:?}",
+        response2_result.err()
+    );
+    let system_info2 = response2_result.unwrap().into_inner();
+
+    assert!(
+        system_info2.uptime_ms.is_some(),
+        "uptime_ms (2nd call) should be present"
+    );
+    let uptime_str2 = system_info2.uptime_ms.as_ref().unwrap().value.clone();
+    let uptime_val2 = uptime_str2
+        .parse::<u128>()
+        .expect("uptime_ms (2nd call) should be a valid u128 string");
+    assert!(
+        uptime_val2 >= uptime_val,
+        "Uptime ({}) should increase or stay the same ({}) on subsequent calls",
+        uptime_val2,
+        uptime_val
+    );
+
+    // Cleanly shut down the server
+    let _ = shutdown_tx.send(());
+    sleep(Duration::from_millis(100)).await; // Give server time to shutdown
 }
 
 #[tokio::test]
-async fn test_subscribe_system_events_unimplemented() {
+async fn test_subscribe_system_events_receives_mock_events() {
     let (mut client, _addr, shutdown_tx, _mock_state_reader) =
         spawn_test_server_with_system_client().await;
 
-    let request = SubscribeSystemEventsRequest {};
+    let request = tonic::Request::new(SubscribeSystemEventsRequest {});
+    let response_result = client.subscribe_system_events(request).await;
 
-    let result = client.subscribe_system_events(request).await;
-    assert!(result.is_err());
-    if let Err(status) = result {
-        assert_eq!(status.code(), tonic::Code::Unimplemented);
-        assert!(
-            status
-                .message()
-                .contains("SubscribeSystemEvents not implemented")
-        );
+    assert!(
+        response_result.is_ok(),
+        "SubscribeSystemEvents RPC call failed: {:?}",
+        response_result.err()
+    );
+
+    let mut stream = response_result.unwrap().into_inner();
+    let mut received_events = Vec::new();
+
+    // The mock event generator in SystemServiceImpl sends an event every 10
+    // seconds. Try to receive 2 events, with a timeout longer than 20 seconds.
+    let timeout_duration = Duration::from_secs(25);
+
+    for i in 0..2 {
+        match tokio::time::timeout(timeout_duration, stream.next()).await {
+            Ok(Some(Ok(event))) => {
+                println!("[Test] Received system event: {:?}", event);
+                assert_eq!(
+                    event.event_type,
+                    iota_gprc_api::proto::iota::gprc::v1::system_event_gprc::EventType::NodeStatusChanged as i32
+                );
+                assert!(event.timestamp_ms.is_some());
+                let timestamp_value_str = event
+                    .timestamp_ms
+                    .as_ref()
+                    .expect("Timestamp should be present")
+                    .value
+                    .clone();
+                let _ = timestamp_value_str
+                    .parse::<u128>()
+                    .expect("Timestamp should be valid u128");
+
+                // Check details_json structure (simple check for now)
+                assert!(event.details_json.contains("\"status\": \"OK\""));
+                assert!(event.details_json.contains(&format!("\"tick\": {}", i + 1))); // Assuming tick starts at 1 for received events
+
+                received_events.push(event);
+            }
+            Ok(Some(Err(status))) => {
+                panic!("[Test] Error receiving system event: {:?}", status);
+            }
+            Ok(None) => {
+                panic!(
+                    "[Test] Stream closed prematurely after {} events.",
+                    received_events.len()
+                );
+            }
+            Err(_) => {
+                panic!(
+                    "[Test] Timeout waiting for system event #{}. Received {} events so far.",
+                    i + 1,
+                    received_events.len()
+                );
+            }
+        }
     }
-    drop(shutdown_tx);
+
+    assert_eq!(
+        received_events.len(),
+        2,
+        "Should have received exactly 2 events."
+    );
+
+    // Cleanly shut down the server
+    let _ = shutdown_tx.send(());
+    sleep(Duration::from_millis(100)).await; // Give server time to shutdown
 }

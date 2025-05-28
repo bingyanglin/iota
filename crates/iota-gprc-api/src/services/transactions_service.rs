@@ -99,7 +99,11 @@ impl TransactionGprcService for TransactionServiceImpl {
             req_inner
         );
 
-        let limit = req_inner.limit.map_or(50, |l| l.min(100).max(1)) as u64; // Default 50, max 100, min 1
+        let limit_u32: u32 = req_inner
+            .limit
+            .map_or(50_u32, |l_val: u32| l_val.min(100).max(1));
+        let limit: u64 = limit_u32.into(); // Use .into() for safe conversion
+
         let direction_gprc = req_inner.direction.map_or(Direction::Ascending, |d| {
             Direction::try_from(d).unwrap_or(Direction::Ascending)
         });
@@ -194,39 +198,38 @@ impl TransactionGprcService for TransactionServiceImpl {
             req_inner
         );
 
-        let initial_cursor_digest_opt: Option<TransactionDigest> = match req_inner
-            .start_from_transaction_id
-        {
-            Some(cursor_hex) => {
-                if !cursor_hex.starts_with("0x") || cursor_hex.len() != 66 {
-                    return Err(Status::invalid_argument(
-                        "start_from_transaction_id must be a 0x-prefixed 64-char hex string.",
-                    ));
-                }
-                match hex::decode(&cursor_hex[2..]) {
-                    Ok(bytes) => {
-                        if bytes.len() == 32 {
-                            let arr: [u8; 32] = bytes.try_into().map_err(|_e| {
+        let initial_cursor_digest_opt: Option<TransactionDigest> =
+            match req_inner.start_from_transaction_id {
+                Some(cursor_hex) => {
+                    if !cursor_hex.starts_with("0x") || cursor_hex.len() != 66 {
+                        return Err(Status::invalid_argument(
+                            "start_from_transaction_id must be a 0x-prefixed 64-char hex string.",
+                        ));
+                    }
+                    match hex::decode(&cursor_hex[2..]) {
+                        Ok(bytes) => {
+                            if bytes.len() == 32 {
+                                let arr: [u8; 32] = bytes.try_into().map_err(|_e| {
                                 Status::internal(
                                     "Failed to convert start_from_transaction_id to digest array",
                                 )
                             })?;
-                            Some(TransactionDigest::new(arr))
-                        } else {
+                                Some(TransactionDigest::new(arr))
+                            } else {
+                                return Err(Status::invalid_argument(
+                                    "start_from_transaction_id hex string must represent 32 bytes.",
+                                ));
+                            }
+                        }
+                        Err(_) => {
                             return Err(Status::invalid_argument(
-                                "start_from_transaction_id hex string must represent 32 bytes.",
+                                "Invalid hex string for start_from_transaction_id.",
                             ));
                         }
                     }
-                    Err(_) => {
-                        return Err(Status::invalid_argument(
-                            "Invalid hex string for start_from_transaction_id.",
-                        ));
-                    }
                 }
-            }
-            None => None, // Start from the beginning if no specific ID is provided
-        };
+                None => None, // Start from the beginning if no specific ID is provided
+            };
 
         let state_reader = self.state_reader.clone();
         let (tx, rx) = tokio::sync::mpsc::channel(128); // Increased buffer size

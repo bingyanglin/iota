@@ -1,7 +1,7 @@
 // Placeholder for gRPC server setup and run logic
 
 // ... import other service implementations ...
-use std::{net::SocketAddr, sync::Arc};
+use std::{net::SocketAddr, sync::Arc, time::Instant};
 
 // IOTA-specific imports
 use iota_types::storage::RestStateReader; // Import the actual RestStateReader
@@ -67,18 +67,22 @@ pub struct GrpcServer {
     coins_service: CoinsServiceImpl,
     epochs_service: EpochsServiceImpl,
     accounts_service: AccountsServiceImpl,
+    #[allow(dead_code)] // app_start_time might not be used directly by GrpcServer itself yet
+    app_start_time: Arc<Instant>,
 }
 
 impl GrpcServer {
     pub fn new(addr: SocketAddr, state_reader: StateReader) -> Self {
+        let app_start_time = Arc::new(Instant::now());
+
         let checkpoint_service = CheckpointServiceImpl::new(state_reader.clone());
         let object_service = ObjectServiceImpl::new(state_reader.clone());
         let transaction_service = TransactionServiceImpl::new(state_reader.clone());
         let committee_service = CommitteeServiceImpl::new(state_reader.clone());
-        let system_service = SystemServiceImpl::new(state_reader.clone());
+        let system_service = SystemServiceImpl::new(state_reader.clone(), app_start_time.clone());
         let coins_service = CoinsServiceImpl::new(state_reader.clone());
         let epochs_service = EpochsServiceImpl::new(state_reader.clone());
-        let accounts_service = AccountsServiceImpl::new(state_reader);
+        let accounts_service = AccountsServiceImpl::new(state_reader.clone());
         Self {
             addr,
             checkpoint_service,
@@ -89,6 +93,7 @@ impl GrpcServer {
             coins_service,
             epochs_service,
             accounts_service,
+            app_start_time,
         }
     }
 
