@@ -1,6 +1,6 @@
 use std::{
     net::{SocketAddr, TcpListener},
-    sync::Arc,
+    sync::{Arc, Mutex},
     time::Duration,
 };
 
@@ -11,21 +11,66 @@ use iota_gprc_api::{
     },
     server::{GrpcServer, StateReader},
 };
-use iota_types::storage::RestStateReader; // For mock
+use iota_types::crypto::KeypairTraits; // For kp.public()
+use iota_types::crypto::{AuthorityKeyPair, AuthorityPublicKeyBytes};
+use rand::{SeedableRng, rngs::StdRng};
 use tokio::{sync::broadcast, time::sleep};
 
-#[derive(Default)]
-struct MockRestStateReader {}
+struct MockRestStateReader {
+    current_epoch: Arc<Mutex<u64>>,
+}
 
-// Implement necessary RestStateReader traits for MockRestStateReader (even if
-// empty for now)
+impl Default for MockRestStateReader {
+    fn default() -> Self {
+        Self {
+            current_epoch: Arc::new(Mutex::new(0)),
+        }
+    }
+}
+
 impl iota_types::storage::ReadStore for MockRestStateReader {
     fn get_committee(
         &self,
-        _epoch: iota_types::committee::EpochId,
-    ) -> iota_types::storage::error::Result<Option<std::sync::Arc<iota_types::committee::Committee>>>
-    {
-        unimplemented!()
+        epoch_id_req: iota_types::committee::EpochId,
+    ) -> iota_types::storage::error::Result<Option<Arc<iota_types::committee::Committee>>> {
+        use std::collections::BTreeMap;
+
+        use iota_types::{
+            base_types::AuthorityName,
+            committee::{Committee as CoreCommittee, StakeUnit},
+            crypto::{AuthorityKeyPair, AuthorityPublicKeyBytes, KeypairTraits},
+        };
+
+        if epoch_id_req == 1 {
+            let mut voting_weights = BTreeMap::<AuthorityName, StakeUnit>::new();
+            let kp1 = AuthorityKeyPair::generate(&mut StdRng::from_seed([1u8; 32]));
+            let name1 = AuthorityName::from(AuthorityPublicKeyBytes::from(kp1.public()));
+            voting_weights.insert(name1, 100);
+            let kp2 = AuthorityKeyPair::generate(&mut StdRng::from_seed([2u8; 32]));
+            let name2 = AuthorityName::from(AuthorityPublicKeyBytes::from(kp2.public()));
+            voting_weights.insert(name2, 200);
+            let committee = CoreCommittee::new_for_testing_with_normalized_voting_power(
+                epoch_id_req,
+                voting_weights,
+            );
+            return Ok(Some(Arc::new(committee)));
+        } else if epoch_id_req == 2 {
+            // Added back mock for epoch 2
+            let mut voting_weights = BTreeMap::<AuthorityName, StakeUnit>::new();
+            let kp3 = AuthorityKeyPair::generate(&mut StdRng::from_seed([3u8; 32]));
+            let name3 = AuthorityName::from(AuthorityPublicKeyBytes::from(kp3.public()));
+            voting_weights.insert(name3, 300);
+            let kp4 = AuthorityKeyPair::generate(&mut StdRng::from_seed([4u8; 32]));
+            let name4 = AuthorityName::from(AuthorityPublicKeyBytes::from(kp4.public()));
+            voting_weights.insert(name4, 400);
+            let committee = CoreCommittee::new_for_testing_with_normalized_voting_power(
+                epoch_id_req,
+                voting_weights,
+            );
+            return Ok(Some(Arc::new(committee)));
+        }
+
+        Ok(None) // Default to None if not epoch 1 or 2
     }
     fn get_latest_checkpoint(
         &self,
@@ -38,12 +83,13 @@ impl iota_types::storage::ReadStore for MockRestStateReader {
     ) -> iota_types::storage::error::Result<iota_types::messages_checkpoint::CheckpointSequenceNumber>
     {
         Ok(0)
-    } // Return a default valid value
+    }
     fn get_latest_epoch_id(
         &self,
     ) -> iota_types::storage::error::Result<iota_types::committee::EpochId> {
-        Ok(0)
-    } // Return a default valid value
+        let current_epoch = self.current_epoch.lock().unwrap();
+        Ok(*current_epoch)
+    }
     fn get_highest_verified_checkpoint(
         &self,
     ) -> iota_types::storage::error::Result<iota_types::messages_checkpoint::VerifiedCheckpoint>
@@ -159,7 +205,7 @@ impl iota_types::storage::ObjectStore for MockRestStateReader {
         unimplemented!()
     }
 }
-impl RestStateReader for MockRestStateReader {
+impl iota_types::storage::RestStateReader for MockRestStateReader {
     fn get_transaction_checkpoint(
         &self,
         _digest: &iota_types::digests::TransactionDigest,
@@ -218,6 +264,19 @@ impl RestStateReader for MockRestStateReader {
     > {
         unimplemented!()
     }
+    fn list_transactions(
+        &self,
+        _cursor: Option<iota_types::digests::TransactionDigest>,
+        _limit: u64,
+        _direction: iota_types::storage::ListDirection,
+    ) -> iota_types::storage::error::Result<
+        Vec<(
+            iota_types::digests::TransactionDigest,
+            Arc<iota_types::transaction::VerifiedTransaction>,
+        )>,
+    > {
+        Ok(Vec::new())
+    }
 }
 
 fn get_available_port() -> u16 {
@@ -270,37 +329,158 @@ async fn spawn_test_server_with_committee_client() -> (
 }
 
 #[tokio::test]
-async fn test_get_committee_unimplemented() {
-    let (mut client, _addr, shutdown_tx, _mock_state_reader) =
+async fn test_get_committee_found_and_not_found() {
+    let (mut client, _addr, shutdown_tx, _mock_state_reader_arc) =
         spawn_test_server_with_committee_client().await;
 
-    let request = GetCommitteeRequest {
+    let kp1_test = AuthorityKeyPair::generate(&mut StdRng::from_seed([1u8; 32]));
+    let pk1_bytes_test = AuthorityPublicKeyBytes::from(kp1_test.public());
+    let pk1_hex = hex::encode(pk1_bytes_test.as_ref());
+
+    let kp2_test = AuthorityKeyPair::generate(&mut StdRng::from_seed([2u8; 32]));
+    let pk2_bytes_test = AuthorityPublicKeyBytes::from(kp2_test.public());
+    let pk2_hex = hex::encode(pk2_bytes_test.as_ref());
+
+    let request_found = GetCommitteeRequest {
         epoch_id: Some(EpochIdGprc { epoch: 1 }),
     };
+    let response_found_result = client.get_committee(request_found).await;
+    assert!(
+        response_found_result.is_ok(),
+        "Expected OK for epoch 1, got {:?}",
+        response_found_result.err()
+    );
+    let committee_gprc = response_found_result.unwrap().into_inner();
 
-    let result = client.get_committee(request).await;
-    assert!(result.is_err());
-    if let Err(status) = result {
-        assert_eq!(status.code(), tonic::Code::Unimplemented);
-        assert!(status.message().contains("GetCommittee not implemented"));
+    assert_eq!(committee_gprc.epoch_id, Some(EpochIdGprc { epoch: 1 }));
+    assert_eq!(
+        committee_gprc.members.len(),
+        2,
+        "Expected 2 members for epoch 1"
+    );
+
+    let member1 = committee_gprc
+        .members
+        .iter()
+        .find(|m| m.authority_name == pk1_hex)
+        .expect("Member 1 not found with authority_name");
+    assert_eq!(member1.authority_name, pk1_hex);
+    assert_eq!(
+        member1
+            .stake_units
+            .as_ref()
+            .expect("Stake units missing for member 1")
+            .value
+            .parse::<u64>()
+            .unwrap(),
+        3333
+    );
+
+    let member2 = committee_gprc
+        .members
+        .iter()
+        .find(|m| m.authority_name == pk2_hex)
+        .expect("Member 2 not found with authority_name");
+    assert_eq!(member2.authority_name, pk2_hex);
+    assert_eq!(
+        member2
+            .stake_units
+            .as_ref()
+            .expect("Stake units missing for member 2")
+            .value
+            .parse::<u64>()
+            .unwrap(),
+        6667
+    );
+
+    let request_not_found = GetCommitteeRequest {
+        epoch_id: Some(EpochIdGprc { epoch: 3 }),
+    };
+    let result_not_found = client.get_committee(request_not_found).await;
+    assert!(result_not_found.is_err());
+    if let Err(status) = result_not_found {
+        assert_eq!(status.code(), tonic::Code::NotFound);
+        assert!(status.message().contains("Committee not found for epoch 3"));
     }
+
     drop(shutdown_tx);
 }
 
 #[tokio::test]
-async fn test_stream_committee_unimplemented() {
-    let (mut client, _addr, shutdown_tx, _mock_state_reader) =
+async fn test_stream_committee_receives_items() {
+    let (mut client, _addr, shutdown_tx, _mock_state_reader_arc) =
         spawn_test_server_with_committee_client().await;
 
+    // mock_state_reader_arc.set_epoch(1); // Ensure we start from a known epoch if
+    // needed Initially, mock state reader current_epoch is 0 (from default())
+    // Stream should start from current_latest_epoch (0) + 1 = 1.
+
     let request = StreamCommitteeRequest {
-        start_epoch: Some(EpochIdGprc { epoch: 1 }),
+        start_epoch: None, // Let service determine start from latest + 1
     };
 
-    let result = client.stream_committee(request).await;
-    assert!(result.is_err());
-    if let Err(status) = result {
-        assert_eq!(status.code(), tonic::Code::Unimplemented);
-        assert!(status.message().contains("StreamCommittee not implemented"));
+    let mut stream = client.stream_committee(request).await.unwrap().into_inner();
+
+    // 1. Expect Committee for Epoch 1
+    println!("[StreamCommitteeTest] Expecting committee for epoch 1...");
+    match tokio::time::timeout(Duration::from_secs(5), stream.message()).await {
+        Ok(Ok(Some(committee_gprc))) => {
+            assert_eq!(committee_gprc.epoch_id.unwrap().epoch, 1);
+            assert_eq!(committee_gprc.members.len(), 2); // From mock for epoch 1
+            println!("[StreamCommitteeTest] Received committee for epoch 1.");
+        }
+        Ok(Ok(None)) => panic!("[StreamCommitteeTest] Stream ended prematurely expecting epoch 1."),
+        Ok(Err(e)) => panic!("[StreamCommitteeTest] Error receiving epoch 1: {:?}", e),
+        Err(_) => panic!("[StreamCommitteeTest] Timeout waiting for epoch 1."),
     }
+
+    // Advance mock state so that epoch 2 committee becomes available.
+    // The stream is polling for current_epoch_to_check = 1 + 1 = 2.
+    // mock_state_reader_arc.set_epoch(1); // This sets
+    // ReadStore.get_latest_epoch_id() to 1. The service logic uses this for
+    // initial_epoch if start_epoch is None. For polling, it increments its
+    // internal current_epoch_to_check. So, advancing the shared current_epoch
+    // isn't strictly necessary for the polling loop to find the next one, as
+    // get_committee(2) will provide it.
+
+    // 2. Expect Committee for Epoch 2
+    println!("[StreamCommitteeTest] Expecting committee for epoch 2...");
+    match tokio::time::timeout(Duration::from_secs(5), stream.message()).await {
+        Ok(Ok(Some(committee_gprc))) => {
+            assert_eq!(committee_gprc.epoch_id.unwrap().epoch, 2);
+            assert_eq!(committee_gprc.members.len(), 2); // From mock for epoch 2
+            println!("[StreamCommitteeTest] Received committee for epoch 2.");
+        }
+        Ok(Ok(None)) => panic!("[StreamCommitteeTest] Stream ended prematurely expecting epoch 2."),
+        Ok(Err(e)) => panic!("[StreamCommitteeTest] Error receiving epoch 2: {:?}", e),
+        Err(_) => panic!("[StreamCommitteeTest] Timeout waiting for epoch 2."),
+    }
+
+    // 3. Expect no more committees (epoch 3 is not defined in mock)
+    // The stream should keep polling but not find anything for epoch 3.
+    println!("[StreamCommitteeTest] Expecting no committee for epoch 3 (should timeout)...");
+    match tokio::time::timeout(Duration::from_secs(3), stream.message()).await {
+        Ok(Ok(Some(committee_gprc))) => {
+            panic!(
+                "[StreamCommitteeTest] Unexpected committee received for epoch: {:?}",
+                committee_gprc.epoch_id
+            );
+        }
+        Ok(Ok(None)) => {
+            // Stream ended, which is ok if the server decided to close after no new data.
+            println!("[StreamCommitteeTest] Stream ended as expected after epoch 2.");
+        }
+        Ok(Err(e)) => {
+            panic!(
+                "[StreamCommitteeTest] Error when expecting no new committee: {:?}",
+                e
+            );
+        }
+        Err(_) => {
+            // Timeout, this is the expected behavior if stream is still open and polling
+            println!("[StreamCommitteeTest] Timed out waiting for epoch 3, as expected.");
+        }
+    }
+
     drop(shutdown_tx);
 }

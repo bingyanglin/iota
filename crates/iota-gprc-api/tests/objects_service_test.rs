@@ -1,11 +1,12 @@
 use std::{
-    collections::HashSet, // For ListObjects pagination test
+    collections::{BTreeMap, HashSet}, // Added BTreeMap
     net::{SocketAddr, TcpListener},
     str::FromStr, // Added FromStr trait for .parse() / ::from_str()
     sync::Arc,
     sync::atomic::{AtomicU64, Ordering},
 };
 
+use anyhow; // Added anyhow
 use futures::StreamExt;
 use iota_gprc_api::{
     proto::iota::gprc::v1::{
@@ -19,26 +20,48 @@ use iota_gprc_api::{
 };
 use iota_protocol_config;
 use iota_types::{
-    base_types::{IotaAddress, MoveObjectType, ObjectID, SequenceNumber, TransactionDigest},
-    committee::{Committee, EpochId},
+    base_types::{AuthorityName, IotaAddress, MoveObjectType, ObjectID, SequenceNumber}, /* Removed TransactionDigest from here as it's also in digests */
+    committee::{Committee, EpochId, StakeUnit, TOTAL_VOTING_POWER}, /* Added Committee, EpochId,
+                                                                     * StakeUnit,
+                                                                     * TOTAL_VOTING_POWER */
+    crypto::{AuthorityKeyPair, AuthoritySignInfo, AuthorityStrongQuorumSignInfo, KeypairTraits}, /* Added crypto types */
     digests::{
-        ChainIdentifier, CheckpointContentsDigest, CheckpointDigest, TransactionEventsDigest,
+        ChainIdentifier,
+        CheckpointContentsDigest,
+        CheckpointDigest,
+        TransactionDigest, // Ensured TransactionDigest is here
+        TransactionEventsDigest,
     },
     effects::{TransactionEffects, TransactionEvents},
     full_checkpoint_content::CheckpointData,
+    gas::GasCostSummary, // Added GasCostSummary
+    message_envelope::{Envelope, Message, VerifiedEnvelope}, /* Added Message, Envelope,
+                          * VerifiedEnvelope */
     messages_checkpoint::{
-        CheckpointContents, CheckpointSequenceNumber,
-        FullCheckpointContents as ActualFullCheckpointContents, VerifiedCheckpoint,
+        CheckpointContents,
+        CheckpointSequenceNumber,
+        CheckpointSummary, // Added CheckpointSummary
+        FullCheckpointContents as ActualFullCheckpointContents,
+        VerifiedCheckpoint,
     },
     object::{Data, MoveObject, Object, ObjectInner, Owner},
     storage::{
-        AccountOwnedObjectInfo, CoinInfo, DynamicFieldIndexInfo, DynamicFieldKey,
-        ObjectStore as ActualObjectStore, ReadStore as ActualReadStore,
-        RestStateReader as ActualRestStateReader, error::Result as StorageResult,
+        AccountOwnedObjectInfo,
+        CoinInfo,
+        DynamicFieldIndexInfo,
+        DynamicFieldKey,
+        ListDirection,
+        ObjectKey, // Added ObjectKey
+        ObjectStore as ActualObjectStore,
+        ReadStore as ActualReadStore,
+        RestStateReader as ActualRestStateReader,
+        error::Result as StorageResult,
     },
     transaction::VerifiedTransaction,
 };
 use move_core_types::language_storage::StructTag;
+use rand::thread_rng; // Added rand::thread_rng
+use shared_crypto::intent::Intent; // Added Intent
 use tokio::{
     sync::broadcast,
     time::{Duration, sleep, timeout},
@@ -61,6 +84,53 @@ impl MockRestStateReader {
     fn set_latest_sequence_number_for_test(&self, val: u64) {
         self.latest_sequence_number.store(val, Ordering::SeqCst);
     }
+}
+
+// Copied and adapted create_mock_verified_checkpoint
+fn create_mock_verified_checkpoint(
+    seq_num: CheckpointSequenceNumber,
+    epoch_id: EpochId,
+) -> VerifiedCheckpoint {
+    let summary = CheckpointSummary {
+        epoch: epoch_id,
+        sequence_number: seq_num,
+        network_total_transactions: 1000 + seq_num,
+        content_digest: CheckpointContentsDigest::new([0u8; 32]),
+        previous_digest: if seq_num > 0 {
+            Some(CheckpointDigest::new([1u8; 32]))
+        } else {
+            None
+        },
+        epoch_rolling_gas_cost_summary: GasCostSummary::default(),
+        timestamp_ms: std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("Time went backwards")
+            .as_millis() as u64,
+        checkpoint_commitments: vec![],
+        end_of_epoch_data: None,
+        version_specific_data: vec![],
+    };
+
+    let keypair: AuthorityKeyPair = AuthorityKeyPair::generate(&mut thread_rng());
+    let authority_name = AuthorityName::from(keypair.public());
+    let stake: StakeUnit = TOTAL_VOTING_POWER;
+    let committee = Committee::new(epoch_id, BTreeMap::from([(authority_name, stake)]));
+
+    let sign_info = AuthoritySignInfo::new(
+        epoch_id,
+        &summary,
+        Intent::iota_app(CheckpointSummary::SCOPE), /* CheckpointSummary needs Message trait in
+                                                     * scope for SCOPE */
+        authority_name,
+        &keypair,
+    );
+
+    let auth_strong_quorum_sig =
+        AuthorityStrongQuorumSignInfo::new_from_auth_sign_infos(vec![sign_info], &committee)
+            .expect("Mock AuthStrongQuorumSignInfo creation failed");
+
+    let envelope = Envelope::new_from_data_and_sig(summary, auth_strong_quorum_sig);
+    VerifiedEnvelope::new_unchecked(envelope)
 }
 
 fn create_mock_object(_object_id: &ObjectID, version_val: u64) -> Object {
@@ -161,94 +231,94 @@ impl ActualObjectStore for MockRestStateReader {
     }
     fn multi_get_objects_by_key(
         &self,
-        _object_keys: &[iota_types::storage::ObjectKey],
+        _object_keys: &[ObjectKey],
     ) -> StorageResult<Vec<Option<Object>>> {
-        unimplemented!("Mock: multi_get_objects_by_key")
+        Ok(Vec::new())
     }
 }
 
 impl ActualReadStore for MockRestStateReader {
     fn get_committee(&self, _epoch: EpochId) -> StorageResult<Option<Arc<Committee>>> {
-        unimplemented!("Mock: get_committee")
+        Ok(None)
     }
     fn get_latest_checkpoint(&self) -> StorageResult<VerifiedCheckpoint> {
-        unimplemented!("Mock: get_latest_checkpoint")
+        Ok(create_mock_verified_checkpoint(0, 0))
     }
     fn get_latest_checkpoint_sequence_number(&self) -> StorageResult<CheckpointSequenceNumber> {
         Ok(self.latest_sequence_number.load(Ordering::SeqCst))
     }
     fn get_latest_epoch_id(&self) -> StorageResult<EpochId> {
-        unimplemented!("Mock: get_latest_epoch_id")
+        Ok(0)
     }
     fn get_highest_verified_checkpoint(&self) -> StorageResult<VerifiedCheckpoint> {
-        unimplemented!("Mock: get_highest_verified_checkpoint")
+        Ok(create_mock_verified_checkpoint(0, 0))
     }
     fn get_highest_synced_checkpoint(&self) -> StorageResult<VerifiedCheckpoint> {
-        unimplemented!("Mock: get_highest_synced_checkpoint")
+        Ok(create_mock_verified_checkpoint(0, 0))
     }
     fn get_lowest_available_checkpoint(&self) -> StorageResult<CheckpointSequenceNumber> {
-        unimplemented!("Mock: get_lowest_available_checkpoint")
+        Ok(0)
     }
     fn get_checkpoint_by_digest(
         &self,
         _digest: &CheckpointDigest,
     ) -> StorageResult<Option<VerifiedCheckpoint>> {
-        unimplemented!("Mock: get_checkpoint_by_digest")
+        Ok(None)
     }
     fn get_checkpoint_by_sequence_number(
         &self,
         _sequence_number: CheckpointSequenceNumber,
     ) -> StorageResult<Option<VerifiedCheckpoint>> {
-        unimplemented!("Mock: get_checkpoint_by_sequence_number_obj_test")
+        Ok(None)
     }
     fn get_checkpoint_contents_by_digest(
         &self,
         _digest: &CheckpointContentsDigest,
     ) -> StorageResult<Option<CheckpointContents>> {
-        unimplemented!("Mock: get_checkpoint_contents_by_digest")
+        Ok(None)
     }
     fn get_checkpoint_contents_by_sequence_number(
         &self,
         _sequence_number: CheckpointSequenceNumber,
     ) -> StorageResult<Option<CheckpointContents>> {
-        unimplemented!("Mock: get_checkpoint_contents_by_sequence_number_obj_test")
+        Ok(None)
     }
     fn get_transaction(
         &self,
         _tx_digest: &TransactionDigest,
     ) -> StorageResult<Option<Arc<VerifiedTransaction>>> {
-        unimplemented!("Mock: get_transaction")
+        Ok(None)
     }
     fn get_transaction_effects(
         &self,
         _tx_digest: &TransactionDigest,
     ) -> StorageResult<Option<TransactionEffects>> {
-        unimplemented!("Mock: get_transaction_effects")
+        Ok(None)
     }
     fn get_events(
         &self,
         _event_digest: &TransactionEventsDigest,
     ) -> StorageResult<Option<TransactionEvents>> {
-        unimplemented!("Mock: get_events")
+        Ok(None)
     }
     fn get_full_checkpoint_contents_by_sequence_number(
         &self,
         _sequence_number: CheckpointSequenceNumber,
     ) -> StorageResult<Option<ActualFullCheckpointContents>> {
-        unimplemented!("Mock: get_full_checkpoint_contents_by_sequence_number")
+        Ok(None)
     }
     fn get_full_checkpoint_contents(
         &self,
         _digest: &CheckpointContentsDigest,
     ) -> StorageResult<Option<ActualFullCheckpointContents>> {
-        unimplemented!("Mock: get_full_checkpoint_contents")
+        Ok(None)
     }
     fn get_checkpoint_data(
         &self,
         _checkpoint: VerifiedCheckpoint,
         _checkpoint_contents: CheckpointContents,
     ) -> anyhow::Result<CheckpointData> {
-        unimplemented!("Mock: get_checkpoint_data")
+        Err(anyhow::anyhow!("Mock: get_checkpoint_data not implemented"))
     }
 }
 
@@ -257,13 +327,13 @@ impl ActualRestStateReader for MockRestStateReader {
         &self,
         _digest: &TransactionDigest,
     ) -> StorageResult<Option<CheckpointSequenceNumber>> {
-        unimplemented!("Mock: get_transaction_checkpoint")
+        Ok(None)
     }
     fn get_lowest_available_checkpoint_objects(&self) -> StorageResult<CheckpointSequenceNumber> {
-        unimplemented!("Mock: get_lowest_available_checkpoint_objects")
+        Ok(0)
     }
     fn get_chain_identifier(&self) -> StorageResult<ChainIdentifier> {
-        unimplemented!("Mock: get_chain_identifier")
+        Ok(ChainIdentifier::from(CheckpointDigest::new([0u8; 32])))
     }
     fn account_owned_objects_info_iter(
         &self,
@@ -314,13 +384,21 @@ impl ActualRestStateReader for MockRestStateReader {
         unimplemented!("Mock: dynamic_field_iter")
     }
     fn get_coin_info(&self, _coin_type: &StructTag) -> StorageResult<Option<CoinInfo>> {
-        unimplemented!("Mock: get_coin_info")
+        Ok(None)
     }
     fn get_epoch_last_checkpoint(
         &self,
         _epoch_id: EpochId,
     ) -> StorageResult<Option<VerifiedCheckpoint>> {
-        unimplemented!("Mock: get_epoch_last_checkpoint")
+        Ok(None)
+    }
+    fn list_transactions(
+        &self,
+        _cursor: Option<TransactionDigest>,
+        _limit: u64,
+        _direction: ListDirection,
+    ) -> StorageResult<Vec<(TransactionDigest, Arc<VerifiedTransaction>)>> {
+        Ok(Vec::new())
     }
 }
 

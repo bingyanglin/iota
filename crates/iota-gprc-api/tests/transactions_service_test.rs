@@ -279,6 +279,120 @@ impl iota_types::storage::RestStateReader for MockRestStateReader {
     ) -> iota_types::storage::error::Result<Option<VerifiedCheckpoint>> {
         unimplemented!()
     }
+
+    fn list_transactions(
+        &self,
+        cursor: Option<ActualTransactionDigest>,
+        limit: u64,
+        direction: iota_types::storage::ListDirection,
+    ) -> iota_types::storage::error::Result<Vec<(ActualTransactionDigest, Arc<VerifiedTransaction>)>>
+    {
+        // This mock implementation will return up to 5 predefined transactions.
+        // It simulates pagination and direction.
+        let mut all_mock_txs = Vec::new();
+        for i in 1..=5u8 {
+            all_mock_txs.push(create_mock_verified_transaction_for_test(i));
+        }
+
+        let mut result_txs = all_mock_txs;
+
+        if direction == iota_types::storage::ListDirection::Descending {
+            result_txs.reverse();
+        }
+
+        let mut start_index = 0;
+        if let Some(cursor_digest) = cursor {
+            if let Some(pos) = result_txs.iter().position(|(d, _)| *d == cursor_digest) {
+                start_index = pos + 1;
+            } else {
+                // Cursor not found in the current direction, return empty
+                return Ok(Vec::new());
+            }
+        }
+
+        result_txs = result_txs
+            .into_iter()
+            .skip(start_index)
+            .take(limit as usize)
+            .collect();
+        Ok(result_txs)
+    }
+}
+
+// Helper function to create mock transactions for testing in
+// MockRestStateReader Similar to the one in TransactionServiceImpl but
+// self-contained for test module
+fn create_mock_verified_transaction_for_test(
+    id_byte: u8,
+) -> (
+    ActualTransactionDigest,
+    std::sync::Arc<iota_types::transaction::VerifiedTransaction>,
+) {
+    use std::sync::Arc;
+
+    use iota_types::{
+        base_types::{IotaAddress, ObjectID, ObjectRef, SequenceNumber},
+        crypto::{Ed25519IotaSignature, EmptySignInfo, IotaSignatureInner, Signature, ToFromBytes},
+        digests::ObjectDigest,
+        message_envelope::{Envelope, VerifiedEnvelope},
+        programmable_transaction_builder::ProgrammableTransactionBuilder,
+        transaction::{
+            GasData, SenderSignedData, TransactionData, TransactionDataV1, TransactionExpiration,
+            TransactionKind,
+        },
+    };
+
+    let mut tx_id_arr = [0u8; 32];
+    tx_id_arr[0] = id_byte; // Make digest unique based on id_byte
+    let tx_digest = ActualTransactionDigest::new(tx_id_arr);
+
+    let dummy_sender_address_bytes = [1u8; 32];
+    let dummy_sender_address = IotaAddress::new(dummy_sender_address_bytes);
+    let mut recipient_address_bytes = [2u8; 32];
+    recipient_address_bytes[0] = id_byte;
+    let recipient_address = IotaAddress::new(recipient_address_bytes);
+    let mut obj_id_arr = [3u8; 32];
+    obj_id_arr[0] = id_byte;
+    let dummy_object_id = ObjectID::new(obj_id_arr);
+    let dummy_object_digest = ObjectDigest::new(obj_id_arr);
+    let dummy_object_ref: ObjectRef = (dummy_object_id, SequenceNumber::new(), dummy_object_digest);
+    let pt = {
+        let mut builder = ProgrammableTransactionBuilder::new();
+        builder
+            .transfer_object(recipient_address, dummy_object_ref)
+            .unwrap();
+        builder.finish()
+    };
+    let tx_kind = TransactionKind::ProgrammableTransaction(pt);
+    let mut gas_obj_bytes = [4u8; 32];
+    gas_obj_bytes[0] = id_byte;
+    let gas_payment_object_id = ObjectID::new(gas_obj_bytes);
+    let gas_payment_digest = ObjectDigest::new(gas_obj_bytes);
+    let gas_data = GasData {
+        payment: vec![(
+            gas_payment_object_id,
+            SequenceNumber::new(),
+            gas_payment_digest,
+        )],
+        owner: dummy_sender_address,
+        price: 100,
+        budget: 1_000_000,
+    };
+    let tx_data = TransactionData::V1(TransactionDataV1 {
+        kind: tx_kind,
+        sender: dummy_sender_address,
+        gas_data,
+        expiration: TransactionExpiration::None,
+    });
+    let mut dummy_sig_bytes = [5u8; Ed25519IotaSignature::LENGTH];
+    dummy_sig_bytes[0] = id_byte;
+    let signature = Signature::Ed25519IotaSignature(
+        Ed25519IotaSignature::from_bytes(&dummy_sig_bytes).unwrap(),
+    );
+    let sender_signed_data = SenderSignedData::new_from_sender_signature(tx_data, signature);
+    let envelope = Envelope::new_from_data_and_sig(sender_signed_data, EmptySignInfo {});
+    let mock_transaction = VerifiedEnvelope::new_from_verified(envelope);
+    (tx_digest, Arc::new(mock_transaction))
 }
 
 fn get_available_port() -> u16 {
@@ -410,11 +524,10 @@ async fn test_list_transactions_empty() {
     let (mut client, _addr, shutdown_tx, _state_reader) =
         spawn_test_server_with_transaction_client().await;
 
-    // Test with a cursor that won't be found to simulate an empty list scenario
-    // based on cursor logic
+    // Use a validly formatted but likely non-existent transaction digest as cursor
     let request = ListTransactionsRequest {
         cursor: Some(
-            "nonexistentcursor0123456789abcdef0123456789abcdef0123456789abcdef".to_string(),
+            "0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff".to_string(),
         ),
         limit: Some(5),
         direction: Some(Direction::Ascending.into()),
@@ -611,7 +724,7 @@ async fn test_list_transactions_cursor_not_found() {
 
     let request = ListTransactionsRequest {
         cursor: Some(
-            "nonexistent000000000000000000000000000000000000000000000000000000".to_string(),
+            "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee".to_string(), /* Valid format, but non-existent */
         ),
         limit: Some(2),
         direction: Some(Direction::Ascending.into()),
@@ -629,12 +742,70 @@ async fn test_list_transactions_cursor_not_found() {
 }
 
 #[tokio::test]
+async fn test_list_transactions_invalid_cursor_format() {
+    let (mut client, _addr, shutdown_tx, _state_reader) =
+        spawn_test_server_with_transaction_client().await;
+
+    // Test with a cursor that is not a valid hex string
+    let request1 = ListTransactionsRequest {
+        cursor: Some("not-a-hex-string".to_string()),
+        limit: Some(5),
+        direction: Some(Direction::Ascending.into()),
+    };
+
+    let result1 = client.list_transactions(request1).await;
+    assert!(result1.is_err());
+    if let Err(status) = result1 {
+        assert_eq!(status.code(), tonic::Code::InvalidArgument);
+        assert!(
+            status
+                .message()
+                .contains("Cursor must be a 0x-prefixed 64-char hex string")
+        );
+    }
+
+    // Test with a cursor that is hex but wrong length
+    let request2 = ListTransactionsRequest {
+        cursor: Some("0x123456".to_string()), // Too short
+        limit: Some(5),
+        direction: Some(Direction::Ascending.into()),
+    };
+    let result2 = client.list_transactions(request2).await;
+    assert!(result2.is_err());
+    if let Err(status) = result2 {
+        assert_eq!(status.code(), tonic::Code::InvalidArgument);
+        assert!(
+            status
+                .message()
+                .contains("Cursor must be a 0x-prefixed 64-char hex string")
+        );
+    }
+
+    // Test with a cursor that is 0x + 64 chars but not valid hex chars
+    let request3 = ListTransactionsRequest {
+        cursor: Some(
+            "0xggffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff".to_string(),
+        ),
+        limit: Some(5),
+        direction: Some(Direction::Ascending.into()),
+    };
+    let result3 = client.list_transactions(request3).await;
+    assert!(result3.is_err());
+    if let Err(status) = result3 {
+        assert_eq!(status.code(), tonic::Code::InvalidArgument);
+        assert!(status.message().contains("Invalid hex string for cursor"));
+    }
+
+    drop(shutdown_tx);
+}
+
+#[tokio::test]
 async fn test_stream_transactions_receives_items() {
     let (mut client, _addr, shutdown_tx, _state_reader) =
         spawn_test_server_with_transaction_client().await;
 
     let request = StreamTransactionsRequest {
-        start_from_transaction_id: None, // Test without specific start ID
+        start_from_transaction_id: None, // Start from the beginning
     };
 
     let mut stream = client
@@ -644,56 +815,51 @@ async fn test_stream_transactions_receives_items() {
         .into_inner();
 
     let mut received_count = 0;
-    let mut last_id_byte: Option<u8> = None;
+    let mut expected_id_byte = 1u8;
 
-    for _ in 0..3 {
-        // Try to receive 3 transactions
-        match tokio::time::timeout(Duration::from_secs(2), stream.message()).await {
+    // Expect to receive the 5 mock transactions from MockRestStateReader
+    for i in 0..5 {
+        match tokio::time::timeout(Duration::from_secs(5), stream.message()).await {
+            // Increased timeout for polling
             Ok(Ok(Some(tx_gprc))) => {
                 received_count += 1;
-                println!("Received transaction: {}", tx_gprc.transaction_id_hex);
-                // Extract the first byte from the hex ID to check if it's changing
-                // The mock uses the first byte of the digest array (value of
-                // transaction_counter)
-                let current_id_first_byte_hex = tx_gprc
-                    .transaction_id_hex
-                    .chars()
-                    .skip(2)
-                    .take(2)
-                    .collect::<String>();
-                let current_id_byte = u8::from_str_radix(&current_id_first_byte_hex, 16).unwrap();
-
-                if let Some(last_byte) = last_id_byte {
-                    assert_ne!(
-                        current_id_byte, last_byte,
-                        "Received same transaction ID byte consecutively"
-                    );
-                }
-                last_id_byte = Some(current_id_byte);
-                assert!(
-                    current_id_byte >= 100,
-                    "Transaction ID byte should be from the streaming range"
+                println!(
+                    "[StreamTest] Received transaction {}: {}",
+                    i + 1,
+                    tx_gprc.transaction_id_hex
                 );
+                let expected_hex = get_expected_tx_id_hex(expected_id_byte);
+                assert_eq!(tx_gprc.transaction_id_hex, expected_hex);
+                expected_id_byte += 1;
             }
             Ok(Ok(None)) => {
-                panic!("Stream closed prematurely after {} items", received_count);
+                panic!(
+                    "[StreamTest] Stream closed prematurely after {} items",
+                    received_count
+                );
             }
             Ok(Err(e)) => {
                 panic!(
-                    "Error receiving from stream after {} items: {:?}",
+                    "[StreamTest] Error receiving from stream after {} items: {:?}",
                     received_count, e
                 );
             }
             Err(_) => {
                 panic!(
-                    "Timeout waiting for transaction after {} items",
+                    "[StreamTest] Timeout waiting for transaction {} after {} items",
+                    i + 1,
                     received_count
                 );
             }
         }
     }
-    assert_eq!(received_count, 3, "Should have received 3 transactions");
+    assert_eq!(
+        received_count, 5,
+        "Should have received all 5 mock transactions"
+    );
 
+    // The stream would continue polling. For the test, we just verify the initial
+    // set.
     drop(stream); // Close the stream from client side
     drop(shutdown_tx); // Shutdown server
 }
@@ -703,10 +869,11 @@ async fn test_stream_transactions_with_start_id() {
     let (mut client, _addr, shutdown_tx, _state_reader) =
         spawn_test_server_with_transaction_client().await;
 
-    // The mock implementation currently ignores start_from_transaction_id,
-    // but we test that the request can be made and the stream works.
+    // Start from the transaction with id_byte = 2. Expected: 3, 4, 5
+    let start_tx_id_hex = get_expected_tx_id_hex(2);
+
     let request = StreamTransactionsRequest {
-        start_from_transaction_id: Some(get_expected_tx_id_hex(120)), // Example start ID
+        start_from_transaction_id: Some(start_tx_id_hex.clone()),
     };
 
     let mut stream = client
@@ -715,19 +882,51 @@ async fn test_stream_transactions_with_start_id() {
         .unwrap()
         .into_inner();
 
-    // Expect to receive at least one item, similar to the test above
-    match tokio::time::timeout(Duration::from_secs(2), stream.message()).await {
-        Ok(Ok(Some(tx_gprc))) => {
-            println!(
-                "Received transaction with start_id provided: {}",
-                tx_gprc.transaction_id_hex
-            );
-            assert!(!tx_gprc.transaction_id_hex.is_empty());
-        }
-        _ => {
-            panic!("Failed to receive any transaction when start_id was provided");
+    let mut received_count = 0;
+    let mut expected_id_byte = 3u8; // Should start receiving from ID byte 3
+
+    for i in 0..3 {
+        // Expecting 3 transactions (3, 4, 5)
+        match tokio::time::timeout(Duration::from_secs(5), stream.message()).await {
+            // Increased timeout
+            Ok(Ok(Some(tx_gprc))) => {
+                received_count += 1;
+                println!(
+                    "[StreamTest StartID] Received transaction {}: {}",
+                    i + 1,
+                    tx_gprc.transaction_id_hex
+                );
+                let expected_hex = get_expected_tx_id_hex(expected_id_byte);
+                assert_eq!(tx_gprc.transaction_id_hex, expected_hex);
+                expected_id_byte += 1;
+            }
+            Ok(Ok(None)) => {
+                panic!(
+                    "[StreamTest StartID] Stream closed prematurely after {} items (started from {}).",
+                    received_count, start_tx_id_hex
+                );
+            }
+            Ok(Err(e)) => {
+                panic!(
+                    "[StreamTest StartID] Error receiving from stream after {} items (started from {}): {:?}",
+                    received_count, start_tx_id_hex, e
+                );
+            }
+            Err(_) => {
+                panic!(
+                    "[StreamTest StartID] Timeout waiting for transaction {} after {} items (started from {}).",
+                    i + 1,
+                    received_count,
+                    start_tx_id_hex
+                );
+            }
         }
     }
+    assert_eq!(
+        received_count, 3,
+        "Should have received 3 transactions after the start_id"
+    );
+
     drop(stream);
     drop(shutdown_tx);
 }

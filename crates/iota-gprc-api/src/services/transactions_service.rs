@@ -16,80 +16,13 @@ use crate::{
     server::StateReader,
 };
 
-// Helper function to create a mock VerifiedTransaction (simplified)
-// In a real scenario, these would come from the state_reader
-fn create_mock_verified_transaction(
-    id_byte: u8,
-) -> (
-    TransactionDigest,
-    std::sync::Arc<iota_types::transaction::VerifiedTransaction>,
-) {
-    use std::sync::Arc;
-
-    use iota_types::{
-        base_types::{IotaAddress, ObjectID, ObjectRef, SequenceNumber},
-        crypto::{Ed25519IotaSignature, EmptySignInfo, IotaSignatureInner, Signature, ToFromBytes},
-        digests::ObjectDigest,
-        message_envelope::{Envelope, VerifiedEnvelope},
-        programmable_transaction_builder::ProgrammableTransactionBuilder,
-        transaction::{
-            GasData, SenderSignedData, TransactionData, TransactionDataV1, TransactionExpiration,
-            TransactionKind,
-        },
-    };
-
-    let mut tx_id_arr = [0u8; 32];
-    tx_id_arr[0] = id_byte; // Make digest unique based on id_byte
-    let tx_digest = TransactionDigest::new(tx_id_arr);
-
-    let dummy_sender_address_bytes = [1u8; 32];
-    let dummy_sender_address = IotaAddress::new(dummy_sender_address_bytes);
-    let mut recipient_address_bytes = [2u8; 32];
-    recipient_address_bytes[0] = id_byte;
-    let recipient_address = IotaAddress::new(recipient_address_bytes);
-    let mut obj_id_arr = [3u8; 32];
-    obj_id_arr[0] = id_byte;
-    let dummy_object_id = ObjectID::new(obj_id_arr);
-    let dummy_object_digest = ObjectDigest::new(obj_id_arr);
-    let dummy_object_ref: ObjectRef = (dummy_object_id, SequenceNumber::new(), dummy_object_digest);
-    let pt = {
-        let mut builder = ProgrammableTransactionBuilder::new();
-        builder
-            .transfer_object(recipient_address, dummy_object_ref)
-            .unwrap();
-        builder.finish()
-    };
-    let tx_kind = TransactionKind::ProgrammableTransaction(pt);
-    let mut gas_obj_bytes = [4u8; 32];
-    gas_obj_bytes[0] = id_byte;
-    let gas_payment_object_id = ObjectID::new(gas_obj_bytes);
-    let gas_payment_digest = ObjectDigest::new(gas_obj_bytes);
-    let gas_data = GasData {
-        payment: vec![(
-            gas_payment_object_id,
-            SequenceNumber::new(),
-            gas_payment_digest,
-        )],
-        owner: dummy_sender_address,
-        price: 100,
-        budget: 1_000_000,
-    };
-    let tx_data = TransactionData::V1(TransactionDataV1 {
-        kind: tx_kind,
-        sender: dummy_sender_address,
-        gas_data,
-        expiration: TransactionExpiration::None,
-    });
-    let mut dummy_sig_bytes = [5u8; Ed25519IotaSignature::LENGTH];
-    dummy_sig_bytes[0] = id_byte;
-    let signature = Signature::Ed25519IotaSignature(
-        Ed25519IotaSignature::from_bytes(&dummy_sig_bytes).unwrap(),
-    );
-    let sender_signed_data = SenderSignedData::new_from_sender_signature(tx_data, signature);
-    let envelope = Envelope::new_from_data_and_sig(sender_signed_data, EmptySignInfo {});
-    let mock_transaction = VerifiedEnvelope::new_from_verified(envelope);
-    (tx_digest, Arc::new(mock_transaction))
-}
+// This function is no longer used, as list_transactions now uses state_reader.
+// fn create_mock_verified_transaction(
+//     id_byte: u8,
+// ) -> (
+//     TransactionDigest,
+//     std::sync::Arc<iota_types::transaction::VerifiedTransaction>,
+// ) { ... }
 
 #[derive(Clone)]
 pub struct TransactionServiceImpl {
@@ -166,87 +99,89 @@ impl TransactionGprcService for TransactionServiceImpl {
             req_inner
         );
 
-        // TODO: This is a mock implementation.
-        // Full pagination, cursor handling, and direction sorting depend on StateReader
-        // capabilities. The actual StateReader might offer methods like
-        // `list_transactions(cursor, limit, direction)`.
-
-        let mut mock_transactions = Vec::new();
-        for i in 1..=5 {
-            // Create 5 mock transactions
-            let (digest, verified_tx) = create_mock_verified_transaction(i);
-            match convert_verified_transaction_to_gprc(&digest, &verified_tx) {
-                Ok(gprc_tx) => mock_transactions.push(gprc_tx),
-                Err(e) => {
-                    eprintln!("Error converting mock transaction: {:?}", e);
-                    // Skip this transaction or return an error
-                }
-            }
-        }
-
-        let direction = req_inner.direction.map_or(Direction::Ascending, |d| {
+        let limit = req_inner.limit.map_or(50, |l| l.min(100).max(1)) as u64; // Default 50, max 100, min 1
+        let direction_gprc = req_inner.direction.map_or(Direction::Ascending, |d| {
             Direction::try_from(d).unwrap_or(Direction::Ascending)
         });
 
-        if direction == Direction::Descending {
-            mock_transactions.reverse();
-        }
+        let storage_direction = match direction_gprc {
+            Direction::Ascending => iota_types::storage::ListDirection::Ascending,
+            Direction::Descending => iota_types::storage::ListDirection::Descending,
+            // Should not happen if Direction enum is kept in sync
+            _ => iota_types::storage::ListDirection::Ascending,
+        };
 
-        let mut cursor_index = 0;
-        if let Some(cursor_hex) = req_inner.cursor {
-            // Naive cursor implementation: find index of cursor
-            // A real implementation would use the cursor to fetch the correct page from the
-            // DB
-            if let Some(pos) = mock_transactions
-                .iter()
-                .position(|tx| tx.transaction_id_hex == cursor_hex)
-            {
-                cursor_index = pos + 1; // Start from the item AFTER the cursor
-            } else {
-                // Cursor not found, could return error or empty
-                // For mock, let's return empty if cursor is specified but not found
-                return Ok(Response::new(ListTransactionsResponse {
-                    transactions: vec![],
-                    next_cursor: None,
-                }));
+        let cursor_digest_opt: Option<TransactionDigest> = match req_inner.cursor {
+            Some(cursor_hex) => {
+                if !cursor_hex.starts_with("0x") || cursor_hex.len() != 66 {
+                    return Err(Status::invalid_argument(
+                        "Cursor must be a 0x-prefixed 64-char hex string for transaction digest.",
+                    ));
+                }
+                match hex::decode(&cursor_hex[2..]) {
+                    Ok(bytes) => {
+                        if bytes.len() == 32 {
+                            let arr: [u8; 32] = bytes.try_into().map_err(|_e| {
+                                Status::internal("Failed to convert cursor hex to digest array")
+                            })?;
+                            Some(TransactionDigest::new(arr))
+                        } else {
+                            return Err(Status::invalid_argument(
+                                "Cursor hex string must represent 32 bytes for transaction digest.",
+                            ));
+                        }
+                    }
+                    Err(_) => {
+                        return Err(Status::invalid_argument(
+                            "Invalid hex string for cursor transaction digest.",
+                        ));
+                    }
+                }
+            }
+            None => None,
+        };
+
+        match self
+            .state_reader
+            .list_transactions(cursor_digest_opt, limit, storage_direction)
+        {
+            Ok(core_transactions) => {
+                let mut gprc_transactions = Vec::new();
+                for (digest, verified_tx) in core_transactions {
+                    match convert_verified_transaction_to_gprc(&digest, &verified_tx) {
+                        Ok(gprc_tx) => gprc_transactions.push(gprc_tx),
+                        Err(e) => {
+                            eprintln!("Error converting core transaction to gRPC: {:?}", e);
+                            // Optionally, return an internal error or skip the transaction
+                            return Err(Status::internal("Failed to convert transaction data."));
+                        }
+                    }
+                }
+
+                let next_cursor_hex: Option<String> = if gprc_transactions.len() == limit as usize {
+                    gprc_transactions
+                        .last()
+                        .map(|tx| tx.transaction_id_hex.clone())
+                } else {
+                    None
+                };
+
+                Ok(Response::new(ListTransactionsResponse {
+                    transactions: gprc_transactions,
+                    next_cursor: next_cursor_hex,
+                }))
+            }
+            Err(e) => {
+                eprintln!(
+                    "[gRPC TransactionService] Error from state_reader.list_transactions: {}",
+                    e
+                );
+                Err(Status::internal(format!(
+                    "Failed to list transactions: {}",
+                    e
+                )))
             }
         }
-
-        let limit = req_inner
-            .limit
-            .map_or(mock_transactions.len(), |l| l as usize); // Default to all if no limit
-
-        let paginated_transactions: Vec<TransactionGprc> = mock_transactions
-            .into_iter()
-            .skip(cursor_index)
-            .take(limit)
-            .collect();
-
-        let next_cursor = if cursor_index + limit < 5 && !paginated_transactions.is_empty() {
-            // Crude next_cursor: ID of the last item if there are more items
-            // (assuming 5 total mock items for this logic)
-            paginated_transactions
-                .last()
-                .map(|tx| tx.transaction_id_hex.clone())
-        } else {
-            None
-        };
-
-        // A more robust next_cursor logic would be:
-        // if paginated_transactions.len() == limit && (cursor_index + limit) <
-        // total_mock_items {    paginated_transactions.last().map(|tx|
-        // tx.transaction_id_hex.clone()) } else {
-        //    None
-        // }
-        // Where total_mock_items is the actual count of items before pagination.
-        // For this mock, we used 5 items.
-
-        let response = ListTransactionsResponse {
-            transactions: paginated_transactions,
-            next_cursor,
-        };
-
-        Ok(Response::new(response))
     }
 
     async fn stream_transactions(
@@ -259,62 +194,121 @@ impl TransactionGprcService for TransactionServiceImpl {
             req_inner
         );
 
-        // TODO: Implement actual logic for streaming transactions.
-        // This will involve a real stream producer, possibly from an event bus or by
-        // polling. For now, this is a mock implementation that periodically
-        // sends new mock transactions. The `start_from_transaction_id` is
-        // currently ignored in this mock.
+        let initial_cursor_digest_opt: Option<TransactionDigest> = match req_inner
+            .start_from_transaction_id
+        {
+            Some(cursor_hex) => {
+                if !cursor_hex.starts_with("0x") || cursor_hex.len() != 66 {
+                    return Err(Status::invalid_argument(
+                        "start_from_transaction_id must be a 0x-prefixed 64-char hex string.",
+                    ));
+                }
+                match hex::decode(&cursor_hex[2..]) {
+                    Ok(bytes) => {
+                        if bytes.len() == 32 {
+                            let arr: [u8; 32] = bytes.try_into().map_err(|_e| {
+                                Status::internal(
+                                    "Failed to convert start_from_transaction_id to digest array",
+                                )
+                            })?;
+                            Some(TransactionDigest::new(arr))
+                        } else {
+                            return Err(Status::invalid_argument(
+                                "start_from_transaction_id hex string must represent 32 bytes.",
+                            ));
+                        }
+                    }
+                    Err(_) => {
+                        return Err(Status::invalid_argument(
+                            "Invalid hex string for start_from_transaction_id.",
+                        ));
+                    }
+                }
+            }
+            None => None, // Start from the beginning if no specific ID is provided
+        };
 
-        let (tx, rx) = tokio::sync::mpsc::channel(16); // Channel buffer size 16
+        let state_reader = self.state_reader.clone();
+        let (tx, rx) = tokio::sync::mpsc::channel(128); // Increased buffer size
 
         tokio::spawn(async move {
-            let mut transaction_counter: u8 = 100; // Start from a different ID range than ListTransactions
-            loop {
-                tokio::time::sleep(std::time::Duration::from_secs(1)).await; // Send a new tx every second
+            let mut current_cursor = initial_cursor_digest_opt;
+            let polling_interval = std::time::Duration::from_secs(2);
+            const STREAM_POLL_LIMIT: u64 = 10;
 
-                let (digest, verified_tx) = create_mock_verified_transaction(transaction_counter);
-                match convert_verified_transaction_to_gprc(&digest, &verified_tx) {
-                    Ok(gprc_tx) => {
-                        if tx.send(Ok(gprc_tx)).await.is_err() {
-                            println!(
-                                "[gRPC StreamTransactions] Client disconnected. Stopping stream."
-                            );
-                            break; // Client disconnected
+            loop {
+                tokio::time::sleep(polling_interval).await;
+
+                match state_reader.list_transactions(
+                    current_cursor,
+                    STREAM_POLL_LIMIT,
+                    iota_types::storage::ListDirection::Ascending,
+                ) {
+                    Ok(core_transactions) => {
+                        if core_transactions.is_empty() && current_cursor.is_some() {
+                            // If we had a cursor and got nothing, we are likely at the tip.
+                            // Continue polling from the same cursor.
+                            continue;
+                        } else if core_transactions.is_empty() && current_cursor.is_none() {
+                            // Started from beginning and got nothing, DB might be empty.
+                            // Continue polling from None cursor.
+                            continue;
                         }
-                        // println!(
-                        //     "[gRPC StreamTransactions] Sent mock transaction
-                        // with id_byte: {}",
-                        //     transaction_counter
-                        // );
+
+                        for (digest, verified_tx) in core_transactions {
+                            match convert_verified_transaction_to_gprc(&digest, &verified_tx) {
+                                Ok(gprc_tx) => {
+                                    if tx.send(Ok(gprc_tx)).await.is_err() {
+                                        println!(
+                                            "[gRPC StreamTransactions] Client disconnected. Stopping stream."
+                                        );
+                                        return; // Client disconnected
+                                    }
+                                    current_cursor = Some(digest); // Update cursor to the last sent transaction
+                                }
+                                Err(e) => {
+                                    eprintln!(
+                                        "[gRPC StreamTransactions] Error converting core transaction: {:?}",
+                                        e
+                                    );
+                                    if tx
+                                        .send(Err(Status::internal(
+                                            "Error converting transaction data.",
+                                        )))
+                                        .await
+                                        .is_err()
+                                    {
+                                        println!(
+                                            "[gRPC StreamTransactions] Client disconnected while sending error."
+                                        );
+                                    }
+                                    return; // Stop on conversion error
+                                }
+                            }
+                        }
                     }
                     Err(e) => {
                         eprintln!(
-                            "[gRPC StreamTransactions] Error converting mock transaction: {:?}",
+                            "[gRPC StreamTransactions] Error from state_reader.list_transactions: {}",
                             e
                         );
-                        // Optionally send an error to the client or just log and continue/stop
                         if tx
                             .send(Err(Status::internal(
-                                "Error generating streamed transaction".to_string(),
+                                "Error fetching transactions from storage.",
                             )))
                             .await
                             .is_err()
                         {
                             println!(
-                                "[gRPC StreamTransactions] Client disconnected while sending error. Stopping stream."
+                                "[gRPC StreamTransactions] Client disconnected while sending storage error."
                             );
                         }
-                        break; // Stop on error for simplicity in mock
+                        // Depending on the error, might want to retry or stop.
+                        // For now, stop the stream on storage error.
+                        return;
                     }
                 }
-
-                transaction_counter = transaction_counter.wrapping_add(1);
-                if transaction_counter == 0 {
-                    // Avoid reusing IDs from ListTransactions extensively if it wraps quickly
-                    transaction_counter = 100;
-                }
             }
-            println!("[gRPC StreamTransactions] Mock stream task finished.");
         });
 
         Ok(Response::new(tokio_stream::wrappers::ReceiverStream::new(

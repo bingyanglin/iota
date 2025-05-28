@@ -647,6 +647,13 @@ impl<T: ReadStore + ?Sized> ReadStore for Arc<T> {
     }
 }
 
+/// Enum to specify the direction of listing for paginated queries.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ListDirection {
+    Ascending,
+    Descending,
+}
+
 /// Trait used to provide functionality to the REST API service.
 ///
 /// It extends both ObjectStore and ReadStore by adding functionality that may
@@ -680,6 +687,13 @@ pub trait RestStateReader: ObjectStore + ReadStore + Send + Sync {
     fn get_coin_info(&self, coin_type: &StructTag) -> Result<Option<CoinInfo>>;
 
     fn get_epoch_last_checkpoint(&self, epoch_id: EpochId) -> Result<Option<VerifiedCheckpoint>>;
+
+    fn list_transactions(
+        &self,
+        cursor: Option<TransactionDigest>,
+        limit: u64,
+        direction: ListDirection,
+    ) -> Result<Vec<(TransactionDigest, Arc<VerifiedTransaction>)>>;
 }
 
 pub struct AccountOwnedObjectInfo {

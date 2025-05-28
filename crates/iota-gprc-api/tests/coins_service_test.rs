@@ -1,9 +1,11 @@
 use std::{
+    collections::BTreeMap,
     net::{SocketAddr, TcpListener},
     sync::Arc,
     time::Duration,
 };
 
+use anyhow;
 use iota_gprc_api::{
     proto::iota::gprc::v1::{
         GetCoinInfoRequest, ListCoinsRequest, SubscribeCoinEventsRequest,
@@ -11,210 +13,230 @@ use iota_gprc_api::{
     },
     server::{GrpcServer, StateReader},
 };
-use iota_types::storage::RestStateReader;
+use iota_types::{
+    base_types::{AuthorityName, ObjectID, SequenceNumber},
+    committee::{Committee, EpochId, StakeUnit, TOTAL_VOTING_POWER},
+    crypto::{AuthorityKeyPair, AuthoritySignInfo, AuthorityStrongQuorumSignInfo, KeypairTraits},
+    digests::{
+        ChainIdentifier, CheckpointContentsDigest, CheckpointDigest, TransactionDigest,
+        TransactionEventsDigest,
+    },
+    effects::{TransactionEffects, TransactionEvents},
+    full_checkpoint_content::CheckpointData,
+    gas::GasCostSummary,
+    message_envelope::{Envelope, Message, VerifiedEnvelope},
+    messages_checkpoint::{
+        CheckpointContents, CheckpointSequenceNumber, CheckpointSummary, FullCheckpointContents,
+        VerifiedCheckpoint,
+    },
+    object::Object,
+    storage::{
+        AccountOwnedObjectInfo, CoinInfo, DynamicFieldIndexInfo, DynamicFieldKey, ListDirection,
+        ObjectKey, ObjectStore, ReadStore, RestStateReader, error::Result as StorageResult,
+    },
+    transaction::VerifiedTransaction,
+};
+use move_core_types::language_storage::StructTag;
+use rand::thread_rng;
+use shared_crypto::intent::Intent;
 use tokio::{sync::broadcast, time::sleep};
 
 #[derive(Default)]
 struct MockRestStateReader {}
 
-impl iota_types::storage::ReadStore for MockRestStateReader {
-    fn get_committee(
-        &self,
-        _epoch: iota_types::committee::EpochId,
-    ) -> iota_types::storage::error::Result<Option<std::sync::Arc<iota_types::committee::Committee>>>
-    {
-        unimplemented!()
+fn create_mock_verified_checkpoint(
+    seq_num: CheckpointSequenceNumber,
+    epoch_id: EpochId,
+) -> VerifiedCheckpoint {
+    let summary = CheckpointSummary {
+        epoch: epoch_id,
+        sequence_number: seq_num,
+        network_total_transactions: 1000 + seq_num,
+        content_digest: CheckpointContentsDigest::new([0u8; 32]),
+        previous_digest: if seq_num > 0 {
+            Some(CheckpointDigest::new([1u8; 32]))
+        } else {
+            None
+        },
+        epoch_rolling_gas_cost_summary: GasCostSummary::default(),
+        timestamp_ms: std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("Time went backwards")
+            .as_millis() as u64,
+        checkpoint_commitments: vec![],
+        end_of_epoch_data: None,
+        version_specific_data: vec![],
+    };
+
+    let keypair: AuthorityKeyPair = AuthorityKeyPair::generate(&mut thread_rng());
+    let authority_name = AuthorityName::from(keypair.public());
+    let stake: StakeUnit = TOTAL_VOTING_POWER;
+    let committee = Committee::new(epoch_id, BTreeMap::from([(authority_name, stake)]));
+
+    let sign_info = AuthoritySignInfo::new(
+        epoch_id,
+        &summary,
+        Intent::iota_app(CheckpointSummary::SCOPE),
+        authority_name,
+        &keypair,
+    );
+
+    let auth_strong_quorum_sig =
+        AuthorityStrongQuorumSignInfo::new_from_auth_sign_infos(vec![sign_info], &committee)
+            .expect("Mock AuthStrongQuorumSignInfo creation failed");
+
+    let envelope = Envelope::new_from_data_and_sig(summary, auth_strong_quorum_sig);
+    VerifiedEnvelope::new_unchecked(envelope)
+}
+
+impl ReadStore for MockRestStateReader {
+    fn get_committee(&self, _epoch: EpochId) -> StorageResult<Option<Arc<Committee>>> {
+        Ok(None)
     }
-    fn get_latest_checkpoint(
-        &self,
-    ) -> iota_types::storage::error::Result<iota_types::messages_checkpoint::VerifiedCheckpoint>
-    {
-        unimplemented!()
+    fn get_latest_checkpoint(&self) -> StorageResult<VerifiedCheckpoint> {
+        Ok(create_mock_verified_checkpoint(0, 0))
     }
-    fn get_latest_checkpoint_sequence_number(
-        &self,
-    ) -> iota_types::storage::error::Result<iota_types::messages_checkpoint::CheckpointSequenceNumber>
-    {
+    fn get_latest_checkpoint_sequence_number(&self) -> StorageResult<CheckpointSequenceNumber> {
         Ok(0)
     }
-    fn get_latest_epoch_id(
-        &self,
-    ) -> iota_types::storage::error::Result<iota_types::committee::EpochId> {
+    fn get_latest_epoch_id(&self) -> StorageResult<EpochId> {
         Ok(0)
     }
-    fn get_highest_verified_checkpoint(
-        &self,
-    ) -> iota_types::storage::error::Result<iota_types::messages_checkpoint::VerifiedCheckpoint>
-    {
-        unimplemented!()
+    fn get_highest_verified_checkpoint(&self) -> StorageResult<VerifiedCheckpoint> {
+        Ok(create_mock_verified_checkpoint(0, 0))
     }
-    fn get_highest_synced_checkpoint(
-        &self,
-    ) -> iota_types::storage::error::Result<iota_types::messages_checkpoint::VerifiedCheckpoint>
-    {
-        unimplemented!()
+    fn get_highest_synced_checkpoint(&self) -> StorageResult<VerifiedCheckpoint> {
+        Ok(create_mock_verified_checkpoint(0, 0))
     }
-    fn get_lowest_available_checkpoint(
-        &self,
-    ) -> iota_types::storage::error::Result<iota_types::messages_checkpoint::CheckpointSequenceNumber>
-    {
-        unimplemented!()
+    fn get_lowest_available_checkpoint(&self) -> StorageResult<CheckpointSequenceNumber> {
+        Ok(0)
     }
     fn get_checkpoint_by_digest(
         &self,
-        _digest: &iota_types::digests::CheckpointDigest,
-    ) -> iota_types::storage::error::Result<
-        Option<iota_types::messages_checkpoint::VerifiedCheckpoint>,
-    > {
-        unimplemented!()
+        _digest: &CheckpointDigest,
+    ) -> StorageResult<Option<VerifiedCheckpoint>> {
+        Ok(None)
     }
     fn get_checkpoint_by_sequence_number(
         &self,
-        _sequence_number: iota_types::messages_checkpoint::CheckpointSequenceNumber,
-    ) -> iota_types::storage::error::Result<
-        Option<iota_types::messages_checkpoint::VerifiedCheckpoint>,
-    > {
-        unimplemented!()
+        _sequence_number: CheckpointSequenceNumber,
+    ) -> StorageResult<Option<VerifiedCheckpoint>> {
+        Ok(None)
     }
     fn get_checkpoint_contents_by_digest(
         &self,
-        _digest: &iota_types::digests::CheckpointContentsDigest,
-    ) -> iota_types::storage::error::Result<
-        Option<iota_types::messages_checkpoint::CheckpointContents>,
-    > {
-        unimplemented!()
+        _digest: &CheckpointContentsDigest,
+    ) -> StorageResult<Option<CheckpointContents>> {
+        Ok(None)
     }
     fn get_checkpoint_contents_by_sequence_number(
         &self,
-        _sequence_number: iota_types::messages_checkpoint::CheckpointSequenceNumber,
-    ) -> iota_types::storage::error::Result<
-        Option<iota_types::messages_checkpoint::CheckpointContents>,
-    > {
-        unimplemented!()
+        _sequence_number: CheckpointSequenceNumber,
+    ) -> StorageResult<Option<CheckpointContents>> {
+        Ok(None)
     }
     fn get_transaction(
         &self,
-        _tx_digest: &iota_types::digests::TransactionDigest,
-    ) -> iota_types::storage::error::Result<
-        Option<std::sync::Arc<iota_types::transaction::VerifiedTransaction>>,
-    > {
-        unimplemented!()
+        _tx_digest: &TransactionDigest,
+    ) -> StorageResult<Option<Arc<VerifiedTransaction>>> {
+        Ok(None)
     }
     fn get_transaction_effects(
         &self,
-        _tx_digest: &iota_types::digests::TransactionDigest,
-    ) -> iota_types::storage::error::Result<Option<iota_types::effects::TransactionEffects>> {
-        unimplemented!()
+        _tx_digest: &TransactionDigest,
+    ) -> StorageResult<Option<TransactionEffects>> {
+        Ok(None)
     }
     fn get_events(
         &self,
-        _event_digest: &iota_types::digests::TransactionEventsDigest,
-    ) -> iota_types::storage::error::Result<Option<iota_types::effects::TransactionEvents>> {
-        unimplemented!()
+        _event_digest: &TransactionEventsDigest,
+    ) -> StorageResult<Option<TransactionEvents>> {
+        Ok(None)
     }
     fn get_full_checkpoint_contents_by_sequence_number(
         &self,
-        _sequence_number: iota_types::messages_checkpoint::CheckpointSequenceNumber,
-    ) -> iota_types::storage::error::Result<
-        Option<iota_types::messages_checkpoint::FullCheckpointContents>,
-    > {
-        unimplemented!()
+        _sequence_number: CheckpointSequenceNumber,
+    ) -> StorageResult<Option<FullCheckpointContents>> {
+        Ok(None)
     }
     fn get_full_checkpoint_contents(
         &self,
-        _digest: &iota_types::digests::CheckpointContentsDigest,
-    ) -> iota_types::storage::error::Result<
-        Option<iota_types::messages_checkpoint::FullCheckpointContents>,
-    > {
-        unimplemented!()
+        _digest: &CheckpointContentsDigest,
+    ) -> StorageResult<Option<FullCheckpointContents>> {
+        Ok(None)
     }
     fn get_checkpoint_data(
         &self,
-        _checkpoint: iota_types::messages_checkpoint::VerifiedCheckpoint,
-        _checkpoint_contents: iota_types::messages_checkpoint::CheckpointContents,
-    ) -> anyhow::Result<iota_types::full_checkpoint_content::CheckpointData> {
-        unimplemented!()
+        _checkpoint: VerifiedCheckpoint,
+        _checkpoint_contents: CheckpointContents,
+    ) -> anyhow::Result<CheckpointData> {
+        Err(anyhow::anyhow!("Mock: get_checkpoint_data not implemented"))
     }
 }
-impl iota_types::storage::ObjectStore for MockRestStateReader {
-    fn get_object(
-        &self,
-        _object_id: &iota_types::base_types::ObjectID,
-    ) -> iota_types::storage::error::Result<Option<iota_types::object::Object>> {
-        unimplemented!()
+
+impl ObjectStore for MockRestStateReader {
+    fn get_object(&self, _object_id: &ObjectID) -> StorageResult<Option<Object>> {
+        Ok(None)
     }
     fn get_object_by_key(
         &self,
-        _object_id: &iota_types::base_types::ObjectID,
-        _version: iota_types::base_types::SequenceNumber,
-    ) -> iota_types::storage::error::Result<Option<iota_types::object::Object>> {
-        unimplemented!()
+        _object_id: &ObjectID,
+        _version: SequenceNumber,
+    ) -> StorageResult<Option<Object>> {
+        Ok(None)
     }
     fn multi_get_objects_by_key(
         &self,
-        _object_keys: &[iota_types::storage::ObjectKey],
-    ) -> iota_types::storage::error::Result<Vec<Option<iota_types::object::Object>>> {
-        unimplemented!()
+        _object_keys: &[ObjectKey],
+    ) -> StorageResult<Vec<Option<Object>>> {
+        Ok(Vec::new())
     }
 }
+
 impl RestStateReader for MockRestStateReader {
     fn get_transaction_checkpoint(
         &self,
-        _digest: &iota_types::digests::TransactionDigest,
-    ) -> iota_types::storage::error::Result<
-        Option<iota_types::messages_checkpoint::CheckpointSequenceNumber>,
-    > {
-        unimplemented!()
+        _digest: &TransactionDigest,
+    ) -> StorageResult<Option<CheckpointSequenceNumber>> {
+        Ok(None)
     }
-    fn get_lowest_available_checkpoint_objects(
-        &self,
-    ) -> iota_types::storage::error::Result<iota_types::messages_checkpoint::CheckpointSequenceNumber>
-    {
-        unimplemented!()
+    fn get_lowest_available_checkpoint_objects(&self) -> StorageResult<CheckpointSequenceNumber> {
+        Ok(0)
     }
-    fn get_chain_identifier(
-        &self,
-    ) -> iota_types::storage::error::Result<iota_types::digests::ChainIdentifier> {
-        unimplemented!()
+    fn get_chain_identifier(&self) -> StorageResult<ChainIdentifier> {
+        Ok(ChainIdentifier::from(CheckpointDigest::new([0u8; 32])))
     }
     fn account_owned_objects_info_iter(
         &self,
         _owner: iota_types::base_types::IotaAddress,
-        _cursor: Option<iota_types::base_types::ObjectID>,
-    ) -> iota_types::storage::error::Result<
-        Box<dyn Iterator<Item = iota_types::storage::AccountOwnedObjectInfo> + '_>,
-    > {
-        unimplemented!()
+        _cursor: Option<ObjectID>,
+    ) -> StorageResult<Box<dyn Iterator<Item = AccountOwnedObjectInfo> + '_>> {
+        Ok(Box::new(std::iter::empty()))
     }
     fn dynamic_field_iter(
         &self,
-        _parent: iota_types::base_types::ObjectID,
-        _cursor: Option<iota_types::base_types::ObjectID>,
-    ) -> iota_types::storage::error::Result<
-        Box<
-            dyn Iterator<
-                    Item = (
-                        iota_types::storage::DynamicFieldKey,
-                        iota_types::storage::DynamicFieldIndexInfo,
-                    ),
-                > + '_,
-        >,
-    > {
-        unimplemented!()
+        _parent: ObjectID,
+        _cursor: Option<ObjectID>,
+    ) -> StorageResult<Box<dyn Iterator<Item = (DynamicFieldKey, DynamicFieldIndexInfo)> + '_>>
+    {
+        Ok(Box::new(std::iter::empty()))
     }
-    fn get_coin_info(
-        &self,
-        _coin_type: &move_core_types::language_storage::StructTag,
-    ) -> iota_types::storage::error::Result<Option<iota_types::storage::CoinInfo>> {
-        unimplemented!()
+    fn get_coin_info(&self, _coin_type: &StructTag) -> StorageResult<Option<CoinInfo>> {
+        Ok(None)
     }
     fn get_epoch_last_checkpoint(
         &self,
-        _epoch_id: iota_types::committee::EpochId,
-    ) -> iota_types::storage::error::Result<
-        Option<iota_types::messages_checkpoint::VerifiedCheckpoint>,
-    > {
-        unimplemented!()
+        _epoch_id: EpochId,
+    ) -> StorageResult<Option<VerifiedCheckpoint>> {
+        Ok(None)
+    }
+    fn list_transactions(
+        &self,
+        _cursor: Option<TransactionDigest>,
+        _limit: u64,
+        _direction: ListDirection,
+    ) -> StorageResult<Vec<(TransactionDigest, Arc<VerifiedTransaction>)>> {
+        Ok(Vec::new())
     }
 }
 

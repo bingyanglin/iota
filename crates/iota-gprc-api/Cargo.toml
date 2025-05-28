@@ -7,32 +7,30 @@ publish = false
 [dependencies]
 tonic = "0.11"
 prost = "0.12"
-tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
-futures = "0.3"
+tokio.workspace = true
+futures.workspace = true
 serde = { version = "1.0", features = ["derive"] }
 config = "0.13"
-async-trait = "0.1"
-tower = "0.4"
-tokio-stream = { workspace = true }
-thiserror = "1.0" # Added for GrpcApiError
-bcs = { workspace = true } # Added for BCS serialization
-anyhow = "1.0" # Added anyhow as a regular dependency
-hex = "0.4" # Added hex for address formatting
+async-trait.workspace = true
+tower.workspace = true
+tokio-stream.workspace = true
+thiserror.workspace = true
+bcs.workspace = true
+anyhow.workspace = true
+hex.workspace = true
 
-iota-types = { path = "../iota-types" } # Adjust path as needed
-iota-sdk2 = { workspace = true }
-move-core-types = { workspace = true } # Moved from dev-dependencies
-iota-protocol-config = { path = "../iota-protocol-config" } # Added for dummy poller
-# iota-storage = { path = "../iota-storage" } # If gRPC services interact directly with storage
-# iota-transaction-executor = { path = "../iota-transaction-executor" } # If needed
+iota-types.workspace = true
+iota-sdk2.workspace = true
+move-core-types.workspace =true
+iota-protocol-config.workspace = true
 
 [build-dependencies]
 tonic-build = "0.11"
 
 [dev-dependencies]
-futures = { workspace = true } # For StreamExt in tests 
-shared-crypto = { workspace = true }
-rand = "0.8" # For generating test keypairs
-iota-types = { path = "../iota-types", features = ["fuzzing"] } # For test types
-iota-protocol-config = { path = "../iota-protocol-config" } # For mock objects
-fastcrypto = { git = "https://github.com/MystenLabs/fastcrypto", rev = "2f502fd8570fe4e9cff36eea5bbd6fef22002898" , features = ["copy_key"] } # Added for Hex::decode in tests
+futures.workspace = true
+shared-crypto.workspace = true
+rand.workspace = true
+iota-types.workspace = true
+iota-protocol-config.workspace = true
+fastcrypto.workspace = true

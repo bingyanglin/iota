@@ -116,11 +116,16 @@ Therefore, to use the public gRPC API, ensure the `grpc_public_api_address` is c
     * Unit tests for `GetTransaction` are implemented and pass using the `MockRestStateReader`.
   * `ObjectGprcService` (`ObjectServiceImpl`) has a new `SubscribeObjectsByOwner` RPC for reactive updates.
     * A dummy poller was used for testing the mechanism; a real event source or more sophisticated mock for object changes would be needed for full end-to-end testing of this RPC.
-  * **Next Steps:**
-    * Complete the implementations for `ListTransactions` and `StreamTransactions` RPCs in `TransactionGprcService` (currently implemented with mock data).
-    * Implement other RPCs for `TransactionGprcService` as needed.
+  * **Next Steps & Current Implementations:**
+    * `TransactionGprcService`:
+        * `ListTransactions` and `StreamTransactions` RPCs are implemented and use the `state_reader` to fetch and stream transaction data. (Unit tests use a `MockRestStateReader`).
     * Further develop the `SubscribeObjectsByOwner` RPC, particularly integrating with a real event source for object changes if the node's state management provides it.
-    * Proceed to implement other services (committee, system, coins, epochs, accounts) with real data fetching and conversions. **DONE (Stubbed):** Basic stub implementations for `CommitteeGprcService`, `SystemGprcService`, `CoinsGprcService`, `EpochsGprcService`, and `AccountsGprcService` are now in place. This includes proto definitions, service skeletons, and integration into the main gRPC server. Next steps for these services involve implementing the actual logic for data fetching and conversions.
+    * `CommitteeGprcService`:
+        * `GetCommittee` RPC is implemented and uses the `state_reader`.
+        * `StreamCommittee` RPC is implemented and uses the `state_reader` with a polling mechanism.
+    * Other Services (`SystemGprcService`, `CoinsGprcService`, `EpochsGprcService`, `AccountsGprcService`):
+        * Basic stub implementations are in place.
+        * Next steps involve implementing the actual logic for data fetching and conversions for their respective RPCs (e.g., `GetSystemInfo` for `SystemGprcService`, `GetCoinInfo` for `CoinsGprcService`, etc.).
 * **Error Handling & Conversions (Ongoing):**
   * Basic `GrpcApiError` and `From<GrpcApiError> for tonic::Status` implemented.
   * Conversion functions are in `src/conversions/` for checkpoints, objects, and transactions.
