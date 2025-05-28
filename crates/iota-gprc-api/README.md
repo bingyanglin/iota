@@ -26,7 +26,7 @@ The subscription logic for new checkpoints should draw inspiration from similar 
       * `SubscribeNewCheckpoints` uses an internal pub/sub mechanism for reactive client updates, while the service itself polls the `state_reader`.
   * `ObjectGprcService`:
     * Unary RPCs: `GetObject`, `ListObjects`.
-    * Server-streaming RPCs: `StreamObjects` (lists current objects).
+    * Server-streaming RPCs: `StreamObjects` (lists current objects by polling the `state_reader`).
   * `TransactionGprcService`:
     * Unary RPCs: `GetTransaction`.
       * `GetTransactionRequest` uses `bytes transaction_digest_bytes` for the ID.
@@ -110,26 +110,20 @@ Therefore, to use the public gRPC API, ensure the `grpc_public_api_address` is c
   * **Checkpoint Service Details:**
     * The `include_full_data` flag is **complete** for `StreamCheckpointsInRange` and `SubscribeNewCheckpoints`.
     * The `subscribe_new_checkpoints` RPC provides a true subscription for gRPC clients. Internally, `CheckpointServiceImpl` uses a reactive pub/sub model: a background task polls the `state_reader` and broadcasts new checkpoints. While this polling is a current design choice, eliminating it would require the underlying node core (`StateReader` interface) to offer direct event notifications.
-* **Implement Other gRPC Services (Transactions Service Started, Object Subscription Added):**
+* **Implement Other gRPC Services:**
   * `TransactionGprcService` (`TransactionServiceImpl`) has been implemented with the `GetTransaction` RPC.
     * This RPC takes `bytes transaction_digest_bytes` in the request and converts `iota_types::transaction::VerifiedTransaction` to `TransactionGprc`.
     * Unit tests for `GetTransaction` are implemented and pass using the `MockRestStateReader`.
-  * `ObjectGprcService` (`ObjectServiceImpl`) has a new `SubscribeObjectsByOwner` RPC for reactive updates.
-    * A dummy poller was used for testing the mechanism; a real event source or more sophisticated mock for object changes would be needed for full end-to-end testing of this RPC.
 
   * **Current Implementations (Continued from above & new):**
     * `TransactionGprcService`:
       * `GetTransaction` RPC is implemented (as mentioned under "Implement Other gRPC Services").
-      * `ListTransactions` and `StreamTransactions` RPCs are implemented and use the `state_reader` to fetch and stream transaction data. (Unit tests use a `MockRestStateReader`).
+      * `ListTransactions` and `StreamTransactions` RPCs are implemented and use the `state_reader` to fetch and stream transaction data (StreamTransactions uses a polling mechanism). (Unit tests use a `MockRestStateReader`).
     * `CommitteeGprcService`:
       * `GetCommittee` RPC is implemented and uses the `state_reader`.
-      * `StreamCommittee` RPC is implemented and uses the `state_reader` with a polling mechanism.
     * `SystemGprcService` (`SystemServiceImpl`):
       * `GetSystemInfo` RPC is implemented:
         * Returns node version (currently placeholder) and uptime.
-        * Tested.
-      * `SubscribeSystemEvents` RPC is implemented:
-        * Streams mock `NodeStatusChanged` events periodically.
         * Tested.
     * `CoinsGprcService` (`CoinsServiceImpl`):
       * `GetCoinInfo` RPC is implemented:
@@ -138,7 +132,6 @@ Therefore, to use the public gRPC API, ensure the `grpc_public_api_address` is c
         * Does not currently populate `CoinMetadata` details (like name, symbol, decimals).
         * Tested (success, not found, invalid tag).
       * `ListCoins` RPC remains a stub (returns `Unimplemented`).
-      * `SubscribeCoinEvents` RPC remains a stub (returns `Unimplemented`).
     * Other Services (`EpochsGprcService`, `AccountsGprcService`):
       * Basic stub implementations are in place.
     * Error Handling & Conversions:
