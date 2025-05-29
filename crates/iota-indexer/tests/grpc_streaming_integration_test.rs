@@ -10,8 +10,8 @@ use std::{
 use diesel::prelude::*;
 use iota_grpc_api::proto::iota::gprc::v1::{
     CheckpointDataGprc, CheckpointDigestGprc, CheckpointTransactionGprc, GetCheckpointRequest,
-    ListCheckpointsRequest, SignedCheckpointSummaryGprc, StreamCheckpointsInRangeRequest,
-    StreamedCheckpoint, SubscribeNewCheckpointsRequest, VerifiedTransactionGprc,
+    ListCheckpointsRequest, SignedCheckpointSummaryGprc, StreamedCheckpoint,
+    SubscribeNewCheckpointsRequest, VerifiedTransactionGprc,
     checkpoint_gprc_service_server::{CheckpointGprcService, CheckpointGprcServiceServer},
     streamed_checkpoint,
 };
@@ -88,8 +88,6 @@ impl MockCheckpointService {
 
 #[tonic::async_trait]
 impl CheckpointGprcService for MockCheckpointService {
-    type StreamCheckpointsInRangeStream =
-        tokio_stream::wrappers::ReceiverStream<Result<StreamedCheckpoint, Status>>;
     type SubscribeNewCheckpointsStream =
         tokio_stream::wrappers::ReceiverStream<Result<StreamedCheckpoint, Status>>;
 
@@ -126,15 +124,6 @@ impl CheckpointGprcService for MockCheckpointService {
         ))
     }
 
-    async fn stream_checkpoints_in_range(
-        &self,
-        _request: Request<StreamCheckpointsInRangeRequest>,
-    ) -> Result<Response<Self::StreamCheckpointsInRangeStream>, Status> {
-        Err(Status::unimplemented(
-            "stream_checkpoints_in_range not implemented in mock",
-        ))
-    }
-
     async fn subscribe_new_checkpoints(
         &self,
         request: Request<SubscribeNewCheckpointsRequest>,
@@ -145,7 +134,7 @@ impl CheckpointGprcService for MockCheckpointService {
         );
         let req_inner = request.into_inner();
         let effective_start_seq = req_inner
-            .start_from_sequence_number
+            .start_from_checkpoint_sequence_number
             .and_then(|s| s.parse::<u64>().ok())
             .unwrap_or(self.start_seq); // Use requested start, or mock's default if None
 
