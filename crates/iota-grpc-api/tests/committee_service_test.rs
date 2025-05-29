@@ -11,7 +11,12 @@ use iota_grpc_api::{
     server::{GrpcServer, StateReader},
 };
 use iota_types::crypto::KeypairTraits; // For kp.public()
-use iota_types::crypto::{AuthorityKeyPair, AuthorityPublicKeyBytes};
+use iota_types::{
+    crypto::{AuthorityKeyPair, AuthorityPublicKeyBytes},
+    error::{IotaError, UserInputError},
+    quorum_driver_types::{QuorumDriverError, QuorumDriverResponse},
+    transaction::SignedTransaction,
+};
 use rand::{SeedableRng, rngs::StdRng};
 use tokio::{sync::broadcast, time::sleep};
 
@@ -204,6 +209,7 @@ impl iota_types::storage::ObjectStore for MockRestStateReader {
         unimplemented!()
     }
 }
+#[async_trait::async_trait]
 impl iota_types::storage::RestStateReader for MockRestStateReader {
     fn get_transaction_checkpoint(
         &self,
@@ -275,6 +281,19 @@ impl iota_types::storage::RestStateReader for MockRestStateReader {
         )>,
     > {
         Ok(Vec::new())
+    }
+
+    async fn execute_transaction_for_gprc(
+        &self,
+        _transaction: SignedTransaction,
+    ) -> std::result::Result<QuorumDriverResponse, QuorumDriverError> {
+        Err(QuorumDriverError::QuorumDriverInternal(
+            IotaError::UserInput {
+                error: UserInputError::Unsupported(
+                    "execute_transaction_for_gprc is not supported in this mock.".to_string(),
+                ),
+            },
+        ))
     }
 }
 

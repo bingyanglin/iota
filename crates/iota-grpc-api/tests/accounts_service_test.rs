@@ -16,7 +16,6 @@ use iota_grpc_api::{
 };
 use iota_types::{
     base_types::{AuthorityName, IotaAddress, MoveObjectType, ObjectID, SequenceNumber},
-    coin::Coin,
     committee::{Committee, EpochId, StakeUnit, TOTAL_VOTING_POWER},
     crypto::{AuthorityKeyPair, AuthoritySignInfo, AuthorityStrongQuorumSignInfo, KeypairTraits},
     digests::{
@@ -24,6 +23,7 @@ use iota_types::{
         TransactionEventsDigest,
     },
     effects::{TransactionEffects, TransactionEvents},
+    error::{IotaError, UserInputError},
     full_checkpoint_content::CheckpointData,
     gas::GasCostSummary,
     message_envelope::{Envelope, Message, VerifiedEnvelope},
@@ -32,11 +32,12 @@ use iota_types::{
         VerifiedCheckpoint,
     },
     object::{Data, MoveObject, Object, Owner},
+    quorum_driver_types::{QuorumDriverError, QuorumDriverResponse},
     storage::{
         AccountOwnedObjectInfo, CoinInfo, DynamicFieldIndexInfo, DynamicFieldKey, ListDirection,
         ObjectKey, ObjectStore, ReadStore, RestStateReader, error::Result as StorageResult,
     },
-    transaction::VerifiedTransaction,
+    transaction::{SignedTransaction, VerifiedTransaction},
 };
 use move_core_types::language_storage::{StructTag, TypeTag};
 use rand::thread_rng;
@@ -50,7 +51,7 @@ fn mock_object_id(id: u8) -> ObjectID {
 fn mock_coin_object(id_byte: u8, version_u64: u64, owner_address: IotaAddress) -> Object {
     let object_id = mock_object_id(id_byte);
     let aptos_coin_struct_tag = StructTag::from_str("0x1::aptos_coin::AptosCoin").unwrap();
-    let coin_type_tag = TypeTag::Struct(Box::new(aptos_coin_struct_tag.clone()));
+    let _coin_type_tag = TypeTag::Struct(Box::new(aptos_coin_struct_tag.clone()));
     let move_object_type = MoveObjectType::from(aptos_coin_struct_tag);
 
     let move_object = MoveObject::new_coin(
@@ -265,6 +266,7 @@ impl ObjectStore for MockRestStateReader {
     }
 }
 
+#[async_trait::async_trait]
 impl RestStateReader for MockRestStateReader {
     fn get_transaction_checkpoint(
         &self,
@@ -342,6 +344,19 @@ impl RestStateReader for MockRestStateReader {
         _direction: ListDirection,
     ) -> StorageResult<Vec<(TransactionDigest, Arc<VerifiedTransaction>)>> {
         Ok(Vec::new())
+    }
+
+    async fn execute_transaction_for_gprc(
+        &self,
+        _transaction: SignedTransaction,
+    ) -> std::result::Result<QuorumDriverResponse, QuorumDriverError> {
+        Err(QuorumDriverError::QuorumDriverInternal(
+            IotaError::UserInput {
+                error: UserInputError::Unsupported(
+                    "execute_transaction_for_gprc is not supported in this mock.".to_string(),
+                ),
+            },
+        ))
     }
 }
 

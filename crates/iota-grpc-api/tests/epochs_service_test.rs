@@ -22,6 +22,7 @@ use iota_types::{
         TransactionEventsDigest,
     },
     effects::{TransactionEffects, TransactionEvents},
+    error::{IotaError, UserInputError},
     full_checkpoint_content::CheckpointData,
     gas::GasCostSummary,
     message_envelope::{Envelope, Message, VerifiedEnvelope},
@@ -30,11 +31,12 @@ use iota_types::{
         VerifiedCheckpoint,
     },
     object::Object,
+    quorum_driver_types::{QuorumDriverError, QuorumDriverResponse},
     storage::{
         AccountOwnedObjectInfo, CoinInfo, DynamicFieldIndexInfo, DynamicFieldKey, ListDirection,
         ObjectKey, ObjectStore, ReadStore, RestStateReader, error::Result as StorageResult,
     },
-    transaction::VerifiedTransaction,
+    transaction::{SignedTransaction, VerifiedTransaction},
 };
 use move_core_types::language_storage::StructTag;
 use rand::thread_rng;
@@ -240,6 +242,7 @@ impl ObjectStore for MockRestStateReader {
     }
 }
 
+#[async_trait::async_trait]
 impl RestStateReader for MockRestStateReader {
     fn get_transaction_checkpoint(
         &self,
@@ -284,6 +287,19 @@ impl RestStateReader for MockRestStateReader {
         _direction: ListDirection,
     ) -> StorageResult<Vec<(TransactionDigest, Arc<VerifiedTransaction>)>> {
         Ok(Vec::new())
+    }
+
+    async fn execute_transaction_for_gprc(
+        &self,
+        _transaction: SignedTransaction,
+    ) -> std::result::Result<QuorumDriverResponse, QuorumDriverError> {
+        Err(QuorumDriverError::QuorumDriverInternal(
+            IotaError::UserInput {
+                error: UserInputError::Unsupported(
+                    "execute_transaction_for_gprc is not supported in this mock.".to_string(),
+                ),
+            },
+        ))
     }
 }
 

@@ -289,20 +289,36 @@ impl CheckpointGprcService for CheckpointServiceImpl {
             req
         );
 
-        let limit = req.limit.map_or(10_u32, |l: u32| l.min(100_u32).max(1_u32)) as usize; // Added explicit type for l
+        let limit = req.limit.map_or(10_u32, |l: u32| l.min(100_u32).max(1_u32)) as usize;
 
-        let start_seq_num = req
-            .start_sequence_number
-            .as_deref()
-            .and_then(|s| s.parse::<u64>().ok())
-            .ok_or_else(|| {
-                Status::invalid_argument("start_sequence_number must be a valid u64 string")
-            })?;
+        let start_seq_num = match req.start_sequence_number.as_deref() {
+            Some(s) => s.parse::<u64>().map_err(|_| {
+                Status::invalid_argument(
+                    "start_sequence_number must be a valid u64 string".to_string(),
+                )
+            })?,
+            None => {
+                // Default to 0 if not provided, or handle as error if strictly required by API
+                // spec For now, let's assume it's required as per previous
+                // logic for None.
+                return Err(Status::invalid_argument(
+                    "start_sequence_number is required".to_string(),
+                ));
+            }
+        };
 
-        let end_seq_num_opt = req
-            .end_sequence_number
-            .as_deref()
-            .and_then(|s| s.parse::<u64>().ok());
+        let end_seq_num_opt = match req.end_sequence_number.as_deref() {
+            Some(s) if !s.is_empty() => match s.parse::<u64>() {
+                Ok(val) => Some(val),
+                Err(_) => {
+                    return Err(Status::invalid_argument(
+                        "If provided, end_sequence_number must be a valid u64 string".to_string(),
+                    ));
+                }
+            },
+            Some(_) => None, // Handles empty string as None
+            None => None,
+        };
 
         let direction =
             match Direction::try_from(req.direction.unwrap_or(Direction::Ascending as i32)) {

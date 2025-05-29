@@ -1,12 +1,15 @@
 use bcs;
 use iota_types::{
-    base_types::ExecutionDigests,
+    base_types::{ExecutionDigests /* ObjectID */},
     crypto::{self, AuthorityStrongQuorumSignInfo},
     digests,
-    effects::TransactionEffects,
+    effects::{TransactionEffects /* TransactionEffectsAPI */},
     full_checkpoint_content::{CheckpointData, CheckpointTransaction},
-    message_envelope::{Envelope, Message},
-    messages_checkpoint::{CheckpointContents, CheckpointSummary, VerifiedCheckpoint},
+    message_envelope::{Envelope, Message as CoreMessage},
+    messages_checkpoint::{
+        CheckpointContents, // CheckpointSequenceNumber,
+        CheckpointSummary, VerifiedCheckpoint,
+    },
     signature::GenericSignature,
     transaction::{self, SenderSignedData, TransactionData},
 };
@@ -207,10 +210,7 @@ mod tests {
 
     use iota_types::{
         base_types::{ExecutionDigests as CoreExecutionDigests, IotaAddress, ObjectID, ObjectRef},
-        crypto::{
-            AuthorityStrongQuorumSignInfo as CoreAuthorityStrongQuorumSignInfo,
-            Signature as CoreSignature,
-        },
+        crypto::AuthorityStrongQuorumSignInfo as CoreAuthorityStrongQuorumSignInfo,
         digests::{
             CheckpointContentsDigest as CoreCheckpointContentsDigest,
             CheckpointDigest as CoreCheckpointDigest, ObjectDigest as CoreObjectDigest,
@@ -220,7 +220,6 @@ mod tests {
             CheckpointData as CoreCheckpointData,
             CheckpointTransaction as CoreCheckpointTransaction,
         },
-        gas::GasCostSummary as CoreGasCostSummary,
         message_envelope::{Envelope as CoreEnvelope, Message as CoreMessage},
         messages_checkpoint::{
             CheckpointContents as CoreCheckpointContents,
@@ -263,7 +262,7 @@ mod tests {
             } else {
                 None
             },
-            epoch_rolling_gas_cost_summary: CoreGasCostSummary::default(),
+            epoch_rolling_gas_cost_summary: Default::default(),
             timestamp_ms: 123456789000 + seq_num * 1000,
             checkpoint_commitments: Default::default(),
             end_of_epoch_data: None,

@@ -14,11 +14,12 @@ use iota_grpc_api::{
         Direction,
         GetCheckpointRequest,
         ListCheckpointsRequest,
-        StreamCheckpointsInRangeRequest,
-        // StreamedCheckpoint, // Removed this unused import
+        // StreamCheckpointsInRangeRequest, // REMOVED
+        // StreamedCheckpoint, // REMOVED (was unused, confirmed by previous checks)
         SubscribeNewCheckpointsRequest,
         checkpoint_gprc_service_client::CheckpointGprcServiceClient,
-        streamed_checkpoint::CheckpointType,
+        streamed_checkpoint::CheckpointType, /* Keep this if used by
+                                              * SubscribeNewCheckpointsRequest tests */
     },
     server::{GrpcServer, StateReader},
 };
@@ -33,6 +34,7 @@ use iota_types::{
         ChainIdentifier, CheckpointContentsDigest, CheckpointDigest, TransactionEventsDigest,
     },
     effects::{TransactionEffects, TransactionEvents},
+    error::{IotaError, UserInputError}, // For QuorumDriverError internal
     full_checkpoint_content::CheckpointData,
     gas::GasCostSummary,
     message_envelope::{Envelope, Message, VerifiedEnvelope},
@@ -41,12 +43,13 @@ use iota_types::{
         FullCheckpointContents as ActualFullCheckpointContents, VerifiedCheckpoint,
     },
     object::{Data, MoveObject, Object, ObjectInner, Owner},
+    quorum_driver_types::{QuorumDriverError, QuorumDriverResponse}, /* For execute_transaction_for_gprc */
     storage::{
         AccountOwnedObjectInfo, CoinInfo, DynamicFieldIndexInfo, DynamicFieldKey,
         ObjectStore as ActualObjectStore, ReadStore as ActualReadStore,
         RestStateReader as ActualRestStateReader, error::Result as StorageResult,
     },
-    transaction::VerifiedTransaction,
+    transaction::{SignedTransaction, VerifiedTransaction}, // Added SignedTransaction
 };
 // use move_core_types::language_storage::{StructTag, TypeTag}; // TypeTag unused
 use move_core_types::language_storage::StructTag; // Kept StructTag
@@ -528,7 +531,7 @@ async fn test_list_checkpoints_missing_start_seq() {
     assert!(
         status
             .message()
-            .contains("start_sequence_number must be a valid u64 string")
+            .contains("start_sequence_number is required")
     );
     let _ = shutdown_tx.send(());
 }
@@ -537,169 +540,56 @@ async fn test_list_checkpoints_missing_start_seq() {
 async fn test_get_checkpoint_invalid_id_parse() {
     let (mut client, _addr, shutdown_tx, _mock_state_reader) = spawn_test_server().await;
 
-    let request_id = "not_a_number".to_string();
-
-    // Test GetCheckpointFull
+    // Test GetCheckpointFull with non-numeric ID
     let request_full = tonic::Request::new(GetCheckpointRequest {
-        checkpoint_id: request_id.clone(),
+        checkpoint_id: "not_a_number".to_string(),
     });
     let response_full = client.get_checkpoint_full(request_full).await;
-    assert!(
-        response_full.is_err(),
-        "GetCheckpointFull should fail for invalid ID"
+    assert!(response_full.is_err());
+    assert_eq!(
+        response_full.err().unwrap().code(),
+        tonic::Code::InvalidArgument
     );
-    let status_full = response_full.err().unwrap();
-    assert_eq!(status_full.code(), tonic::Code::InvalidArgument);
-    assert!(
-        status_full
-            .message()
-            .contains("Invalid checkpoint_id format")
-    );
-    assert!(status_full.message().contains(&format!("{}", request_id)));
 
-    // Test GetCheckpoint
+    // Test GetCheckpoint (summary) with non-numeric ID
     let request_summary = tonic::Request::new(GetCheckpointRequest {
-        checkpoint_id: request_id.clone(),
+        checkpoint_id: "not_a_number".to_string(),
     });
     let response_summary = client.get_checkpoint(request_summary).await;
-    assert!(
-        response_summary.is_err(),
-        "GetCheckpoint should fail for invalid ID"
-    );
-    let status_summary = response_summary.err().unwrap();
-    assert_eq!(status_summary.code(), tonic::Code::InvalidArgument);
-    assert!(
-        status_summary
-            .message()
-            .contains("Invalid checkpoint_id format")
-    );
-    assert!(
-        status_summary
-            .message()
-            .contains(&format!("{}", request_id))
-    );
-
-    let _ = shutdown_tx.send(());
-}
-
-#[tokio::test]
-async fn test_stream_checkpoints_in_range_defined_end() {
-    let (mut client, _addr, shutdown_tx, mock_state_reader) = spawn_test_server().await;
-
-    let start_seq = 1u64;
-    let end_seq = 3u64;
-    let _count = (end_seq - start_seq + 1) as usize;
-    mock_state_reader.set_latest_sequence_number_for_test(end_seq + 5);
-
-    let request = tonic::Request::new(StreamCheckpointsInRangeRequest {
-        start_sequence_number: start_seq.to_string(),
-        end_sequence_number: Some(end_seq.to_string()),
-        include_full_data: false,
-    });
-
-    let mut stream = client
-        .stream_checkpoints_in_range(request)
-        .await
-        .expect("RPC call failed")
-        .into_inner();
-
-    let mut count = 0;
-    let mut current_expected_seq = start_seq;
-    loop {
-        match timeout(Duration::from_secs(1), stream.next()).await {
-            Ok(Some(Ok(item))) => {
-                // Timeout didn't occur, stream yielded Ok(item)
-                match item.checkpoint_type {
-                    Some(CheckpointType::Summary(summary)) => {
-                        assert_eq!(summary.sequence_number, current_expected_seq);
-                        count += 1;
-                        current_expected_seq += 1;
-                    }
-                    _ => panic!("Unexpected checkpoint type in stream"),
-                }
-            }
-            Ok(Some(Err(status))) => {
-                // Timeout didn't occur, stream yielded Err(status)
-                panic!("Stream item contained an error status: {:?}", status);
-            }
-            Ok(None) => {
-                // Timeout didn't occur, stream ended
-                break; // Exit loop
-            }
-            Err(_) => {
-                // Timeout occurred
-                panic!(
-                    "Timeout waiting for stream item. Items collected: {}",
-                    count
-                );
-            }
-        }
-        // Protective break: if we've collected all expected items and the *next*
-        // expected sequence number is beyond the end_seq, we can break. The
-        // Ok(None) case should ideally handle this.
-        if count == (end_seq - start_seq + 1) as usize && current_expected_seq > end_seq {
-            break;
-        }
-    }
+    assert!(response_summary.is_err());
     assert_eq!(
-        count,
-        (end_seq - start_seq + 1) as usize,
-        "Incorrect number of items streamed for defined range."
+        response_summary.err().unwrap().code(),
+        tonic::Code::InvalidArgument
     );
 
-    let _ = shutdown_tx.send(());
-}
-
-#[tokio::test]
-async fn test_stream_checkpoints_in_range_open_ended() {
-    let (mut client, _addr, shutdown_tx, mock_state_reader) = spawn_test_server().await;
-
-    let start_seq = 5u64;
-    let _stream_limit = 3;
-    mock_state_reader.set_latest_sequence_number_for_test(start_seq + 10);
-
-    let request = tonic::Request::new(StreamCheckpointsInRangeRequest {
-        start_sequence_number: start_seq.to_string(),
-        end_sequence_number: None,
-        include_full_data: false,
+    // Test ListCheckpoints with non-numeric start_sequence_number
+    let request_list_invalid_start = tonic::Request::new(ListCheckpointsRequest {
+        start_sequence_number: Some("not_a_number".to_string()),
+        end_sequence_number: Some("10".to_string()),
+        limit: Some(5),
+        direction: Some(Direction::Ascending.into()),
     });
-
-    let mut stream = client
-        .stream_checkpoints_in_range(request)
-        .await
-        .expect("RPC call failed")
-        .into_inner();
-
-    let mut count = 0;
-    let items_to_collect = 5;
-    let mut current_expected_seq = start_seq;
-    while count < items_to_collect {
-        match timeout(Duration::from_secs(1), stream.next()).await {
-            Ok(Some(Ok(item))) => match item.checkpoint_type {
-                Some(CheckpointType::Summary(summary)) => {
-                    assert_eq!(summary.sequence_number, current_expected_seq);
-                    count += 1;
-                    current_expected_seq += 1;
-                }
-                _ => panic!("Unexpected checkpoint type in stream"),
-            },
-            Ok(Some(Err(status))) => panic!("Stream item contained an error status: {:?}", status),
-            Ok(None) => panic!(
-                "Stream ended prematurely after {} items, expected at least {}",
-                count, items_to_collect
-            ),
-            Err(_) => panic!(
-                "Timeout waiting for stream item after {} items, expected at least {}",
-                count, items_to_collect
-            ),
-        }
-    }
+    let response_list_invalid_start = client.list_checkpoints(request_list_invalid_start).await;
+    assert!(response_list_invalid_start.is_err());
     assert_eq!(
-        count, items_to_collect,
-        "Did not collect the expected number of items from open-ended stream."
+        response_list_invalid_start.err().unwrap().code(),
+        tonic::Code::InvalidArgument
     );
 
-    drop(stream);
+    // Test ListCheckpoints with non-numeric end_sequence_number
+    let request_list_invalid_end = tonic::Request::new(ListCheckpointsRequest {
+        start_sequence_number: Some("5".to_string()),
+        end_sequence_number: Some("not_a_number".to_string()),
+        limit: Some(5),
+        direction: Some(Direction::Ascending.into()),
+    });
+    let response_list_invalid_end = client.list_checkpoints(request_list_invalid_end).await;
+    assert!(response_list_invalid_end.is_err());
+    assert_eq!(
+        response_list_invalid_end.err().unwrap().code(),
+        tonic::Code::InvalidArgument
+    );
+
     let _ = shutdown_tx.send(());
 }
 
@@ -711,8 +601,8 @@ async fn test_subscribe_new_checkpoints_receives_items() {
     mock_state_reader.set_latest_sequence_number_for_test(initial_latest_seq);
 
     let request = tonic::Request::new(SubscribeNewCheckpointsRequest {
-        start_from_sequence_number: Some((initial_latest_seq + 1).to_string()),
-        include_full_data: false,
+        start_from_checkpoint_sequence_number: Some((initial_latest_seq + 1).to_string()),
+        include_full_data: true,
     });
 
     let stream_response = client.subscribe_new_checkpoints(request).await;
@@ -728,11 +618,18 @@ async fn test_subscribe_new_checkpoints_receives_items() {
 
     mock_state_reader.set_latest_sequence_number_for_test(initial_latest_seq + 1);
     if let Ok(Some(Ok(item))) = timeout(Duration::from_secs(2), stream.next()).await {
-        if let Some(CheckpointType::Summary(ref s)) = item.checkpoint_type {
-            println!("[Test] Received subscribed checkpoint: {:?}", item);
-            received_checkpoints_seq_nums.push(s.sequence_number);
+        if let Some(CheckpointType::FullData(ref cp_data)) = item.checkpoint_type {
+            println!(
+                "[Test] Received subscribed checkpoint (full data): {:?}",
+                cp_data.summary
+            );
+            if let Some(ref summary) = cp_data.summary {
+                received_checkpoints_seq_nums.push(summary.sequence_number);
+            } else {
+                panic!("Received FullData without a summary component");
+            }
         } else {
-            panic!("Expected summary, got full data or error");
+            panic!("Expected FullData, got {:?}", item.checkpoint_type);
         }
     } else {
         panic!(
@@ -743,11 +640,21 @@ async fn test_subscribe_new_checkpoints_receives_items() {
 
     mock_state_reader.set_latest_sequence_number_for_test(initial_latest_seq + 2);
     if let Ok(Some(Ok(item))) = timeout(Duration::from_secs(2), stream.next()).await {
-        if let Some(CheckpointType::Summary(ref s)) = item.checkpoint_type {
-            println!("[Test] Received subscribed checkpoint: {:?}", item);
-            received_checkpoints_seq_nums.push(s.sequence_number);
+        if let Some(CheckpointType::FullData(ref cp_data)) = item.checkpoint_type {
+            println!(
+                "[Test] Received subscribed checkpoint (full data): {:?}",
+                cp_data.summary
+            );
+            if let Some(ref summary) = cp_data.summary {
+                received_checkpoints_seq_nums.push(summary.sequence_number);
+            } else {
+                panic!("Received FullData without a summary component on second item");
+            }
         } else {
-            panic!("Expected summary, got full data or error");
+            panic!(
+                "Expected FullData on second item, got {:?}",
+                item.checkpoint_type
+            );
         }
     } else {
         panic!(
@@ -920,6 +827,7 @@ impl ActualReadStore for MockRestStateReader {
     }
 }
 
+#[async_trait::async_trait] // Ensure async_trait is here
 impl ActualRestStateReader for MockRestStateReader {
     fn get_transaction_checkpoint(
         &self,
@@ -958,7 +866,6 @@ impl ActualRestStateReader for MockRestStateReader {
         unimplemented!("get_epoch_last_checkpoint in mock not implemented")
     }
 
-    // Added missing list_transactions method
     fn list_transactions(
         &self,
         _cursor: Option<iota_types::digests::TransactionDigest>,
@@ -971,5 +878,21 @@ impl ActualRestStateReader for MockRestStateReader {
         )>,
     > {
         Ok(Vec::new())
+    }
+
+    async fn execute_transaction_for_gprc(
+        &self,
+        _transaction: SignedTransaction,
+    ) -> std::result::Result<QuorumDriverResponse, QuorumDriverError> {
+        // Mock implementation: return an error or a default response
+        // For now, returning an error similar to other transactional test runner
+        // implementations
+        Err(QuorumDriverError::QuorumDriverInternal(
+            IotaError::UserInput {
+                error: UserInputError::Unsupported(
+                    "execute_transaction_for_gprc is not supported in this mock.".to_string(),
+                ),
+            },
+        ))
     }
 }

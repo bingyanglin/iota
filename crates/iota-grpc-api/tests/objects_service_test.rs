@@ -7,7 +7,6 @@ use std::{
 };
 
 use anyhow; // Added anyhow
-use futures::StreamExt;
 use iota_grpc_api::{
     proto::iota::gprc::v1::{
         GetObjectRequest,
@@ -31,6 +30,7 @@ use iota_types::{
         TransactionEventsDigest,
     },
     effects::{TransactionEffects, TransactionEvents},
+    error::{IotaError, UserInputError}, // Added for QuorumDriverError internal
     full_checkpoint_content::CheckpointData,
     gas::GasCostSummary, // Added GasCostSummary
     message_envelope::{Envelope, Message, VerifiedEnvelope}, /* Added Message, Envelope,
@@ -43,6 +43,7 @@ use iota_types::{
         VerifiedCheckpoint,
     },
     object::{Data, MoveObject, Object, ObjectInner, Owner},
+    quorum_driver_types::{QuorumDriverError, QuorumDriverResponse}, /* Added for execute_transaction_for_gprc */
     storage::{
         AccountOwnedObjectInfo,
         CoinInfo,
@@ -55,7 +56,7 @@ use iota_types::{
         RestStateReader as ActualRestStateReader,
         error::Result as StorageResult,
     },
-    transaction::VerifiedTransaction,
+    transaction::{SignedTransaction, VerifiedTransaction}, // Added SignedTransaction
 };
 use move_core_types::language_storage::StructTag;
 use rand::thread_rng; // Added rand::thread_rng
@@ -320,6 +321,7 @@ impl ActualReadStore for MockRestStateReader {
     }
 }
 
+#[async_trait::async_trait] // Ensure async_trait is here
 impl ActualRestStateReader for MockRestStateReader {
     fn get_transaction_checkpoint(
         &self,
@@ -397,6 +399,19 @@ impl ActualRestStateReader for MockRestStateReader {
         _direction: ListDirection,
     ) -> StorageResult<Vec<(TransactionDigest, Arc<VerifiedTransaction>)>> {
         Ok(Vec::new())
+    }
+
+    async fn execute_transaction_for_gprc(
+        &self,
+        _transaction: SignedTransaction,
+    ) -> std::result::Result<QuorumDriverResponse, QuorumDriverError> {
+        Err(QuorumDriverError::QuorumDriverInternal(
+            IotaError::UserInput {
+                error: UserInputError::Unsupported(
+                    "execute_transaction_for_gprc is not supported in this mock.".to_string(),
+                ),
+            },
+        ))
     }
 }
 
