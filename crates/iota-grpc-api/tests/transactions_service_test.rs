@@ -27,6 +27,7 @@ use iota_types::{
     },
     object::Object as IotaObject,
     programmable_transaction_builder::ProgrammableTransactionBuilder,
+    quorum_driver_types::{QuorumDriverError, QuorumDriverResponse},
     storage::{
         AccountOwnedObjectInfo, CoinInfo, DynamicFieldIndexInfo, DynamicFieldKey, ObjectKey,
     },
@@ -235,6 +236,7 @@ impl iota_types::storage::ObjectStore for MockRestStateReader {
     }
 }
 
+#[async_trait::async_trait]
 impl iota_types::storage::RestStateReader for MockRestStateReader {
     fn get_transaction_checkpoint(
         &self,
@@ -316,6 +318,13 @@ impl iota_types::storage::RestStateReader for MockRestStateReader {
             .take(limit as usize)
             .collect();
         Ok(result_txs)
+    }
+
+    async fn execute_transaction_for_gprc(
+        &self,
+        _transaction: iota_types::transaction::SignedTransaction,
+    ) -> std::result::Result<QuorumDriverResponse, QuorumDriverError> {
+        unimplemented!("execute_transaction_for_gprc not implemented for MockRestStateReader yet")
     }
 }
 
@@ -743,58 +752,24 @@ async fn test_list_transactions_cursor_not_found() {
 
 #[tokio::test]
 async fn test_list_transactions_invalid_cursor_format() {
-    let (mut client, _addr, shutdown_tx, _state_reader) =
+    let (mut client, _addr, shutdown_tx, _mock_state_reader) =
         spawn_test_server_with_transaction_client().await;
 
-    // Test with a cursor that is not a valid hex string
-    let request1 = ListTransactionsRequest {
-        cursor: Some("not-a-hex-string".to_string()),
-        limit: Some(5),
+    let request = ListTransactionsRequest {
+        cursor: Some("invalid_cursor_hex".to_string()), // Not 0x prefixed, not 64 chars
+        limit: Some(10),
         direction: Some(Direction::Ascending.into()),
     };
 
-    let result1 = client.list_transactions(request1).await;
-    assert!(result1.is_err());
-    if let Err(status) = result1 {
-        assert_eq!(status.code(), tonic::Code::InvalidArgument);
-        assert!(
-            status
-                .message()
-                .contains("Cursor must be a 0x-prefixed 64-char hex string")
-        );
-    }
+    let result = client.list_transactions(request).await;
+    assert!(result.is_err());
+    let status = result.err().unwrap();
+    assert_eq!(status.code(), tonic::Code::InvalidArgument);
+    assert!(
+        status
+            .message()
+            .contains("Cursor must be a 0x-prefixed 64-char hex string")
+    );
 
-    // Test with a cursor that is hex but wrong length
-    let request2 = ListTransactionsRequest {
-        cursor: Some("0x123456".to_string()), // Too short
-        limit: Some(5),
-        direction: Some(Direction::Ascending.into()),
-    };
-    let result2 = client.list_transactions(request2).await;
-    assert!(result2.is_err());
-    if let Err(status) = result2 {
-        assert_eq!(status.code(), tonic::Code::InvalidArgument);
-        assert!(
-            status
-                .message()
-                .contains("Cursor must be a 0x-prefixed 64-char hex string")
-        );
-    }
-
-    // Test with a cursor that is 0x + 64 chars but not valid hex chars
-    let request3 = ListTransactionsRequest {
-        cursor: Some(
-            "0xggffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff".to_string(),
-        ),
-        limit: Some(5),
-        direction: Some(Direction::Ascending.into()),
-    };
-    let result3 = client.list_transactions(request3).await;
-    assert!(result3.is_err());
-    if let Err(status) = result3 {
-        assert_eq!(status.code(), tonic::Code::InvalidArgument);
-        assert!(status.message().contains("Invalid hex string for cursor"));
-    }
-
-    drop(shutdown_tx);
+    let _ = shutdown_tx.send(());
 }

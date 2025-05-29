@@ -96,19 +96,10 @@ message StreamedCheckpoint {
     // string error_message = 3;
 }
 
-// Request for streaming a range of checkpoints
-message StreamCheckpointsInRangeRequest {
-    string start_sequence_number = 1; // Required: u64 as string
-    optional string end_sequence_number = 2; // Optional: u64 as string. If not set, could stream indefinitely or up to a server-defined max from start.
-    bool include_full_data = 3; // Option to request full CheckpointDataGprc instead of just summaries
-}
-
 // Request for subscribing to new checkpoints
 message SubscribeNewCheckpointsRequest {
-    // Optional: specify a sequence number to start streaming from (excluding already processed ones).
-    // If not provided, starts from the next new checkpoint after subscription.
-    optional string start_from_sequence_number = 1; // u64 as string
-    bool include_full_data = 2; // Option to request full CheckpointDataGprc
+    optional string start_from_checkpoint_sequence_number = 1;
+    bool include_full_data = 2;
 }
 
 service CheckpointGprcService {
@@ -122,6 +113,5 @@ service CheckpointGprcService {
     rpc ListCheckpoints(ListCheckpointsRequest) returns (CheckpointPageGprc) {}
 
     // New Server-Streaming RPCs
-    rpc StreamCheckpointsInRange(StreamCheckpointsInRangeRequest) returns (stream StreamedCheckpoint) {}
     rpc SubscribeNewCheckpoints(SubscribeNewCheckpointsRequest) returns (stream StreamedCheckpoint) {}
 } 

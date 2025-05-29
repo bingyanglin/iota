@@ -25,9 +25,8 @@ use crate::{
     error::GrpcApiError,
     proto::iota::gprc::v1::{
         CheckpointDataGprc, CheckpointPageGprc, Direction, GetCheckpointRequest,
-        ListCheckpointsRequest, SignedCheckpointSummaryGprc, StreamCheckpointsInRangeRequest,
-        StreamedCheckpoint, SubscribeNewCheckpointsRequest,
-        checkpoint_gprc_service_server::CheckpointGprcService,
+        ListCheckpointsRequest, SignedCheckpointSummaryGprc, StreamedCheckpoint,
+        SubscribeNewCheckpointsRequest, checkpoint_gprc_service_server::CheckpointGprcService,
     },
 }; // Import GrpcApiError for mapping // Ensure VerifiedCheckpoint is imported // Alias for clarity
 
@@ -415,194 +414,6 @@ impl CheckpointGprcService for CheckpointServiceImpl {
         }))
     }
 
-    type StreamCheckpointsInRangeStream = ReceiverStream<Result<StreamedCheckpoint, Status>>;
-
-    async fn stream_checkpoints_in_range(
-        &self,
-        request: Request<StreamCheckpointsInRangeRequest>,
-    ) -> Result<Response<Self::StreamCheckpointsInRangeStream>, Status> {
-        let req = request.into_inner();
-        println!(
-            "[gRPC CheckpointService] Received StreamCheckpointsInRange request: {:?}",
-            req
-        );
-
-        let start_seq_num = req
-            .start_sequence_number
-            .parse::<u64>()
-            .map_err(|_e| Status::invalid_argument("Invalid start_sequence_number format"))?;
-
-        let end_seq_num_opt = req
-            .end_sequence_number
-            .as_deref()
-            .and_then(|s| s.parse::<u64>().ok());
-
-        let include_full_data = req.include_full_data; // Added
-
-        if let Some(end_val) = end_seq_num_opt {
-            if end_val < start_seq_num {
-                return Err(Status::invalid_argument(
-                    "end_sequence_number cannot be less than start_sequence_number",
-                ));
-            }
-        }
-
-        let (tx, rx) = mpsc::channel(16);
-        let state_reader_clone = self.state_reader.clone();
-
-        tokio::spawn(async move {
-            let mut current_seq = start_seq_num;
-
-            loop {
-                if let Some(end_val) = end_seq_num_opt {
-                    if current_seq > end_val {
-                        println!(
-                            "[gRPC Stream] Reached end_sequence_number {} for range starting at {}. Stream finished.",
-                            end_val, start_seq_num
-                        );
-                        break;
-                    }
-                }
-
-                let checkpoint_result: Result<StreamedCheckpoint, Status> = if include_full_data {
-                    match state_reader_clone.get_checkpoint_by_sequence_number(current_seq) {
-                        Ok(Some(verified_checkpoint)) => {
-                            match state_reader_clone
-                                .get_checkpoint_contents_by_sequence_number(current_seq)
-                            {
-                                Ok(Some(checkpoint_contents)) => {
-                                    match state_reader_clone.get_checkpoint_data(verified_checkpoint, checkpoint_contents) {
-                                        Ok(core_checkpoint_data) => {
-                                            match convert_full_checkpoint_data_to_gprc(&core_checkpoint_data) {
-                                                Ok(gprc_data) => Ok(StreamedCheckpoint {
-                                                    checkpoint_type: Some(crate::proto::iota::gprc::v1::streamed_checkpoint::CheckpointType::FullData(gprc_data)),
-                                                }),
-                                                Err(e) => {
-                                                    eprintln!("[gRPC Stream] Failed to convert full checkpoint data {}: {:?}. Terminating.", current_seq, e);
-                                                    Err(Status::internal(format!("Conversion error for full checkpoint {}: {}", current_seq, e)))
-                                                }
-                                            }
-                                        }
-                                        Err(e) => {
-                                            eprintln!("[gRPC Stream] Failed to construct CheckpointData for {}: {:?}. Terminating.", current_seq, e);
-                                            Err(Status::internal(format!("Data construction error for checkpoint {}: {}", current_seq, e)))
-                                        }
-                                    }
-                                }
-                                Ok(None) => {
-                                    eprintln!(
-                                        "[gRPC Stream] Checkpoint contents for seq {} not found. Terminating.",
-                                        current_seq
-                                    );
-                                    Err(Status::not_found(format!(
-                                        "Checkpoint contents for {} not found",
-                                        current_seq
-                                    )))
-                                }
-                                Err(e) => {
-                                    eprintln!(
-                                        "[gRPC Stream] Storage error fetching contents for {}: {:?}. Terminating.",
-                                        current_seq, e
-                                    );
-                                    Err(Status::internal(format!(
-                                        "Storage error for checkpoint contents {}: {}",
-                                        current_seq, e
-                                    )))
-                                }
-                            }
-                        }
-                        Ok(None) => {
-                            println!(
-                                "[gRPC Stream] No checkpoint found for sequence number {} (or end of available data). Stream finished for range starting at {}.",
-                                current_seq, start_seq_num
-                            );
-                            break; // Break from loop to finish stream
-                        }
-                        Err(storage_err) => {
-                            eprintln!(
-                                "[gRPC Stream] Storage error fetching checkpoint summary {}: {:?}. Terminating.",
-                                current_seq, storage_err
-                            );
-                            Err(Status::internal(format!(
-                                "Storage error for checkpoint {}: {}",
-                                current_seq, storage_err
-                            )))
-                        }
-                    }
-                } else {
-                    // Only summary
-                    match state_reader_clone.get_checkpoint_by_sequence_number(current_seq) {
-                        Ok(Some(verified_checkpoint)) => {
-                            match convert_verified_checkpoint_to_gprc_summary(&verified_checkpoint) {
-                                Ok(summary_gprc) => Ok(StreamedCheckpoint {
-                                    checkpoint_type: Some(
-                                        crate::proto::iota::gprc::v1::streamed_checkpoint::CheckpointType::Summary(
-                                            summary_gprc,
-                                        ),
-                                    ),
-                                }),
-                                Err(e) => {
-                                    eprintln!("[gRPC Stream] Failed to convert checkpoint summary {}: {:?}. Terminating.", current_seq, e);
-                                    Err(Status::internal(format!("Conversion error for checkpoint summary {}: {}", current_seq, e)))
-                                }
-                            }
-                        }
-                        Ok(None) => {
-                            println!(
-                                "[gRPC Stream] No checkpoint found for sequence number {} (or end of available data). Stream finished for range starting at {}.",
-                                current_seq, start_seq_num
-                            );
-                            break; // Break from loop to finish stream
-                        }
-                        Err(storage_err) => {
-                            eprintln!("[gRPC Stream] Storage error fetching checkpoint summary {}: {:?}. Terminating.", current_seq, storage_err);
-                            Err(Status::internal(format!("Storage error for checkpoint {}: {}", current_seq, storage_err)))
-                        }
-                    }
-                };
-
-                match checkpoint_result {
-                    Ok(streamed_item) => {
-                        if tx.send(Ok(streamed_item)).await.is_err() {
-                            println!(
-                                "[gRPC Stream] Client disconnected. Terminating stream for range starting at {}.",
-                                start_seq_num
-                            );
-                            break;
-                        }
-                    }
-                    Err(status) => {
-                        // If Ok(None) was handled by 'break', this path is for actual errors.
-                        if tx.send(Err(status)).await.is_err() {
-                            println!(
-                                "[gRPC Stream] Client disconnected while sending error. Terminating stream for range starting at {}.",
-                                start_seq_num
-                            );
-                        }
-                        break; // Terminate stream on error
-                    }
-                }
-
-                if current_seq == u64::MAX {
-                    println!(
-                        "[gRPC Stream] Reached u64::MAX. Stream finished for range starting at {}.",
-                        start_seq_num
-                    );
-                    break;
-                }
-                current_seq += 1;
-            }
-            drop(tx);
-            println!(
-                "[gRPC Stream] Producer task finished for range starting at {}, processed up to seq {}.",
-                start_seq_num,
-                current_seq.saturating_sub(1)
-            );
-        });
-
-        Ok(Response::new(ReceiverStream::new(rx)))
-    }
-
     type SubscribeNewCheckpointsStream = ReceiverStream<Result<StreamedCheckpoint, Status>>;
 
     async fn subscribe_new_checkpoints(
@@ -617,7 +428,7 @@ impl CheckpointGprcService for CheckpointServiceImpl {
 
         let include_full_data = req.include_full_data;
         let requested_start_seq_opt = req
-            .start_from_sequence_number
+            .start_from_checkpoint_sequence_number
             .as_deref()
             .and_then(|s| s.parse::<u64>().ok());
 

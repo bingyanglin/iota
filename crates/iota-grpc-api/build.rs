@@ -4,18 +4,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let proto_root_dir = PathBuf::from("src/proto");
     let proto_package_dir = proto_root_dir.join("iota/gprc/v1");
 
-    // Temporarily reduce to known good/edited files for debugging
     let proto_filenames = [
         "common.proto",
         "checkpoints.proto",
         "objects.proto",
         "transactions.proto",
-        // "info.proto",
         "committee.proto",
         "system.proto",
         "coins.proto",
         "epochs.proto",
         "accounts.proto",
+        "info.proto",
     ];
 
     let mut protos_to_compile_fullpath_str: Vec<String> = Vec::new();

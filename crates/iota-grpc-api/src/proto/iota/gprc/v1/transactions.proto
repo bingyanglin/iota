@@ -25,7 +25,7 @@ message TransactionGprc {
 // Request for listing transactions
 message ListTransactionsRequest {
     optional string cursor = 1;           // Transaction ID for pagination
-    optional uint32 limit = 2;            // Max number of transactions to return
+    optional uint64 limit = 2;            // Max number of transactions to return
     optional Direction direction = 3;     // Sorting direction
     // Future: optional string account_address = 4;
     // Future: optional uint64 from_timestamp_ms = 5;
@@ -38,12 +38,21 @@ message ListTransactionsResponse {
     optional string next_cursor = 2;    // Next transaction ID for pagination, if any
 }
 
-// Request for streaming new transactions
-message StreamTransactionsRequest {
-    // Optional: if provided, start streaming from this transaction ID onwards (exclusive or inclusive based on server logic)
-    optional string start_from_transaction_id = 1;
-    // Future: optional string account_address = 2; // To filter by account
-    // Future: optional bool include_full_payload = 3; // To toggle between full TransactionGprc or a summary
+// Request for executing a transaction
+message ExecuteTransactionRequestGprc {
+    bytes raw_transaction_bytes = 1; // BCS encoded SignedTransaction (Envelope<TransactionData, Signature>)
+}
+
+// Response for executing a transaction
+message TransactionExecutionResponseGprc {
+    string transaction_id_hex = 1;               // TransactionDigest as hex string
+    uint32 status_code = 2;                      // 0: Success, 1: Gas Error, 2: Other Error (more can be added)
+    string status_message = 3;                   // Detailed error/success message
+    optional StringU64 gas_used = 4;             // Gas units used
+    optional string effects_digest_hex = 5;      // TransactionEffectsDigest as hex string
+    repeated string created_object_ids = 6;      // Object IDs as hex strings
+    repeated string deleted_object_ids = 7;      // Object IDs as hex strings
+    repeated string mutated_object_ids = 8;      // Object IDs as hex strings
 }
 
 // Service definition for Transactions
@@ -54,8 +63,8 @@ service TransactionGprcService {
     // Lists transactions with pagination
     rpc ListTransactions(ListTransactionsRequest) returns (ListTransactionsResponse);
 
-    // Streams new transactions as they are processed by the node
-    rpc StreamTransactions(StreamTransactionsRequest) returns (stream TransactionGprc);
+    // Executes a raw transaction
+    rpc ExecuteTransaction(ExecuteTransactionRequestGprc) returns (TransactionExecutionResponseGprc);
 
     // Future RPCs for transactions could include:
     // rpc SubmitTransaction(TransactionGprc) returns (SubmitTransactionResponse) {}

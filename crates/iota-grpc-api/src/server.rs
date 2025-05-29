@@ -17,6 +17,7 @@ use crate::{
         coins_gprc_service_server::CoinsGprcServiceServer,
         committee_gprc_service_server::CommitteeGprcServiceServer,
         epochs_gprc_service_server::EpochsGprcServiceServer,
+        info_gprc_service_server::InfoGprcServiceServer,
         object_gprc_service_server::ObjectGprcServiceServer,
         system_gprc_service_server::SystemGprcServiceServer,
         transaction_gprc_service_server::TransactionGprcServiceServer,
@@ -24,8 +25,8 @@ use crate::{
     services::{
         accounts_service::AccountsServiceImpl, coins_service::CoinsServiceImpl,
         committee_service::CommitteeServiceImpl, epochs_service::EpochsServiceImpl,
-        objects_service::ObjectServiceImpl, system_service::SystemServiceImpl,
-        transactions_service::TransactionServiceImpl,
+        info_service::InfoServiceImpl, objects_service::ObjectServiceImpl,
+        system_service::SystemServiceImpl, transactions_service::TransactionServiceImpl,
     },
 };
 
@@ -67,6 +68,7 @@ pub struct GrpcServer {
     coins_service: CoinsServiceImpl,
     epochs_service: EpochsServiceImpl,
     accounts_service: AccountsServiceImpl,
+    info_service: InfoServiceImpl,
     #[allow(dead_code)] // app_start_time might not be used directly by GrpcServer itself yet
     app_start_time: Arc<Instant>,
 }
@@ -83,6 +85,7 @@ impl GrpcServer {
         let coins_service = CoinsServiceImpl::new(state_reader.clone());
         let epochs_service = EpochsServiceImpl::new(state_reader.clone());
         let accounts_service = AccountsServiceImpl::new(state_reader.clone());
+        let info_service = InfoServiceImpl::new(state_reader.clone());
         Self {
             addr,
             checkpoint_service,
@@ -93,6 +96,7 @@ impl GrpcServer {
             coins_service,
             epochs_service,
             accounts_service,
+            info_service,
             app_start_time,
         }
     }
@@ -119,6 +123,7 @@ impl GrpcServer {
             .add_service(AccountsGprcServiceServer::new(
                 self.accounts_service.clone(),
             ))
+            .add_service(InfoGprcServiceServer::new(self.info_service.clone()))
             .serve_with_shutdown(self.addr, async move {
                 shutdown_rx.recv().await.ok();
                 println!("[gRPC] Server shutting down gracefully.");

@@ -9,11 +9,8 @@ use backoff::backoff::Backoff;
 use iota_grpc_api::{
     conversions::checkpoints::convert_checkpoint_data_gprc_to_core,
     proto::iota::gprc::v1::{
-        CheckpointDataGprc, CheckpointDigestGprc, CheckpointPageGprc, CheckpointTransactionGprc,
-        GetCheckpointRequest, ListCheckpointsRequest, SignedCheckpointSummaryGprc,
-        StreamCheckpointsInRangeRequest, StreamedCheckpoint, SubscribeNewCheckpointsRequest,
-        VerifiedTransactionGprc, checkpoint_gprc_service_client::CheckpointGprcServiceClient,
-        streamed_checkpoint,
+        GetCheckpointRequest, StreamedCheckpoint, SubscribeNewCheckpointsRequest,
+        checkpoint_gprc_service_client::CheckpointGprcServiceClient, streamed_checkpoint,
     },
 };
 use iota_metrics::spawn_monitored_task;
@@ -645,115 +642,119 @@ impl DataLimiter {
 }
 
 impl RemoteStore {
-    pub fn is_streaming_grpc(&self) -> bool {
-        matches!(self, RemoteStore::GrpcStreaming(_))
-    }
-
-    pub async fn fetch_checkpoint(
-        &mut self,
-        last_processed_sequence_number: Option<CheckpointSequenceNumber>,
-    ) -> Result<Option<Arc<CheckpointData>>, IngestionError> {
-        match self {
-            RemoteStore::Rest(client) => {
-                let target_seq = last_processed_sequence_number.map_or(0, |s| s + 1);
-                tracing::info!(
-                    "CORE_READER: RemoteStore::fetch_checkpoint (REST) called. Last_processed: {:?}, attempting fetch for target: {:?}",
-                    last_processed_sequence_number,
-                    target_seq
-                );
-                match CheckpointReader::fetch_from_full_node(client, target_seq).await {
-                    Ok((arc_checkpoint_data, _size)) => Ok(Some(arc_checkpoint_data)),
-                    Err(IngestionError::RestApi(sdk_err)) => {
-                        if sdk_err.status() == Some(::reqwest::StatusCode::NOT_FOUND) {
-                            tracing::info!(
-                                "CORE_READER: RemoteStore::fetch_checkpoint (REST) - Checkpoint {} not found (404 status). Returning Ok(None).",
-                                target_seq
-                            );
-                            Ok(None)
-                        } else {
-                            tracing::error!(
-                                "CORE_READER: RemoteStore::fetch_checkpoint (REST) - Non-404 API error for checkpoint {}: {:?}",
-                                target_seq,
-                                sdk_err
-                            );
-                            Err(IngestionError::RestApi(sdk_err))
-                        }
-                    }
-                    Err(e) => {
-                        tracing::error!(
-                            "CORE_READER: RemoteStore::fetch_checkpoint (REST) - Error fetching checkpoint {}: {:?}",
-                            target_seq,
-                            e
-                        );
-                        Err(e)
-                    }
-                }
-            }
-            RemoteStore::Grpc(client) => {
-                let target_seq = last_processed_sequence_number.map_or(0, |s| s + 1);
-                tracing::info!(
-                    "CORE_READER: RemoteStore::fetch_checkpoint (Unary gRPC) called. Last_processed: {:?}, attempting for target: {:?}",
-                    last_processed_sequence_number,
-                    target_seq
-                );
-                match CheckpointReader::fetch_from_full_node_grpc(client, target_seq).await {
-                    Ok((arc_checkpoint_data, _size)) => Ok(Some(arc_checkpoint_data)),
-                    Err(IngestionError::Upstream(anyhow_err)) => {
-                        if let Some(status) = anyhow_err.downcast_ref::<tonic::Status>() {
-                            if status.code() == tonic::Code::NotFound {
-                                tracing::info!(
-                                    "CORE_READER: RemoteStore::fetch_checkpoint (Unary gRPC) - Checkpoint {} not found via gRPC (NotFound status). Returning Ok(None).",
-                                    target_seq
-                                );
-                                return Ok(None);
-                            }
-                        }
-                        tracing::error!(
-                            "CORE_READER: RemoteStore::fetch_checkpoint (Unary gRPC) - Error fetching checkpoint {}: {:?}",
-                            target_seq,
-                            anyhow_err
-                        );
-                        Err(IngestionError::Upstream(anyhow_err))
-                    }
-                    Err(e) => {
-                        tracing::error!(
-                            "CORE_READER: RemoteStore::fetch_checkpoint (Unary gRPC) - Error fetching checkpoint {}: {:?}",
-                            target_seq,
-                            e
-                        );
-                        Err(e)
-                    }
-                }
-            }
-            RemoteStore::GrpcStreaming(stream_reader) => {
-                tracing::info!(
-                    "CORE_READER: RemoteStore::fetch_checkpoint (GRPC_STREAMING) called. Last_processed: {:?}. Delegating to GrpcStreamingReader.",
-                    last_processed_sequence_number
-                );
-                let result = stream_reader
-                    .fetch_from_full_node_grpc_streaming(last_processed_sequence_number)
-                    .await;
-                tracing::info!(
-                    "CORE_READER: RemoteStore::fetch_checkpoint (GRPC_STREAMING) result from GrpcStreamingReader: is_ok={:?}, is_option_some={:?}",
-                    result.is_ok(),
-                    result.as_ref().ok().map_or(false, |opt| opt.is_some())
-                );
-                result.map(|opt_data_with_size| opt_data_with_size.map(|(data, _size)| data))
-            }
-            RemoteStore::ObjectStore(_) => {
-                tracing::warn!(
-                    "CORE_READER: RemoteStore::fetch_checkpoint called on ObjectStore variant directly. This might be unhandled or require specific sequence. Returning None."
-                );
-                Ok(None)
-            }
-            RemoteStore::Hybrid(_, _) => {
-                tracing::warn!(
-                    "CORE_READER: RemoteStore::fetch_checkpoint called on Hybrid variant directly. This path is complex and might not be fully supported in generic fetch. Returning None."
-                );
-                Ok(None)
-            }
-        }
-    }
+    // pub fn is_streaming_grpc(&self) -> bool {
+    // matches!(self, RemoteStore::GrpcStreaming(_))
+    // }
+    //
+    // pub async fn fetch_checkpoint(
+    // &mut self,
+    // last_processed_sequence_number: Option<CheckpointSequenceNumber>,
+    // ) -> Result<Option<Arc<CheckpointData>>, IngestionError> {
+    // match self {
+    // RemoteStore::Rest(client) => {
+    // let target_seq = last_processed_sequence_number.map_or(0, |s| s + 1);
+    // tracing::info!(
+    // "CORE_READER: RemoteStore::fetch_checkpoint (REST) called. Last_processed:
+    // {:?}, attempting fetch for target: {:?}", last_processed_sequence_number,
+    // target_seq
+    // );
+    // match CheckpointReader::fetch_from_full_node(client, target_seq).await {
+    // Ok((arc_checkpoint_data, _size)) => Ok(Some(arc_checkpoint_data)),
+    // Err(IngestionError::RestApi(sdk_err)) => {
+    // if sdk_err.status() == Some(::reqwest::StatusCode::NOT_FOUND) {
+    // tracing::info!(
+    // "CORE_READER: RemoteStore::fetch_checkpoint (REST) - Checkpoint {} not found
+    // (404 status). Returning Ok(None).", target_seq
+    // );
+    // Ok(None)
+    // } else {
+    // tracing::error!(
+    // "CORE_READER: RemoteStore::fetch_checkpoint (REST) - Non-404 API error for
+    // checkpoint {}: {:?}", target_seq,
+    // sdk_err
+    // );
+    // Err(IngestionError::RestApi(sdk_err))
+    // }
+    // }
+    // Err(e) => {
+    // tracing::error!(
+    // "CORE_READER: RemoteStore::fetch_checkpoint (REST) - Error fetching
+    // checkpoint {}: {:?}", target_seq,
+    // e
+    // );
+    // Err(e)
+    // }
+    // }
+    // }
+    // RemoteStore::Grpc(client) => {
+    // let target_seq = last_processed_sequence_number.map_or(0, |s| s + 1);
+    // tracing::info!(
+    // "CORE_READER: RemoteStore::fetch_checkpoint (Unary gRPC) called.
+    // Last_processed: {:?}, attempting for target: {:?}",
+    // last_processed_sequence_number,
+    // target_seq
+    // );
+    // match CheckpointReader::fetch_from_full_node_grpc(client, target_seq).await {
+    // Ok((arc_checkpoint_data, _size)) => Ok(Some(arc_checkpoint_data)),
+    // Err(IngestionError::Upstream(anyhow_err)) => {
+    // if let Some(status) = anyhow_err.downcast_ref::<tonic::Status>() {
+    // if status.code() == tonic::Code::NotFound {
+    // tracing::info!(
+    // "CORE_READER: RemoteStore::fetch_checkpoint (Unary gRPC) - Checkpoint {} not
+    // found via gRPC (NotFound status). Returning Ok(None).", target_seq
+    // );
+    // return Ok(None);
+    // }
+    // }
+    // tracing::error!(
+    // "CORE_READER: RemoteStore::fetch_checkpoint (Unary gRPC) - Error fetching
+    // checkpoint {}: {:?}", target_seq,
+    // anyhow_err
+    // );
+    // Err(IngestionError::Upstream(anyhow_err))
+    // }
+    // Err(e) => {
+    // tracing::error!(
+    // "CORE_READER: RemoteStore::fetch_checkpoint (Unary gRPC) - Error fetching
+    // checkpoint {}: {:?}", target_seq,
+    // e
+    // );
+    // Err(e)
+    // }
+    // }
+    // }
+    // RemoteStore::GrpcStreaming(stream_reader) => {
+    // tracing::info!(
+    // "CORE_READER: RemoteStore::fetch_checkpoint (GRPC_STREAMING) called.
+    // Last_processed: {:?}. Delegating to GrpcStreamingReader.",
+    // last_processed_sequence_number
+    // );
+    // let result = stream_reader
+    // .fetch_from_full_node_grpc_streaming(last_processed_sequence_number)
+    // .await;
+    // tracing::info!(
+    // "CORE_READER: RemoteStore::fetch_checkpoint (GRPC_STREAMING) result from
+    // GrpcStreamingReader: is_ok={:?}, is_option_some={:?}", result.is_ok(),
+    // result.as_ref().ok().map_or(false, |opt| opt.is_some())
+    // );
+    // result.map(|opt_data_with_size| opt_data_with_size.map(|(data, _size)| data))
+    // }
+    // RemoteStore::ObjectStore(_) => {
+    // tracing::warn!(
+    // "CORE_READER: RemoteStore::fetch_checkpoint called on ObjectStore variant
+    // directly. This might be unhandled or require specific sequence. Returning
+    // None." );
+    // Ok(None)
+    // }
+    // RemoteStore::Hybrid(_, _) => {
+    // tracing::warn!(
+    // "CORE_READER: RemoteStore::fetch_checkpoint called on Hybrid variant
+    // directly. This path is complex and might not be fully supported in generic
+    // fetch. Returning None." );
+    // Ok(None)
+    // }
+    // }
+    // }
 }
 
 impl GrpcStreamingReader {
@@ -771,16 +772,18 @@ impl GrpcStreamingReader {
                 "CORE_READER_STREAM: No active stream for {}. Attempting to subscribe.",
                 self.server_address
             );
-            let start_from_sequence_number = current_processed_checkpoint_seq_num
+            let start_from_checkpoint_sequence_number_str = current_processed_checkpoint_seq_num
                 .map(|val| val + 1)
                 .unwrap_or(0)
                 .to_string();
             tracing::info!(
-                "CORE_READER_STREAM: Subscribing with start_from_sequence_number: {}",
-                start_from_sequence_number
+                "CORE_READER_STREAM: Subscribing with start_from_checkpoint_sequence_number: {}",
+                start_from_checkpoint_sequence_number_str
             );
             let request = SubscribeNewCheckpointsRequest {
-                start_from_sequence_number: Some(start_from_sequence_number),
+                start_from_checkpoint_sequence_number: Some(
+                    start_from_checkpoint_sequence_number_str,
+                ),
                 include_full_data: true,
             };
             match self
@@ -912,7 +915,9 @@ mod tests {
     use std::{net::SocketAddr, str::FromStr, sync::Arc, time::Duration};
 
     use iota_grpc_api::proto::iota::gprc::v1::{
-        GetCheckpointRequest, StreamedCheckpoint, SubscribeNewCheckpointsRequest,
+        CheckpointDataGprc, CheckpointDigestGprc, CheckpointPageGprc, CheckpointTransactionGprc,
+        GetCheckpointRequest, ListCheckpointsRequest, SignedCheckpointSummaryGprc,
+        StreamedCheckpoint, SubscribeNewCheckpointsRequest, VerifiedTransactionGprc,
         checkpoint_gprc_service_server::{CheckpointGprcService, CheckpointGprcServiceServer},
     };
     use iota_types::{
@@ -979,8 +984,6 @@ mod tests {
 
     #[tonic::async_trait]
     impl CheckpointGprcService for MockCheckpointService {
-        type StreamCheckpointsInRangeStream =
-            tokio_stream::wrappers::ReceiverStream<Result<StreamedCheckpoint, Status>>;
         type SubscribeNewCheckpointsStream =
             tokio_stream::wrappers::ReceiverStream<Result<StreamedCheckpoint, Status>>;
 
@@ -1036,15 +1039,6 @@ mod tests {
             ))
         }
 
-        async fn stream_checkpoints_in_range(
-            &self,
-            _request: tonic::Request<StreamCheckpointsInRangeRequest>,
-        ) -> Result<tonic::Response<Self::StreamCheckpointsInRangeStream>, Status> {
-            Err(tonic::Status::unimplemented(
-                "stream_checkpoints_in_range not implemented in mock",
-            ))
-        }
-
         async fn subscribe_new_checkpoints(
             &self,
             request: tonic::Request<SubscribeNewCheckpointsRequest>,
@@ -1055,7 +1049,7 @@ mod tests {
             );
             let req_inner = request.into_inner();
             let start_from_seq = req_inner
-                .start_from_sequence_number
+                .start_from_checkpoint_sequence_number
                 .and_then(|s| s.parse::<u64>().ok())
                 .unwrap_or(0);
 

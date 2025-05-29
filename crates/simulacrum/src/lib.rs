@@ -35,7 +35,7 @@ use iota_types::{
     crypto::AuthoritySignature,
     digests::ConsensusCommitDigest,
     effects::TransactionEffects,
-    error::ExecutionError,
+    error::{ExecutionError, IotaError, UserInputError},
     gas_coin::{GasCoin, NANOS_PER_IOTA},
     inner_temporary_store::InnerTemporaryStore,
     iota_system_state::epoch_start_iota_system_state::EpochStartSystemState,
@@ -45,11 +45,12 @@ use iota_types::{
     mock_checkpoint_builder::{MockCheckpointBuilder, ValidatorKeypairProvider},
     object::Object,
     programmable_transaction_builder::ProgrammableTransactionBuilder,
+    quorum_driver_types::{QuorumDriverError, QuorumDriverResponse},
     signature::VerifyParams,
     storage::{ListDirection, ObjectStore, ReadStore, RestStateReader},
     transaction::{
-        EndOfEpochTransactionKind, GasData, Transaction, TransactionData, TransactionKind,
-        VerifiedTransaction,
+        EndOfEpochTransactionKind, GasData, SignedTransaction, Transaction, TransactionData,
+        TransactionKind, VerifiedTransaction,
     },
 };
 use move_core_types::language_storage::StructTag;
@@ -556,6 +557,7 @@ impl<T, V: store::SimulatorStore> ReadStore for Simulacrum<T, V> {
     }
 }
 
+#[async_trait::async_trait]
 impl<T: Send + Sync, V: store::SimulatorStore + Send + Sync> RestStateReader for Simulacrum<T, V> {
     fn list_transactions(
         &self,
@@ -574,7 +576,9 @@ impl<T: Send + Sync, V: store::SimulatorStore + Send + Sync> RestStateReader for
     ) -> iota_types::storage::error::Result<
         Option<iota_types::messages_checkpoint::CheckpointSequenceNumber>,
     > {
-        todo!()
+        unimplemented!(
+            "get_transaction_checkpoint not yet implemented for Simulacrum's RestStateReader"
+        )
     }
 
     fn get_lowest_available_checkpoint_objects(
@@ -634,6 +638,20 @@ impl<T: Send + Sync, V: store::SimulatorStore + Send + Sync> RestStateReader for
         _epoch_id: iota_types::committee::EpochId,
     ) -> iota_types::storage::error::Result<Option<VerifiedCheckpoint>> {
         todo!()
+    }
+
+    async fn execute_transaction_for_gprc(
+        &self,
+        _transaction: SignedTransaction,
+    ) -> std::result::Result<QuorumDriverResponse, QuorumDriverError> {
+        let error_message =
+            "Transaction execution via execute_transaction_for_gprc not supported in Simulacrum."
+                .to_string();
+        Err(QuorumDriverError::QuorumDriverInternal(
+            IotaError::UserInput {
+                error: UserInputError::Unsupported(error_message),
+            },
+        ))
     }
 }
 

@@ -40,8 +40,12 @@ pub fn convert_object_to_gprc(
     Ok(ObjectGprc {
         object_id: object_id.to_hex_literal(), // ObjectID to hex string
         version,
+        digest: String::new(), // Placeholder, needs actual digest from core_object if available
         owner_type: owner_type_str,
-        data_type: data_type_str,
+        owner_address: None,           // Placeholder
+        previous_transaction_id: None, // Placeholder
+        storage_rebate: None,          // Placeholder
+        type_tag: Some(data_type_str), // Using data_type_str for type_tag for now
         raw_object: raw_data_bytes,
     })
 }

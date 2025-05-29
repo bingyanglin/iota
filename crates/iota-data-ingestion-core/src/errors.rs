@@ -64,10 +64,14 @@ pub enum IngestionError {
     #[error("gRPC: Connection error: `{0}`")]
     GrpcConnectionError(String),
 
+    #[error("gRPC: Conversion error: `{0}`")]
+    GrpcConversionError(String),
+
     #[error("gRPC: Message error: `{0}`")]
     GrpcMessageError(String),
 }
 
+#[async_trait::async_trait]
 impl From<tonic::Status> for IngestionError {
     fn from(status: tonic::Status) -> Self {
         IngestionError::Upstream(anyhow::anyhow!(

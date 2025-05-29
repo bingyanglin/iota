@@ -2,8 +2,6 @@ use iota_types::{
     base_types::{IotaAddress, ObjectID, ObjectIDParseError, SequenceNumber},
     storage::AccountOwnedObjectInfo,
 };
-use tokio::sync::mpsc;
-use tokio_stream::wrappers::ReceiverStream;
 use tonic::{Request, Response, Status};
 
 use crate::{
@@ -11,7 +9,7 @@ use crate::{
     error::GrpcApiError,
     proto::iota::gprc::v1::{
         GetObjectRequest, ListObjectsRequest, ListObjectsResponse, ObjectGprc,
-        StreamObjectsRequest, object_gprc_service_server::ObjectGprcService,
+        object_gprc_service_server::ObjectGprcService,
     },
     server::StateReader,
 };
@@ -112,9 +110,12 @@ impl ObjectGprcService for ObjectServiceImpl {
 
         let req_inner = request.into_inner();
 
-        let owner_address_str = req_inner
-            .owner_address
-            .ok_or_else(|| Status::invalid_argument("owner_address is required for ListObjects"))?;
+        let owner_address_str = req_inner.owner_address;
+        if owner_address_str.is_empty() {
+            return Err(Status::invalid_argument(
+                "owner_address is required and cannot be empty for ListObjects",
+            ));
+        }
 
         let owner_address: IotaAddress =
             owner_address_str.parse().map_err(|e: anyhow::Error| {
@@ -146,10 +147,10 @@ impl ObjectGprcService for ObjectServiceImpl {
             .state_reader
             .account_owned_objects_info_iter(owner_address, cursor_object_id)
         {
-            Ok(iter) => iter.take(effective_limit_u32 as usize + 1).collect(), /* Collect one
-                                                                                 * more than limit
-                                                                                 * to determine
-                                                                                 * next_cursor */
+            Ok(iter) => iter.take(effective_limit_u32 as usize + 1).collect(), // Collect one
+            // more than limit
+            // to determine
+            // next_cursor
             Err(storage_err) => {
                 eprintln!(
                     "[gRPC ObjectService] Error calling account_owned_objects_info_iter for {}: {:?}",
@@ -209,129 +210,5 @@ impl ObjectGprcService for ObjectServiceImpl {
             objects: collected_objects_gprc,
             next_cursor: next_cursor_gprc,
         }))
-    }
-
-    type StreamObjectsStream = ReceiverStream<Result<ObjectGprc, Status>>;
-
-    async fn stream_objects(
-        &self,
-        request: Request<StreamObjectsRequest>,
-    ) -> Result<Response<Self::StreamObjectsStream>, Status> {
-        println!(
-            "[gRPC ObjectService] Received StreamObjects request: {:?}",
-            request.get_ref()
-        );
-
-        let req_inner = request.into_inner();
-
-        let owner_address_str = req_inner.owner_address;
-        let owner_address: IotaAddress =
-            owner_address_str.parse().map_err(|e: anyhow::Error| {
-                Status::invalid_argument(format!(
-                    "Could not parse owner_address '{}': {}",
-                    owner_address_str, e
-                ))
-            })?;
-
-        let start_after_object_id: Option<ObjectID> =
-            req_inner
-                .start_after_object_id
-                .map_or(Ok(None), |cur_str| {
-                    cur_str.parse().map(Some).map_err(|e: ObjectIDParseError| {
-                        Status::invalid_argument(format!(
-                            "Could not parse start_after_object_id '{}': {}",
-                            cur_str, e
-                        ))
-                    })
-                })?;
-
-        // Collect object infos first to make the subsequent processing Send-able
-        let object_infos_result: Result<Vec<AccountOwnedObjectInfo>, Status> = {
-            match self
-                .state_reader
-                .account_owned_objects_info_iter(owner_address, start_after_object_id)
-            {
-                Ok(iter) => Ok(iter.collect()), // Collect into a Vec
-                Err(storage_err) => {
-                    eprintln!(
-                        "[gRPC StreamObjects] Error calling account_owned_objects_info_iter for {}: {:?}",
-                        owner_address, storage_err
-                    );
-                    Err(Status::internal(format!(
-                        "Failed to retrieve owned objects list: {}",
-                        storage_err
-                    )))
-                }
-            }
-        };
-
-        let object_infos = match object_infos_result {
-            Ok(infos) => infos,
-            Err(status) => {
-                // If initial fetch failed, send one error and close.
-                let (tx, rx) = mpsc::channel(1);
-                let _ = tx.send(Err(status)).await; // Attempt to send, ignore if client already gone
-                return Ok(Response::new(ReceiverStream::new(rx)));
-            }
-        };
-
-        let (tx, rx) = mpsc::channel(4);
-        let state_reader = self.state_reader.clone();
-
-        tokio::spawn(async move {
-            for object_info in object_infos {
-                // Iterate over the collected Vec (which is Send)
-                match state_reader.get_object(&object_info.object_id) {
-                    Ok(Some(core_object)) => {
-                        match convert_object_to_gprc(&object_info.object_id, &core_object) {
-                            Ok(gprc_obj) => {
-                                if tx.send(Ok(gprc_obj)).await.is_err() {
-                                    eprintln!(
-                                        "[gRPC StreamObjects] Client disconnected for {}",
-                                        owner_address
-                                    );
-                                    break;
-                                }
-                            }
-                            Err(conv_err) => {
-                                eprintln!(
-                                    "[gRPC StreamObjects] Convert error for {}: {:?}",
-                                    object_info.object_id, conv_err
-                                );
-                                // Log and skip
-                            }
-                        }
-                    }
-                    Ok(None) => {
-                        eprintln!(
-                            "[gRPC StreamObjects] Object {} not found for {}",
-                            object_info.object_id, owner_address
-                        );
-                    }
-                    Err(storage_err) => {
-                        eprintln!(
-                            "[gRPC StreamObjects] Storage error for {}: {:?}",
-                            object_info.object_id, storage_err
-                        );
-                        if tx
-                            .send(Err(Status::internal(format!(
-                                "Error fetching {}: {}",
-                                object_info.object_id, storage_err
-                            ))))
-                            .await
-                            .is_err()
-                        {
-                            eprintln!(
-                                "[gRPC StreamObjects] Client disconnected sending storage error for {}",
-                                owner_address
-                            );
-                        }
-                        break; // Abort on error
-                    }
-                }
-            }
-        });
-
-        Ok(Response::new(ReceiverStream::new(rx)))
     }
 }

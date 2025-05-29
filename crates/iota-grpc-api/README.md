@@ -21,35 +21,33 @@ The subscription logic for new checkpoints should draw inspiration from similar 
 * **Services Implemented (Using Real Data via MockRestStateReader in tests):**
   * `CheckpointGprcService`:
     * Unary RPCs: `GetCheckpoint`, `GetCheckpointFull`, `ListCheckpoints`.
-    * Server-streaming RPCs: `StreamCheckpointsInRange`, `SubscribeNewCheckpoints`.
+    * Server-streaming RPCs: `SubscribeNewCheckpoints`.
       * Both streaming RPCs now support an `include_full_data` flag to stream either `SignedCheckpointSummaryGprc` or full `CheckpointDataGprc`.
       * `SubscribeNewCheckpoints` uses an internal pub/sub mechanism for reactive client updates, while the service itself polls the `state_reader`.
   * `ObjectGprcService`:
-    * Unary RPCs: `GetObject`, `ListObjects`.
-    * Server-streaming RPCs: `StreamObjects` (lists current objects by polling the `state_reader`).
+    * Unary RPCs: `GetObject`, `ListObjects`, `GetObjectWithVersion`, `ListDynamicFields`.
+    * Server-streaming RPCs: None.
   * `TransactionGprcService`:
-    * Unary RPCs: `GetTransaction`.
-      * `GetTransactionRequest` uses `bytes transaction_digest_bytes` for the ID.
-    * `ListTransactions` and `StreamTransactions` RPCs are implemented and use the `state_reader` to fetch and stream transaction data (StreamTransactions uses a polling mechanism). (Unit tests use a `MockRestStateReader`).
+    * Unary RPCs: `GetTransaction`, `ListTransactions`, `ExecuteTransaction`.
+    * Server-streaming RPCs: None.
   * `CommitteeGprcService`:
-    * `GetCommittee` RPC is implemented and uses the `state_reader`.
-  * `SystemGprcService` (`SystemServiceImpl`):
-    * `GetSystemInfo` RPC is implemented:
-      * Returns node version (currently placeholder) and uptime.
-      * Tested.
-  * `CoinsGprcService` (`CoinsServiceImpl`):
-    * `GetCoinInfo` RPC is implemented:
-      * Takes a `coin_type_tag` string.
-      * Fetches `iota_types::storage::CoinInfo` and attempts to resolve the `treasury_object_id` to a `TreasuryCap` object to retrieve `total_supply`.
-      * Does not currently populate `CoinMetadata` details (like name, symbol, decimals).
-      * Tested (success, not found, invalid tag).
-    * `ListCoins` RPC remains a stub (returns `Unimplemented`).
+    * Unary RPCs: `GetCommittee`, `GetLatestCommittee`.
+    * Server-streaming RPCs: None.
+  * `SystemGprcService`:
+    * Unary RPCs: `GetSystemInfo`, `HealthCheck`, `GetSystemStateSummary`, `GetCurrentProtocolConfig`, `GetProtocolConfig`, `GetGasInfo`.
+    * Server-streaming RPCs: None.
+  * `CoinsGprcService`:
+    * Unary RPCs: `GetCoinInfo`.
+    * Server-streaming RPCs: None.
   * `EpochsGprcService`:
-    * `GetEpochInfo` RPC is implemented: Fetches committee info for a given or latest epoch.
-    * `ListEpochs` RPC remains a stub (returns an empty list).
+    * Unary RPCs: `GetEpochInfo`, `GetEpochLastCheckpoint`.
+    * Server-streaming RPCs: None.
   * `AccountsGprcService`:
-    * `GetAccountInfo` RPC is a stub (returns placeholder data).
-    * `ListAccountObjects` RPC is implemented: Fetches and paginates objects owned by an account.
+    * Unary RPCs: `GetAccountInfo`, `ListAccountObjects`.
+    * Server-streaming RPCs: None.
+  * `InfoGprcService`:
+    * Unary RPCs: `GetNodeInfo`.
+    * Server-streaming RPCs: None.
 * **Proto Definitions:** Located in `src/proto/iota/gprc/v1/`.
 * **Build System:** `build.rs` compiles `.proto` files using `tonic-build`.
 * **Testing:** Unit tests for implemented services (`CheckpointGprcService`, `ObjectGprcService`, `TransactionGprcService`) are available in the `tests/` directory, running against a `MockRestStateReader`. All tests are currently passing.
@@ -128,7 +126,7 @@ Therefore, to use the public gRPC API, ensure the `grpc_public_api_address` is c
   * Conversions from `iota_types` to gRPC types are implemented for checkpoints, objects, and transactions.
   * Unit tests use a `MockRestStateReader` which has been updated to support these calls, including dynamic updates for testing subscriptions.
   * **Checkpoint Service Details:**
-    * The `include_full_data` flag is **complete** for `StreamCheckpointsInRange` and `SubscribeNewCheckpoints`.
+    * The `include_full_data` flag is **complete** for `SubscribeNewCheckpoints`.
     * The `subscribe_new_checkpoints` RPC provides a true subscription for gRPC clients. Internally, `CheckpointServiceImpl` uses a reactive pub/sub model: a background task polls the `state_reader` and broadcasts new checkpoints. While this polling is a current design choice, eliminating it would require the underlying node core (`StateReader` interface) to offer direct event notifications.
 * **Implement Other gRPC Services:**
   * `TransactionGprcService` (`TransactionServiceImpl`) has been implemented with the `GetTransaction` RPC.
@@ -143,15 +141,18 @@ Therefore, to use the public gRPC API, ensure the `grpc_public_api_address` is c
 
   * **Next Steps & Ongoing Development:**
     * `ObjectGprcService`:
-      * Further develop the `StreamObjects` RPC.
+      * No further RPCs planned for this PoC beyond existing unary.
     * `CoinsGprcService`:
-      * Implement `ListCoins` RPC.
+      * Implement `ListCoins` RPC (currently returns empty).
       * Enhance `GetCoinInfo` to also fetch and convert `CoinMetadata` (name, symbol, decimals, etc.) using the `coin_metadata_object_id` from `iota_types::storage::CoinInfo`.
     * `SystemGprcService`:
-      * Integrate `GetSystemInfo` with actual node build version and potentially other system metrics from the `state_reader` if available.
-    * Other Services (`EpochsGprcService`, `AccountsGprcService`):
-      * `EpochsGprcService`: Implement `ListEpochs` RPC.
-      * `AccountsGprcService`: Implement `GetAccountInfo` RPC with actual data fetching.
+      * Integrate `GetSystemInfo` with actual node build version (already using `CARGO_PKG_VERSION`) and potentially other system metrics from the `state_reader` if available.
+    * `EpochsGprcService`:
+      * Implement `ListEpochs` RPC (currently returns empty).
+    * `AccountsGprcService`:
+      * Implement `GetAccountInfo` RPC with actual data fetching (currently returns placeholder).
+    * `InfoGprcService`:
+      * No further RPCs planned for this PoC.
     * Error Handling & Conversions:
       * Expand error types and ensure comprehensive error handling across all services.
       * Create and complete conversion modules for all necessary types for future services.

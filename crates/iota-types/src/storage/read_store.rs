@@ -21,7 +21,8 @@ use crate::{
     messages_checkpoint::{
         CheckpointContents, CheckpointSequenceNumber, FullCheckpointContents, VerifiedCheckpoint,
     },
-    transaction::VerifiedTransaction,
+    quorum_driver_types::{QuorumDriverError, QuorumDriverResponse},
+    transaction::{SignedTransaction, VerifiedTransaction},
 };
 
 pub trait ReadStore: ObjectStore {
@@ -658,6 +659,7 @@ pub enum ListDirection {
 ///
 /// It extends both ObjectStore and ReadStore by adding functionality that may
 /// require more detailed underlying databases or indexes to support.
+#[async_trait::async_trait]
 pub trait RestStateReader: ObjectStore + ReadStore + Send + Sync {
     fn get_transaction_checkpoint(
         &self,
@@ -694,6 +696,12 @@ pub trait RestStateReader: ObjectStore + ReadStore + Send + Sync {
         limit: u64,
         direction: ListDirection,
     ) -> Result<Vec<(TransactionDigest, Arc<VerifiedTransaction>)>>;
+
+    // Added for gRPC transaction execution
+    async fn execute_transaction_for_gprc(
+        &self,
+        transaction: SignedTransaction,
+    ) -> std::result::Result<QuorumDriverResponse, QuorumDriverError>;
 }
 
 pub struct AccountOwnedObjectInfo {

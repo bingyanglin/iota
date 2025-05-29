@@ -4,23 +4,25 @@
 
 use std::sync::Arc;
 
+use async_trait::async_trait;
 use iota_types::{
     base_types::{IotaAddress, ObjectID, TransactionDigest},
     committee::{Committee, EpochId},
     digests::TransactionEventsDigest,
     effects::{TransactionEffects, TransactionEvents},
-    error::IotaError,
+    error::{IotaError, UserInputError},
     messages_checkpoint::{
         CheckpointContentsDigest, CheckpointDigest, CheckpointSequenceNumber, EndOfEpochData,
         FullCheckpointContents, VerifiedCheckpoint, VerifiedCheckpointContents,
     },
     object::Object,
+    quorum_driver_types::{QuorumDriverError, QuorumDriverResponse},
     storage::{
         AccountOwnedObjectInfo, CoinInfo, DynamicFieldIndexInfo, DynamicFieldKey, ListDirection,
         ObjectKey, ObjectStore, ReadStore, RestStateReader, WriteStore,
         error::{Error as StorageError, Result},
     },
-    transaction::VerifiedTransaction,
+    transaction::{SignedTransaction, VerifiedTransaction},
 };
 use move_core_types::language_storage::StructTag;
 use parking_lot::Mutex;
@@ -496,6 +498,7 @@ impl ReadStore for RestReadStore {
     }
 }
 
+#[async_trait]
 impl RestStateReader for RestReadStore {
     fn list_transactions(
         &self,
@@ -599,5 +602,19 @@ impl RestStateReader for RestReadStore {
             .checkpoint_store
             .get_epoch_last_checkpoint(epoch_id)
             .map_err(iota_types::storage::error::Error::custom)
+    }
+
+    async fn execute_transaction_for_gprc(
+        &self,
+        _transaction: SignedTransaction,
+    ) -> std::result::Result<QuorumDriverResponse, QuorumDriverError> {
+        let error_message =
+            "Transaction execution not supported by RestReadStore directly. Requires QuorumDriver."
+                .to_string();
+        Err(QuorumDriverError::QuorumDriverInternal(
+            IotaError::UserInput {
+                error: UserInputError::Unsupported(error_message),
+            },
+        ))
     }
 }

@@ -12,7 +12,6 @@ use iota_grpc_api::{
     proto::iota::gprc::v1::{
         GetObjectRequest,
         ListObjectsRequest, // Added for new tests
-        StreamObjectsRequest,
         object_gprc_service_client::ObjectGprcServiceClient,
     },
     server::{GrpcServer, StateReader},
@@ -476,8 +475,8 @@ async fn test_get_object_retrieves_and_converts() {
     assert_eq!(object_gprc.version, "0x2");
     assert_eq!(object_gprc.owner_type, "AddressOwner");
     assert_eq!(
-        object_gprc.data_type,
-        "0x0000000000000000000000000000000000000000000000000000000000000042::example_module::ExampleObject"
+        object_gprc.type_tag,
+        Some("0x0000000000000000000000000000000000000000000000000000000000000042::example_module::ExampleObject".to_string())
     );
     assert_eq!(object_gprc.raw_object, b"mock_contents".to_vec());
 
@@ -665,7 +664,7 @@ async fn test_list_objects_first_page() {
         spawn_test_server_with_object_client().await;
 
     let request = tonic::Request::new(ListObjectsRequest {
-        owner_address: Some(TEST_OWNER_ADDRESS_HEX.to_string()),
+        owner_address: TEST_OWNER_ADDRESS_HEX.to_string(),
         cursor: None,
         limit: Some(5),
     });
@@ -702,7 +701,7 @@ async fn test_list_objects_pagination() {
 
     // Page 1
     let request1 = tonic::Request::new(ListObjectsRequest {
-        owner_address: Some(TEST_OWNER_ADDRESS_HEX.to_string()),
+        owner_address: TEST_OWNER_ADDRESS_HEX.to_string(),
         cursor: None,
         limit: Some(limit_per_page),
     });
@@ -717,7 +716,7 @@ async fn test_list_objects_pagination() {
 
     // Page 2
     let request2 = tonic::Request::new(ListObjectsRequest {
-        owner_address: Some(TEST_OWNER_ADDRESS_HEX.to_string()),
+        owner_address: TEST_OWNER_ADDRESS_HEX.to_string(),
         cursor: cursor1,
         limit: Some(limit_per_page),
     });
@@ -736,7 +735,7 @@ async fn test_list_objects_pagination() {
 
     // Page 3 (and potentially last part)
     let request3 = tonic::Request::new(ListObjectsRequest {
-        owner_address: Some(TEST_OWNER_ADDRESS_HEX.to_string()),
+        owner_address: TEST_OWNER_ADDRESS_HEX.to_string(),
         cursor: cursor2,
         limit: Some(limit_per_page + 5),
     });
@@ -774,7 +773,7 @@ async fn test_list_objects_limit_respected() {
         spawn_test_server_with_object_client().await;
     let limit = 3u32;
     let request = tonic::Request::new(ListObjectsRequest {
-        owner_address: Some(TEST_OWNER_ADDRESS_HEX.to_string()),
+        owner_address: TEST_OWNER_ADDRESS_HEX.to_string(),
         cursor: None,
         limit: Some(limit),
     });
@@ -790,7 +789,7 @@ async fn test_list_objects_owner_not_found() {
         spawn_test_server_with_object_client().await;
     let unknown_owner = "0xdeadbeef000000000000000000000000000000000000000000000000deadbeef";
     let request = tonic::Request::new(ListObjectsRequest {
-        owner_address: Some(unknown_owner.to_string()),
+        owner_address: unknown_owner.to_string(),
         cursor: None,
         limit: Some(5),
     });
@@ -805,7 +804,7 @@ async fn test_list_objects_missing_owner_address() {
     let (mut client, _addr, shutdown_tx, _mock_state_reader) =
         spawn_test_server_with_object_client().await;
     let request = tonic::Request::new(ListObjectsRequest {
-        owner_address: None,
+        owner_address: "".to_string(),
         cursor: None,
         limit: Some(5),
     });
@@ -813,7 +812,11 @@ async fn test_list_objects_missing_owner_address() {
     assert!(response.is_err());
     let status = response.err().unwrap();
     assert_eq!(status.code(), tonic::Code::InvalidArgument);
-    assert!(status.message().contains("owner_address is required"));
+    assert!(
+        status
+            .message()
+            .contains("owner_address is required and cannot be empty for ListObjects")
+    );
     let _ = shutdown_tx.send(());
 }
 
@@ -822,7 +825,7 @@ async fn test_list_objects_invalid_owner_address() {
     let (mut client, _addr, shutdown_tx, _mock_state_reader) =
         spawn_test_server_with_object_client().await;
     let request = tonic::Request::new(ListObjectsRequest {
-        owner_address: Some("not_an_address".to_string()),
+        owner_address: "not_an_address".to_string(),
         cursor: None,
         limit: Some(5),
     });
@@ -839,7 +842,7 @@ async fn test_list_objects_invalid_cursor() {
     let (mut client, _addr, shutdown_tx, _mock_state_reader) =
         spawn_test_server_with_object_client().await;
     let request = tonic::Request::new(ListObjectsRequest {
-        owner_address: Some(TEST_OWNER_ADDRESS_HEX.to_string()),
+        owner_address: TEST_OWNER_ADDRESS_HEX.to_string(),
         cursor: Some("not_a_cursor_object_id".to_string()),
         limit: Some(5),
     });
@@ -860,7 +863,7 @@ async fn test_list_objects_limit_zero() {
     let (mut client, _addr, shutdown_tx, _mock_state_reader) =
         spawn_test_server_with_object_client().await;
     let request = tonic::Request::new(ListObjectsRequest {
-        owner_address: Some(TEST_OWNER_ADDRESS_HEX.to_string()),
+        owner_address: TEST_OWNER_ADDRESS_HEX.to_string(),
         cursor: None,
         limit: Some(0), // Zero limit
     });
@@ -869,175 +872,5 @@ async fn test_list_objects_limit_zero() {
     let status = response.err().unwrap();
     assert_eq!(status.code(), tonic::Code::InvalidArgument);
     assert!(status.message().contains("limit cannot be zero"));
-    let _ = shutdown_tx.send(());
-}
-
-#[tokio::test]
-async fn test_stream_objects_for_owner() {
-    let (mut client, _addr, shutdown_tx, _mock_state_reader) =
-        spawn_test_server_with_object_client().await;
-
-    let request = tonic::Request::new(StreamObjectsRequest {
-        owner_address: TEST_OWNER_ADDRESS_HEX.to_string(),
-        start_after_object_id: None,
-    });
-
-    let mut stream = client.stream_objects(request).await.unwrap().into_inner();
-    let mut count = 0;
-    let mut seen_ids = HashSet::new();
-
-    loop {
-        match timeout(Duration::from_secs(2), stream.next()).await {
-            Ok(Some(Ok(obj_gprc))) => {
-                count += 1;
-                assert!(obj_gprc.object_id.starts_with("0x70"));
-                assert_eq!(obj_gprc.owner_type, "AddressOwner");
-                assert!(seen_ids.insert(obj_gprc.object_id.clone()));
-            }
-            Ok(Some(Err(status))) => {
-                panic!("Stream item contained an error status: {:?}", status);
-            }
-            Ok(None) => {
-                break; // Stream ended
-            }
-            Err(_) => {
-                panic!(
-                    "Timeout waiting for stream item after {} items. Expected {} items.",
-                    count, NUM_MOCK_OWNED_OBJECTS
-                );
-            }
-        }
-    }
-    assert_eq!(
-        count, NUM_MOCK_OWNED_OBJECTS,
-        "Incorrect number of objects streamed. Expected {}, got {}",
-        NUM_MOCK_OWNED_OBJECTS, count
-    );
-    let _ = shutdown_tx.send(());
-}
-
-#[tokio::test]
-async fn test_stream_objects_with_cursor() {
-    let (mut client, _addr, shutdown_tx, _mock_state_reader) =
-        spawn_test_server_with_object_client().await;
-
-    let mut cursor_bytes = [0u8; 32];
-    cursor_bytes[0] = 0x70;
-    cursor_bytes[31] = 2u8; // Object with index 2
-    let cursor_object_id = ObjectID::new(cursor_bytes).to_hex_literal();
-
-    let request = tonic::Request::new(StreamObjectsRequest {
-        owner_address: TEST_OWNER_ADDRESS_HEX.to_string(),
-        start_after_object_id: Some(cursor_object_id.clone()),
-    });
-
-    let mut stream = client.stream_objects(request).await.unwrap().into_inner();
-    let mut count = 0;
-    let mut first_received_id_suffix: Option<u8> = None;
-    let expected_count_after_cursor = NUM_MOCK_OWNED_OBJECTS - 3;
-
-    loop {
-        match timeout(Duration::from_secs(2), stream.next()).await {
-            Ok(Some(Ok(obj_gprc))) => {
-                count += 1;
-                if first_received_id_suffix.is_none() {
-                    let id_suffix_hex = &obj_gprc.object_id[obj_gprc.object_id.len() - 2..];
-                    first_received_id_suffix = Some(u8::from_str_radix(id_suffix_hex, 16).unwrap());
-                }
-            }
-            Ok(Some(Err(status))) => {
-                panic!("Stream item contained an error status: {:?}", status);
-            }
-            Ok(None) => {
-                break; // Stream ended
-            }
-            Err(_) => {
-                panic!(
-                    "Timeout waiting for stream item after {} items. Expected {} items.",
-                    count, expected_count_after_cursor
-                );
-            }
-        }
-    }
-    assert_eq!(
-        count, expected_count_after_cursor,
-        "Incorrect number of objects streamed after cursor. Expected {}, got {}",
-        expected_count_after_cursor, count
-    );
-    assert_eq!(
-        first_received_id_suffix,
-        Some(3u8),
-        "Stream did not start from the correct object after cursor"
-    );
-
-    let _ = shutdown_tx.send(());
-}
-
-#[tokio::test]
-async fn test_stream_objects_owner_not_found() {
-    let (mut client, _addr, shutdown_tx, _mock_state_reader) =
-        spawn_test_server_with_object_client().await;
-    let unknown_owner = "0xdeadbeef000000000000000000000000000000000000000000000000deadbeef";
-    let request = tonic::Request::new(StreamObjectsRequest {
-        owner_address: unknown_owner.to_string(),
-        start_after_object_id: None,
-    });
-    let mut stream = client.stream_objects(request).await.unwrap().into_inner();
-
-    match timeout(Duration::from_secs(1), stream.next()).await {
-        Ok(Some(Ok(obj))) => panic!("Should not receive any object for unknown owner: {:?}", obj),
-        Ok(Some(Err(status))) => {
-            // The service implementation sends an error if account_owned_objects_info_iter
-            // fails. If it succeeds but yields an empty iterator, the spawned
-            // task finishes, tx is dropped, and stream.next() will yield None.
-            // The mock for an unknown owner returns Ok(Box::new(std::iter::empty())).
-            // So, object_infos will be an empty Vec. The spawned task iterates 0 times.
-            // tx is dropped, rx yields None.
-            panic!(
-                "Stream sent an error status for unknown owner, expected empty stream (Ok(None)): {:?}",
-                status
-            );
-        }
-        Ok(None) => { /* Correct: stream ended immediately and is empty */ }
-        Err(_elapsed) => {
-            panic!("Timeout waiting for stream, expected it to end quickly for unknown owner")
-        }
-    }
-    let _ = shutdown_tx.send(());
-}
-
-#[tokio::test]
-async fn test_stream_objects_invalid_owner_address() {
-    let (mut client, _addr, shutdown_tx, _mock_state_reader) =
-        spawn_test_server_with_object_client().await;
-    let request = tonic::Request::new(StreamObjectsRequest {
-        owner_address: "not_an_address".to_string(),
-        start_after_object_id: None,
-    });
-    let response = client.stream_objects(request).await;
-    assert!(response.is_err());
-    let status = response.err().unwrap();
-    assert_eq!(status.code(), tonic::Code::InvalidArgument);
-    assert!(status.message().contains("Could not parse owner_address"));
-    let _ = shutdown_tx.send(());
-}
-
-#[tokio::test]
-async fn test_stream_objects_invalid_cursor_format() {
-    let (mut client, _addr, shutdown_tx, _mock_state_reader) =
-        spawn_test_server_with_object_client().await;
-    let request = tonic::Request::new(StreamObjectsRequest {
-        owner_address: TEST_OWNER_ADDRESS_HEX.to_string(),
-        start_after_object_id: Some("not_a_valid_object_id".to_string()),
-    });
-    let response = client.stream_objects(request).await;
-    assert!(response.is_err());
-    let status = response.err().unwrap();
-    assert_eq!(status.code(), tonic::Code::InvalidArgument);
-    assert!(
-        status
-            .message()
-            .contains("Could not parse start_after_object_id")
-    );
     let _ = shutdown_tx.send(());
 }

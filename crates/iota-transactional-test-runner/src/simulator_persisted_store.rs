@@ -11,7 +11,7 @@ use iota_types::{
     base_types::{IotaAddress, ObjectID, SequenceNumber, VersionNumber},
     committee::{Committee, EpochId},
     crypto::AccountKeyPair,
-    digests::{ObjectDigest, TransactionDigest, TransactionEventsDigest},
+    digests::{ChainIdentifier, ObjectDigest, TransactionDigest, TransactionEventsDigest},
     effects::{TransactionEffects, TransactionEffectsAPI, TransactionEvents},
     error::{IotaError, UserInputError},
     messages_checkpoint::{
@@ -19,18 +19,16 @@ use iota_types::{
         VerifiedCheckpoint,
     },
     object::{Object, Owner},
+    quorum_driver_types::{QuorumDriverError, QuorumDriverResponse},
     storage::{
-        BackingPackageStore, ChildObjectResolver, ListDirection, ObjectStore, PackageObject,
-        ReadStore, RestStateReader, load_package_object_from_object_store,
+        BackingPackageStore, ChildObjectResolver, CoinInfo, ListDirection, ObjectStore,
+        PackageObject, ReadStore, RestStateReader, load_package_object_from_object_store,
     },
-    transaction::VerifiedTransaction,
+    transaction::{SignedTransaction, VerifiedTransaction},
 };
 use move_binary_format::CompiledModule;
 use move_bytecode_utils::module_cache::GetModule;
-use move_core_types::{
-    language_storage::{ModuleId, StructTag},
-    resolver::ModuleResolver,
-};
+use move_core_types::{language_storage::ModuleId, resolver::ModuleResolver};
 use simulacrum::Simulacrum;
 use tempfile::tempdir;
 use typed_store::{
@@ -688,84 +686,6 @@ impl ReadStore for PersistedStoreInnerReadOnlyWrapper {
     }
 }
 
-impl RestStateReader for PersistedStoreInnerReadOnlyWrapper {
-    fn list_transactions(
-        &self,
-        _cursor: Option<TransactionDigest>,
-        _limit: u64,
-        _direction: ListDirection,
-    ) -> iota_types::storage::error::Result<Vec<(TransactionDigest, Arc<VerifiedTransaction>)>>
-    {
-        // Placeholder for now
-        unimplemented!()
-    }
-
-    fn get_transaction_checkpoint(
-        &self,
-        _digest: &TransactionDigest,
-    ) -> iota_types::storage::error::Result<Option<CheckpointSequenceNumber>> {
-        todo!()
-    }
-
-    fn get_lowest_available_checkpoint_objects(
-        &self,
-    ) -> iota_types::storage::error::Result<CheckpointSequenceNumber> {
-        Ok(0)
-    }
-
-    fn get_chain_identifier(
-        &self,
-    ) -> iota_types::storage::error::Result<iota_types::digests::ChainIdentifier> {
-        Ok((*self
-            .get_checkpoint_by_sequence_number(0)
-            .unwrap()
-            .unwrap()
-            .digest())
-        .into())
-    }
-
-    fn account_owned_objects_info_iter(
-        &self,
-        _owner: IotaAddress,
-        _cursor: Option<ObjectID>,
-    ) -> iota_types::storage::error::Result<
-        Box<dyn Iterator<Item = iota_types::storage::AccountOwnedObjectInfo> + '_>,
-    > {
-        todo!()
-    }
-
-    fn dynamic_field_iter(
-        &self,
-        _parent: ObjectID,
-        _cursor: Option<ObjectID>,
-    ) -> iota_types::storage::error::Result<
-        Box<
-            dyn Iterator<
-                    Item = (
-                        iota_types::storage::DynamicFieldKey,
-                        iota_types::storage::DynamicFieldIndexInfo,
-                    ),
-                > + '_,
-        >,
-    > {
-        todo!()
-    }
-
-    fn get_coin_info(
-        &self,
-        _coin_type: &StructTag,
-    ) -> iota_types::storage::error::Result<Option<iota_types::storage::CoinInfo>> {
-        todo!()
-    }
-
-    fn get_epoch_last_checkpoint(
-        &self,
-        _epoch_id: EpochId,
-    ) -> iota_types::storage::error::Result<Option<VerifiedCheckpoint>> {
-        todo!()
-    }
-}
-
 impl PersistedStoreInnerReadOnlyWrapper {
     pub fn sync(&self) {
         self.inner
@@ -786,6 +706,94 @@ impl Clone for PersistedStoreInnerReadOnlyWrapper {
                 MetricConf::new("persisted_readonly").with_sampling(samp),
             ),
         }
+    }
+}
+
+#[async_trait::async_trait]
+impl RestStateReader for PersistedStoreInnerReadOnlyWrapper {
+    fn get_transaction_checkpoint(
+        &self,
+        _digest: &TransactionDigest,
+    ) -> iota_types::storage::error::Result<Option<CheckpointSequenceNumber>> {
+        unimplemented!("get_transaction_checkpoint for PersistedStoreInnerReadOnlyWrapper")
+    }
+
+    fn get_lowest_available_checkpoint_objects(
+        &self,
+    ) -> iota_types::storage::error::Result<CheckpointSequenceNumber> {
+        unimplemented!(
+            "get_lowest_available_checkpoint_objects for PersistedStoreInnerReadOnlyWrapper"
+        )
+    }
+
+    fn get_chain_identifier(&self) -> iota_types::storage::error::Result<ChainIdentifier> {
+        unimplemented!("get_chain_identifier for PersistedStoreInnerReadOnlyWrapper")
+    }
+
+    fn account_owned_objects_info_iter(
+        &self,
+        _owner: IotaAddress,
+        _cursor: Option<ObjectID>,
+    ) -> iota_types::storage::error::Result<
+        Box<dyn Iterator<Item = iota_types::storage::AccountOwnedObjectInfo> + '_>,
+    > {
+        unimplemented!("account_owned_objects_info_iter for PersistedStoreInnerReadOnlyWrapper")
+    }
+
+    fn dynamic_field_iter(
+        &self,
+        _parent_object_id: ObjectID,
+        _cursor: Option<ObjectID>,
+    ) -> iota_types::storage::error::Result<
+        Box<
+            dyn Iterator<
+                    Item = (
+                        iota_types::storage::DynamicFieldKey,
+                        iota_types::storage::DynamicFieldIndexInfo,
+                    ),
+                > + '_,
+        >,
+    > {
+        unimplemented!("dynamic_field_iter for PersistedStoreInnerReadOnlyWrapper")
+    }
+
+    fn get_coin_info(
+        &self,
+        _coin_id: &move_core_types::language_storage::StructTag,
+    ) -> iota_types::storage::error::Result<Option<CoinInfo>> {
+        unimplemented!("get_coin_info for PersistedStoreInnerReadOnlyWrapper")
+    }
+
+    fn get_epoch_last_checkpoint(
+        &self,
+        _epoch_id: EpochId,
+    ) -> iota_types::storage::error::Result<Option<VerifiedCheckpoint>> {
+        unimplemented!("get_epoch_last_checkpoint for PersistedStoreInnerReadOnlyWrapper")
+    }
+
+    fn list_transactions(
+        &self,
+        _cursor: Option<TransactionDigest>,
+        _limit: u64,
+        _direction: ListDirection,
+    ) -> iota_types::storage::error::Result<Vec<(TransactionDigest, Arc<VerifiedTransaction>)>>
+    {
+        unimplemented!("list_transactions for PersistedStoreInnerReadOnlyWrapper")
+    }
+
+    async fn execute_transaction_for_gprc(
+        &self,
+        _transaction: SignedTransaction,
+    ) -> std::result::Result<QuorumDriverResponse, QuorumDriverError> {
+        self.sync(); // Ensure the read replica is up-to-date
+        Err(QuorumDriverError::QuorumDriverInternal(
+            IotaError::UserInput {
+                error: UserInputError::Unsupported(
+                    "execute_transaction_for_gprc is not supported on a read-only store replica."
+                        .to_string(),
+                ),
+            },
+        ))
     }
 }
 
