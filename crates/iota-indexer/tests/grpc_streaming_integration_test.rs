@@ -21,9 +21,14 @@ use iota_indexer::{
     test_utils::{IndexerTypeConfig, TestDatabase, start_test_indexer_impl},
 };
 use iota_types::{
-    base_types::{IotaAddress, ObjectID, ObjectRef, SequenceNumber as TxSequenceNumber},
-    digests::ObjectDigest,
-    messages_checkpoint::CheckpointSequenceNumber,
+    base_types::{
+        AuthorityName, IotaAddress, ObjectID, ObjectRef, SequenceNumber as TxSequenceNumber,
+    },
+    crypto::{AuthoritySignInfo, AuthoritySignature},
+    digests::{CheckpointContentsDigest, CheckpointDigest, ObjectDigest},
+    gas::GasCostSummary,
+    message_envelope::Envelope,
+    messages_checkpoint::{CheckpointSequenceNumber, CheckpointSummary, SignedCheckpointSummary},
     transaction::TransactionData,
 };
 use secrecy::{ExposeSecret, Secret};
@@ -169,24 +174,39 @@ impl CheckpointGprcService for MockCheckpointService {
 }
 
 fn mock_checkpoint_data_gprc_indexer_test(sequence_number_val: u64) -> CheckpointDataGprc {
-    let digest_bytes = vec![sequence_number_val as u8; 32];
     let epoch_val = if sequence_number_val == 0 {
         0
     } else {
         sequence_number_val
     };
+    let network_total_transactions_val = 100 + sequence_number_val;
+
+    let previous_digest_gprc_opt = if sequence_number_val > 0 {
+        Some(CheckpointDigestGprc {
+            digest: CheckpointDigest::new([(sequence_number_val - 1) as u8; 32])
+                .into_inner()
+                .to_vec(),
+        })
+    } else {
+        None
+    };
+
+    // This is the digest that represents the content (transactions, effects) of the
+    // checkpoint. In our test, we assume these are all zero/default, leading to
+    // a specific digest.
+    let mock_content_digest_bytes = CheckpointContentsDigest::new([0u8; 32])
+        .into_inner()
+        .to_vec();
 
     CheckpointDataGprc {
         summary: Some(SignedCheckpointSummaryGprc {
             epoch: epoch_val,
             sequence_number: sequence_number_val,
-            network_total_transactions: 100 + sequence_number_val,
-            content_digest: Some(CheckpointDigestGprc { digest: digest_bytes.clone() }),
-            previous_digest: if sequence_number_val > 0 {
-                Some(CheckpointDigestGprc { digest: vec![(sequence_number_val -1) as u8; 32] })
-            } else {
-                None
-            },
+            network_total_transactions: network_total_transactions_val,
+            content_digest: Some(CheckpointDigestGprc {
+                digest: mock_content_digest_bytes, // Use the pre-determined content digest
+            }),
+            previous_digest: previous_digest_gprc_opt,
         }),
         transactions: vec![CheckpointTransactionGprc {
             content: Some(
@@ -284,19 +304,62 @@ async fn test_indexer_grpc_streaming_ingestion() -> Result<(), Box<dyn std::erro
                 .expect("Failed to get DB connection for verification");
             let conn: &mut diesel::PgConnection = &mut *conn_pooled;
 
-            let checkpoint_summary_db: Option<StoredCheckpoint> = checkpoints
+            let checkpoint_from_db: Option<StoredCheckpoint> = checkpoints
                 .filter(sequence_number.eq(seq_to_check as i64))
                 .first::<StoredCheckpoint>(conn)
                 .optional()?;
 
-            if checkpoint_summary_db.is_some() {
-                if let Some(summary) = checkpoint_summary_db {
-                    assert_eq!(summary.sequence_number, seq_to_check as i64);
-                    let expected_digest_byte = seq_to_check as u8;
-                    let expected_digest_vec = vec![expected_digest_byte; 32];
+            if checkpoint_from_db.is_some() {
+                if let Some(summary_db) = checkpoint_from_db {
+                    assert_eq!(summary_db.sequence_number, seq_to_check as i64);
+
+                    // --- Reconstruct the expected SignedCheckpointSummary and its digest ---
+                    // --- This assumes the indexer is using *signed_checkpoint_summary.digest() ---
+                    let expected_epoch = if seq_to_check == 0 { 0 } else { seq_to_check };
+                    let expected_network_total_tx = 100 + seq_to_check;
+
+                    let expected_previous_digest_opt = if seq_to_check > 0 {
+                        Some(CheckpointDigest::new([(seq_to_check - 1) as u8; 32]))
+                    } else {
+                        None
+                    };
+
+                    // This must match the content_digest used by the indexer when it forms
+                    // its CheckpointSummary from the gRPC message.
+                    // The mock sends CheckpointContentsDigest::new([0u8; 32]) as the
+                    // content_digest.
+                    let expected_content_digest = CheckpointContentsDigest::new([0u8; 32]);
+
+                    let expected_checkpoint_summary_data = CheckpointSummary {
+                        epoch: expected_epoch,
+                        sequence_number: seq_to_check,
+                        network_total_transactions: expected_network_total_tx,
+                        content_digest: expected_content_digest,
+                        previous_digest: expected_previous_digest_opt,
+                        epoch_rolling_gas_cost_summary: GasCostSummary::default(),
+                        timestamp_ms: 0, // Assuming default in conversion by indexer
+                        checkpoint_commitments: Vec::new(), // Assuming default
+                        end_of_epoch_data: None, // Assuming default
+                        version_specific_data: Vec::new(), // Assuming default
+                    };
+
+                    let dummy_auth_sig_info = AuthoritySignInfo {
+                        epoch: expected_epoch,
+                        authority: AuthorityName::ZERO, // Default/zero authority name
+                        signature: AuthoritySignature::default(), // Default signature
+                    };
+
+                    let expected_envelope: SignedCheckpointSummary = // Alias for Envelope<CheckpointSummary, AuthoritySignInfo>
+                        Envelope::new_from_data_and_sig(expected_checkpoint_summary_data, dummy_auth_sig_info);
+
+                    let expected_digest_from_envelope = expected_envelope.digest();
+                    let expected_digest_vec: Vec<u8> =
+                        expected_digest_from_envelope.into_inner().to_vec();
+                    // --- End of full envelope digest calculation ---
+
                     assert_eq!(
-                        summary.checkpoint_digest, expected_digest_vec,
-                        "Content digest mismatch for checkpoint {}",
+                        summary_db.checkpoint_digest, expected_digest_vec,
+                        "Checkpoint digest mismatch for checkpoint {}. DB_VALUE (left) vs EXPECTED_FULL_ENVELOPE_DIGEST (right)",
                         seq_to_check
                     );
                     println!(

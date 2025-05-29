@@ -71,7 +71,7 @@ impl IndexedCheckpoint {
         let auth_sig = &checkpoint.auth_sig().signature;
         Self {
             sequence_number: checkpoint.sequence_number,
-            checkpoint_digest: CheckpointDigest::new(checkpoint.content_digest.into_inner()),
+            checkpoint_digest: *checkpoint.digest(),
             epoch: checkpoint.epoch,
             tx_digests,
             previous_checkpoint_digest: checkpoint.previous_digest,
