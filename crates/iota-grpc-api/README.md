@@ -12,7 +12,7 @@ Currently, `iota-indexer` syncs checkpoint data from an IOTA node using one of t
 
 This PoC introduces a gRPC-based alternative that offers more efficient and reactive data synchronization. The `iota-indexer` can subscribe to a stream of new checkpoints (`SubscribeNewCheckpoints` RPC) directly from the node via this gRPC API. This event-driven approach eliminates the need for polling and provides more timely updates for live checkpoint data. For historical data, the client (`iota-indexer`) can use unary RPCs like `GetCheckpointFull` and `ListCheckpoints` to catch up efficiently before switching to the event stream for live updates.
 
-The subscription logic for new checkpoints draws inspiration from similar mechanisms in other IOTA components, such as the **INX interface in Hornet**.
+The subscription logic for new checkpoints draws inspiration from similar mechanisms in other IOTA components, such as the [**INX interface in Hornet**](https://github.com/iotaledger/hornet/blob/3ab964191f30ec70f4d54dc121ea01bc48497bc1/components/inx/server_milestones.go#L169).
 
 ## Current Status
 
