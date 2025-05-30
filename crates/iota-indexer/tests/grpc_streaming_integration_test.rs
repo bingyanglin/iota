@@ -7,7 +7,7 @@ use std::{
     net::SocketAddr,
     sync::{
         Arc,
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
     },
     time::Duration,
 };
@@ -153,6 +153,7 @@ struct MockCheckpointService {
     checkpoint_cache: Arc<Mutex<HashMap<CheckpointSequenceNumber, Arc<VerifiedCheckpoint>>>>,
     contents_cache: Arc<Mutex<HashMap<CheckpointSequenceNumber, CheckpointContents>>>,
     subscriber_connected_notify: Arc<Notify>,
+    pause_streaming: Arc<AtomicBool>,
 }
 
 impl MockCheckpointService {
@@ -161,6 +162,7 @@ impl MockCheckpointService {
         initial_latest_sequence_number: CheckpointSequenceNumber,
         checkpoint_cache: Arc<Mutex<HashMap<CheckpointSequenceNumber, Arc<VerifiedCheckpoint>>>>,
         contents_cache: Arc<Mutex<HashMap<CheckpointSequenceNumber, CheckpointContents>>>,
+        pause_streaming: Arc<AtomicBool>,
     ) -> Self {
         Self {
             checkpoint_event_sender,
@@ -168,6 +170,7 @@ impl MockCheckpointService {
             checkpoint_cache,
             contents_cache,
             subscriber_connected_notify: Arc::new(Notify::new()),
+            pause_streaming,
         }
     }
 
@@ -330,6 +333,7 @@ impl CheckpointGprcService for MockCheckpointService {
         let _contents_cache_clone = self.contents_cache.clone();
         let notify_clone = self.subscriber_connected_notify.clone();
         let latest_seq_clone = self.latest_sequence_number.clone();
+        let pause_streaming_clone = self.pause_streaming.clone();
 
         tokio::spawn(async move {
             notify_clone.notify_one();
@@ -402,6 +406,11 @@ impl CheckpointGprcService for MockCheckpointService {
 
             // Now continue with live streaming
             loop {
+                if pause_streaming_clone.load(Ordering::SeqCst) {
+                    info!("[MockSvcSub-{}] Streaming PAUSED.", filter_seq_num);
+                    tokio::time::sleep(Duration::from_millis(500)).await;
+                    continue;
+                }
                 match rx.recv().await {
                     Ok(verified_checkpoint) => {
                         let checkpoint_seq_num_val = *verified_checkpoint.inner().sequence_number();
@@ -542,6 +551,7 @@ struct MockServiceController {
     latest_seq: Arc<AtomicU64>,
     checkpoint_cache: Arc<Mutex<HashMap<CheckpointSequenceNumber, Arc<VerifiedCheckpoint>>>>,
     subscriber_connected_notify: Arc<Notify>,
+    pause_streaming: Arc<AtomicBool>,
 }
 
 impl MockServiceController {
@@ -577,6 +587,14 @@ impl MockServiceController {
                 }
             }
         }
+    }
+
+    pub fn pause_streaming(&self) {
+        self.pause_streaming.store(true, Ordering::SeqCst);
+    }
+
+    pub fn resume_streaming(&self) {
+        self.pause_streaming.store(false, Ordering::SeqCst);
     }
 }
 
@@ -615,12 +633,14 @@ async fn start_mock_grpc_server(
     let (event_tx, _event_rx) = broadcast::channel::<Arc<VerifiedCheckpoint>>(100);
     let checkpoint_cache = Arc::new(Mutex::new(HashMap::new()));
     let contents_cache = Arc::new(Mutex::new(HashMap::new()));
+    let pause_streaming = Arc::new(AtomicBool::new(false));
 
     let service = MockCheckpointService::new(
         event_tx.clone(),
         initial_latest_seq,
         checkpoint_cache.clone(),
         contents_cache.clone(),
+        pause_streaming.clone(),
     );
     let subscriber_connected_notify_clone = service.subscriber_connected_notify.clone();
     let server_shutdown_token = CancellationToken::new();
@@ -656,6 +676,7 @@ async fn start_mock_grpc_server(
             latest_seq: service.latest_sequence_number.clone(),
             checkpoint_cache,
             subscriber_connected_notify: subscriber_connected_notify_clone,
+            pause_streaming,
         },
         server_shutdown_token,
     ))
@@ -977,20 +998,38 @@ async fn test_indexer_grpc_streaming_reconnection() -> anyhow::Result<()> {
 
     info!("[ReconnectTest] All checkpoints ingested successfully.");
 
-    // Simulate server disconnect by shutting down the server
-    info!("[ReconnectTest] Simulating server disconnect by shutting down server...");
-    server_shutdown_token.cancel();
+    // Simulate stream interruption by pausing the mock stream
+    info!("[ReconnectTest] Simulating stream interruption (pause)...");
+    mock_controller.pause_streaming();
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    info!("[ReconnectTest] Resuming stream...");
+    mock_controller.resume_streaming();
 
-    // Wait a bit to let the indexer detect the disconnection
-    tokio::time::sleep(Duration::from_millis(2000)).await;
-
-    info!("[ReconnectTest] Server disconnected. Indexer should handle this gracefully.");
-
-    // The indexer should continue running without crashing
-    // (We're not testing actual reconnection to a new server, just graceful
-    // handling of disconnection)
-
-    // Verify final state
+    // Publish new checkpoints after resuming
+    let new_publish_up_to_seq = 15u64;
+    let new_total_checkpoints_expected = new_publish_up_to_seq - start_ingestion_from_seq + 1;
+    {
+        let mut cache = mock_controller.checkpoint_cache.lock().await;
+        for i in (publish_up_to_seq + 1)..=new_publish_up_to_seq {
+            cache.insert(
+                i,
+                Arc::new(create_mock_verified_checkpoint_for_indexer(i, 1)),
+            );
+            info!("[ReconnectTest] Pre-populated CP {} into mock cache.", i);
+        }
+    }
+    mock_controller
+        .publish_checkpoints_up_to(new_publish_up_to_seq)
+        .await;
+    // Wait for all checkpoints (10-15) to be ingested
+    common::wait_for_checkpoints_in_db(
+        &_pg_store,
+        new_total_checkpoints_expected,
+        Duration::from_secs(10),
+    )
+    .await?;
+    info!("[ReconnectTest] All checkpoints (including after reconnection) ingested successfully.");
+    // Final DB check
     let mut conn_for_count = _pg_store
         .blocking_cp()
         .get()
@@ -999,11 +1038,10 @@ async fn test_indexer_grpc_streaming_reconnection() -> anyhow::Result<()> {
         .count()
         .get_result(&mut conn_for_count)
         .expect("Failed to get final_db_count");
-
     assert_eq!(
-        final_db_count as u64, total_checkpoints_expected,
+        final_db_count as u64, new_total_checkpoints_expected,
         "Final checkpoint count in DB {} does not match expected count {}.",
-        final_db_count, total_checkpoints_expected
+        final_db_count, new_total_checkpoints_expected
     );
 
     info!(
