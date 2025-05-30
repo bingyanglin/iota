@@ -6956,7 +6956,6 @@ dependencies = [
  "fastcrypto",
  "futures",
  "iota-protocol-config",
- "iota-rust-sdk",
  "iota-types",
  "move-core-types",
  "parking_lot 0.12.3",

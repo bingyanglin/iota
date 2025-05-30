@@ -21,7 +21,6 @@ roaring.workspace = true
 tracing = { workspace = true }
 
 iota-types.workspace = true
-iota-sdk2.workspace = true
 move-core-types.workspace = true
 iota-protocol-config.workspace = true
 serde_json = { workspace = true }
