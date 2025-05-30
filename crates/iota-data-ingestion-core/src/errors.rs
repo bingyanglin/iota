@@ -54,4 +54,31 @@ pub enum IngestionError {
 
     #[error("reading historical data failed: `{0}`")]
     HistoryRead(String),
+
+    #[error("Checkpoint not found: `{0}`")]
+    CheckpointNotFound(String),
+
+    #[error("gRPC: Checkpoint not found: `{0}`")]
+    GrpcCheckpointNotFound(String),
+
+    #[error("gRPC: Connection error: `{0}`")]
+    GrpcConnectionError(String),
+
+    #[error("gRPC: Conversion error: `{0}`")]
+    GrpcConversionError(String),
+
+    #[error("gRPC: Message error: `{0}`")]
+    GrpcMessageError(String),
+}
+
+#[async_trait::async_trait]
+impl From<tonic::Status> for IngestionError {
+    fn from(status: tonic::Status) -> Self {
+        IngestionError::Upstream(anyhow::anyhow!(
+            "gRPC call failed: {}. Code: {}, Message: {}",
+            status.message(),
+            status.code(),
+            status.details().escape_ascii()
+        ))
+    }
 }

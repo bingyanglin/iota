@@ -1,0 +1,6 @@
+# Ignore all Rust files in this directory, as they are auto-generated.
+*.rs
+
+# But don't ignore this .gitignore file itself or the mod.rs file (if you keep it).
+!.gitignore
+!mod.rs

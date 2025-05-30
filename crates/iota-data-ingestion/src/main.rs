@@ -208,6 +208,7 @@ async fn main() -> Result<()> {
     executor
         .run(
             config.path,
+            0,
             config.remote_store_url,
             config.remote_store_options,
             reader_options,

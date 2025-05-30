@@ -28,7 +28,6 @@ use iota_archival::{reader::ArchiveReaderBalancer, writer::ArchiveWriter};
 use iota_config::{
     ConsensusConfig, NodeConfig,
     node::{DBCheckpointConfig, RunWithRange},
-    node_config_metrics::NodeConfigMetrics,
     object_storage_config::{ObjectStoreConfig, ObjectStoreType},
 };
 use iota_core::{
@@ -110,6 +109,7 @@ use iota_types::{
         IotaSystemState, IotaSystemStateTrait,
         epoch_start_iota_system_state::{EpochStartSystemState, EpochStartSystemStateTrait},
     },
+    messages_checkpoint::VerifiedCheckpoint,
     messages_consensus::{AuthorityCapabilitiesV1, ConsensusTransaction, check_total_jwk_size},
     quorum_driver_types::QuorumDriverEffectsQueueResult,
     supported_protocol_versions::SupportedProtocolVersions,
@@ -221,6 +221,7 @@ pub struct IotaNode {
 
     /// Broadcast channel to send the starting system state for the next epoch.
     end_of_epoch_channel: broadcast::Sender<IotaSystemState>,
+    checkpoint_event_sender: broadcast::Sender<Arc<VerifiedCheckpoint>>,
 
     /// Broadcast channel to notify [`DiscoveryEventLoop`] for new validator
     /// peers.
@@ -409,8 +410,16 @@ impl IotaNode {
         custom_rpc_runtime: Option<Handle>,
         software_version: &'static str,
     ) -> Result<Arc<IotaNode>> {
-        NodeConfigMetrics::new(&registry_service.default_registry()).record_metrics(&config);
-        let mut config = config.clone();
+        info!("iota-node version: {software_version}");
+        // let iota_node_metrics =
+        // IotaNodeMetrics::new(&registry_service.default_registry()); // Removed unused
+        // variable
+
+        // Create a broadcast channel for checkpoint events BEFORE it's needed
+        let (checkpoint_event_tx, _checkpoint_event_rx_for_node) =
+            broadcast::channel::<Arc<VerifiedCheckpoint>>(128);
+
+        let mut config = config;
         if config.supported_protocol_versions.is_none() {
             info!(
                 "populating config.supported_protocol_versions with default {:?}",
@@ -811,24 +820,23 @@ impl IotaNode {
             Arc::new(IotaNodeMetrics::new(&registry_service.default_registry()));
 
         let validator_components = if state.is_validator(&epoch_store) {
-            let components = Self::construct_validator_components(
-                config.clone(),
-                state.clone(),
-                committee,
-                epoch_store.clone(),
-                checkpoint_store.clone(),
-                state_sync_handle.clone(),
-                randomness_handle.clone(),
-                Arc::downgrade(&accumulator),
-                connection_monitor_status.clone(),
-                &registry_service,
-                iota_node_metrics.clone(),
+            Some(
+                Self::construct_validator_components(
+                    config.clone(),
+                    state.clone(),
+                    committee.clone(),
+                    epoch_store.clone(),
+                    checkpoint_store.clone(),
+                    state_sync_handle.clone(),
+                    randomness_handle.clone(),
+                    Arc::downgrade(&accumulator),
+                    connection_monitor_status.clone(),
+                    &registry_service,
+                    iota_node_metrics.clone(),
+                    checkpoint_event_tx.clone(),
+                )
+                .await?,
             )
-            .await?;
-            // This is only needed during cold start.
-            components.consensus_adapter.submit_recovered(&epoch_store);
-
-            Some(components)
         } else {
             None
         };
@@ -843,15 +851,16 @@ impl IotaNode {
             state,
             transaction_orchestrator,
             registry_service,
-            metrics: iota_node_metrics,
+            metrics: iota_node_metrics.clone(),
 
             _discovery: discovery_handle,
             state_sync_handle,
             randomness_handle,
             checkpoint_store,
             accumulator: Mutex::new(Some(accumulator)),
-            end_of_epoch_channel,
             connection_monitor_status,
+            end_of_epoch_channel,
+            checkpoint_event_sender: checkpoint_event_tx,
             trusted_peer_change_tx,
 
             _db_checkpoint_handle: db_checkpoint_handle,
@@ -1191,6 +1200,7 @@ impl IotaNode {
         connection_monitor_status: Arc<ConnectionMonitorStatus>,
         registry_service: &RegistryService,
         iota_node_metrics: Arc<IotaNodeMetrics>,
+        checkpoint_event_tx: broadcast::Sender<Arc<VerifiedCheckpoint>>,
     ) -> Result<ValidatorComponents> {
         let mut config_clone = config.clone();
         let consensus_config = config_clone
@@ -1265,6 +1275,7 @@ impl IotaNode {
             checkpoint_metrics,
             iota_node_metrics,
             iota_tx_validator_metrics,
+            checkpoint_event_tx,
         )
         .await
     }
@@ -1287,6 +1298,7 @@ impl IotaNode {
         checkpoint_metrics: Arc<CheckpointMetrics>,
         iota_node_metrics: Arc<IotaNodeMetrics>,
         iota_tx_validator_metrics: Arc<IotaTxValidatorMetrics>,
+        checkpoint_event_tx: broadcast::Sender<Arc<VerifiedCheckpoint>>,
     ) -> Result<ValidatorComponents> {
         let (checkpoint_service, checkpoint_service_tasks) = Self::start_checkpoint_service(
             config,
@@ -1297,6 +1309,7 @@ impl IotaNode {
             state_sync_handle,
             accumulator,
             checkpoint_metrics.clone(),
+            checkpoint_event_tx.clone(),
         );
 
         // create a new map that gets injected into both the consensus handler and the
@@ -1378,6 +1391,7 @@ impl IotaNode {
         state_sync_handle: state_sync::Handle,
         accumulator: Weak<StateAccumulator>,
         checkpoint_metrics: Arc<CheckpointMetrics>,
+        checkpoint_event_tx: broadcast::Sender<Arc<VerifiedCheckpoint>>,
     ) -> (Arc<CheckpointService>, JoinSet<()>) {
         let epoch_start_timestamp_ms = epoch_store.epoch_start_state().epoch_start_timestamp_ms();
         let epoch_duration_ms = epoch_store.epoch_start_state().epoch_duration_ms();
@@ -1414,6 +1428,7 @@ impl IotaNode {
             checkpoint_metrics,
             max_tx_per_checkpoint,
             max_checkpoint_size_bytes,
+            checkpoint_event_tx,
         )
     }
 
@@ -1728,6 +1743,7 @@ impl IotaNode {
                             checkpoint_metrics,
                             self.metrics.clone(),
                             iota_tx_validator_metrics,
+                            self.checkpoint_event_sender.clone(),
                         )
                         .await?,
                     )
@@ -1779,6 +1795,7 @@ impl IotaNode {
                             self.connection_monitor_status.clone(),
                             &self.registry_service,
                             self.metrics.clone(),
+                            self.checkpoint_event_sender.clone(),
                         )
                         .await?,
                     )

@@ -69,12 +69,26 @@ impl Indexer {
             env!("CARGO_PKG_VERSION")
         );
 
-        let primary_watermark = store
+        let mut primary_watermark = store
             .get_latest_checkpoint_sequence_number()
             .await
             .expect("Failed to get latest tx checkpoint sequence number from DB")
             .map(|seq| seq + 1)
             .unwrap_or_default();
+
+        // If config specifies a starting sequence number, and it's higher than what the
+        // DB suggests, use the config's value. This ensures all components
+        // (Reader, Committer) start consistently.
+        if let Some(start_seq_override) = config.start_ingestion_from_checkpoint_seq_num {
+            if start_seq_override > primary_watermark {
+                info!(
+                    "Overriding primary_watermark from {} to {} based on config.start_ingestion_from_checkpoint_seq_num",
+                    primary_watermark, start_seq_override
+                );
+                primary_watermark = start_seq_override;
+            }
+        }
+
         let download_queue_size = env::var("DOWNLOAD_QUEUE_SIZE")
             .unwrap_or_else(|_| DOWNLOAD_QUEUE_SIZE.to_string())
             .parse::<usize>()
@@ -87,10 +101,12 @@ impl Indexer {
             .unwrap_or(CHECKPOINT_PROCESSING_BATCH_DATA_LIMIT.to_string())
             .parse::<usize>()
             .unwrap();
-        let extra_reader_options = ReaderOptions {
+        let fully_configured_reader_options = ReaderOptions {
             batch_size: download_queue_size,
             timeout_secs: ingestion_reader_timeout_secs,
             data_limit,
+            use_grpc_streaming: config.use_grpc_streaming,
+            grpc_address: config.grpc_address.clone(),
             ..Default::default()
         };
 
@@ -127,6 +143,11 @@ impl Indexer {
             store.persist_protocol_configs_and_feature_flags(chain_id)?;
         }
 
+        info!(
+            "[Indexer::start_writer_with_config] ShimIndexerProgressStore will be initialized with primary_watermark: {}",
+            primary_watermark
+        );
+
         let mut executor = IndexerExecutor::new(
             ShimIndexerProgressStore::new(vec![
                 ("primary".to_string(), primary_watermark),
@@ -143,28 +164,31 @@ impl Indexer {
             download_queue_size,
             Default::default(),
         );
-
         executor.register(worker_pool).await?;
 
-        let worker_pool = WorkerPool::new(
+        let worker_pool_obj_snapshot = WorkerPool::new(
             object_snapshot_worker,
             "object_snapshot".to_string(),
             download_queue_size,
             Default::default(),
         );
-        executor.register(worker_pool).await?;
+        executor.register(worker_pool_obj_snapshot).await?;
         info!("Starting data ingestion executor...");
+
+        // Start the executor.
         executor
             .run(
                 config
                     .data_ingestion_path
                     .clone()
-                    .unwrap_or(tempfile::tempdir().unwrap().into_path()),
+                    .unwrap_or_else(|| std::path::PathBuf::from("./")), // path
+                primary_watermark, // initial_reader_checkpoint_number
                 config.remote_store_url.clone(),
-                vec![],
-                extra_reader_options,
+                vec![], // remote_store_options, pass empty as these are in ReaderOptions now
+                fully_configured_reader_options,
             )
             .await?;
+
         Ok(())
     }
 
@@ -220,7 +244,12 @@ impl ProgressStore for ShimIndexerProgressStore {
     type Error = IndexerError;
 
     async fn load(&mut self, task_name: String) -> Result<CheckpointSequenceNumber, Self::Error> {
-        Ok(*self.watermarks.get(&task_name).expect("missing watermark"))
+        let watermark = self.watermarks.get(&task_name).copied().unwrap_or_default();
+        info!(
+            "ShimIndexerProgressStore: load for task_name '{}' returning watermark: {}",
+            task_name, watermark
+        );
+        Ok(watermark)
     }
 
     async fn save(&mut self, _: String, _: CheckpointSequenceNumber) -> Result<(), Self::Error> {

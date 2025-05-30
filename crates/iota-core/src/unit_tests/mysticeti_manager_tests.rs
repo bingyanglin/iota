@@ -44,6 +44,10 @@ pub fn checkpoint_service_for_testing(state: Arc<AuthorityState>) -> Arc<Checkpo
         CheckpointMetrics::new_for_tests(),
         3,
         100_000,
+        tokio::sync::broadcast::channel::<
+            std::sync::Arc<iota_types::messages_checkpoint::VerifiedCheckpoint>,
+        >(16)
+        .0,
     );
     checkpoint_service
 }

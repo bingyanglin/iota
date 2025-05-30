@@ -71,7 +71,7 @@ pub async fn start_cluster(
         true,
         None,
         val_fn.rpc_url().to_string(),
-        IndexerTypeConfig::writer_mode(None, None),
+        IndexerTypeConfig::writer_mode(None, None, false /* use_grpc_streaming */, None),
         Some(data_ingestion_path),
         cancellation_token.clone(),
     )
@@ -140,7 +140,12 @@ pub async fn serve_executor(
         true,
         None,
         format!("http://{}", executor_server_url),
-        IndexerTypeConfig::writer_mode(snapshot_config.clone(), epochs_to_keep),
+        IndexerTypeConfig::writer_mode(
+            snapshot_config.clone(),
+            epochs_to_keep,
+            false, // use_grpc_streaming
+            None,
+        ),
         Some(data_ingestion_path),
         cancellation_token.clone(),
     )

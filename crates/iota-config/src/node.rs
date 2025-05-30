@@ -74,6 +74,11 @@ pub struct NodeConfig {
     #[serde(default = "default_json_rpc_address")]
     pub json_rpc_address: SocketAddr,
 
+    /// The network address for the public gRPC API.
+    /// If an address is provided, the public gRPC API will be enabled.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub grpc_public_api_address: Option<SocketAddr>,
+
     /// Flag to enable the REST API under `/api/v1`
     /// endpoint on the same interface as `json` `rpc` server.
     #[serde(default)]

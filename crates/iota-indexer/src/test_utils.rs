@@ -12,11 +12,11 @@ use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 use tracing::info;
 
+pub use crate::handlers::objects_snapshot_handler::SnapshotLagConfig;
 use crate::{
     IndexerConfig, IndexerMetrics,
     db::{ConnectionPool, ConnectionPoolConfig, PoolConnection, new_connection_pool_with_config},
     errors::IndexerError,
-    handlers::objects_snapshot_handler::SnapshotLagConfig,
     indexer::Indexer,
     store::{PgIndexerAnalyticalStore, PgIndexerStore},
 };
@@ -66,6 +66,9 @@ pub enum IndexerTypeConfig {
     Writer {
         snapshot_config: SnapshotLagConfig,
         epochs_to_keep: Option<u64>,
+        use_grpc_streaming: bool,
+        start_ingestion_from_checkpoint_seq_num: Option<u64>,
+        grpc_address: Option<String>,
     },
     AnalyticalWorker,
 }
@@ -80,10 +83,16 @@ impl IndexerTypeConfig {
     pub fn writer_mode(
         snapshot_config: Option<SnapshotLagConfig>,
         epochs_to_keep: Option<u64>,
+        use_grpc_streaming: bool,
+        start_ingestion_from_checkpoint_seq_num: Option<u64>,
+        grpc_address: Option<String>,
     ) -> Self {
         Self::Writer {
             snapshot_config: snapshot_config.unwrap_or_default(),
             epochs_to_keep,
+            use_grpc_streaming,
+            start_ingestion_from_checkpoint_seq_num,
+            grpc_address,
         }
     }
 }
@@ -121,10 +130,9 @@ pub async fn start_test_indexer_impl(
 ) -> (PgIndexerStore, JoinHandle<Result<(), IndexerError>>) {
     let mut config = IndexerConfig {
         db_url: Some(db_url.clone().into()),
-        // As fallback sync mechanism enable Rest Api if `data_ingestion_path` was not provided
         remote_store_url: data_ingestion_path
             .is_none()
-            .then_some(format!("{rpc_url}/api/v1")),
+            .then_some(format!("{}/api/v1", rpc_url)),
         rpc_client_url: rpc_url,
         reset_db,
         fullnode_sync_worker: true,
@@ -132,6 +140,19 @@ pub async fn start_test_indexer_impl(
         data_ingestion_path,
         ..Default::default()
     };
+    if let IndexerTypeConfig::Writer {
+        use_grpc_streaming,
+        start_ingestion_from_checkpoint_seq_num,
+        grpc_address,
+        ..
+    } = &reader_writer_config
+    {
+        config.use_grpc_streaming = *use_grpc_streaming;
+        config.start_ingestion_from_checkpoint_seq_num = *start_ingestion_from_checkpoint_seq_num;
+        if *use_grpc_streaming {
+            config.grpc_address = grpc_address.clone();
+        }
+    }
 
     let store = create_pg_store(config.get_db_url().unwrap(), reset_db);
     if config.reset_db {
@@ -158,6 +179,9 @@ pub async fn start_test_indexer_impl(
         IndexerTypeConfig::Writer {
             snapshot_config,
             epochs_to_keep,
+            use_grpc_streaming: _,
+            start_ingestion_from_checkpoint_seq_num: _,
+            grpc_address: _,
         } => {
             let store_clone = store.clone();
 

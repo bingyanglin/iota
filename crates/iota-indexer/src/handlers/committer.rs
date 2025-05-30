@@ -26,7 +26,10 @@ where
 {
     use futures::StreamExt;
 
-    info!("Indexer checkpoint commit task started...");
+    info!(
+        "Indexer checkpoint commit task started. Initial next_checkpoint_sequence_number: {}",
+        next_checkpoint_sequence_number
+    );
     let checkpoint_commit_batch_size = std::env::var("CHECKPOINT_COMMIT_BATCH_SIZE")
         .unwrap_or(CHECKPOINT_COMMIT_BATCH_SIZE.to_string())
         .parse::<usize>()
@@ -39,29 +42,90 @@ where
     let mut unprocessed = HashMap::new();
     let mut batch = vec![];
 
-    while let Some(indexed_checkpoint_batch) = stream.next().await {
+    while let Some(indexed_checkpoint_batch_from_stream) = stream.next().await {
+        info!(
+            "Commit task main loop: received a chunk of {} checkpoints from ready_chunks.",
+            indexed_checkpoint_batch_from_stream.len()
+        );
         if cancel.is_cancelled() {
+            info!("Commit task main loop: cancel signalled, breaking.");
             break;
         }
 
-        // split the batch into smaller batches per epoch to handle partitioning
-        for checkpoint in indexed_checkpoint_batch {
-            unprocessed.insert(checkpoint.checkpoint.sequence_number, checkpoint);
+        for checkpoint_data_to_commit in indexed_checkpoint_batch_from_stream {
+            info!(
+                "Commit task main loop: received checkpoint {} from stream, adding to unprocessed.",
+                checkpoint_data_to_commit.checkpoint.sequence_number
+            );
+            unprocessed.insert(
+                checkpoint_data_to_commit.checkpoint.sequence_number,
+                checkpoint_data_to_commit,
+            );
         }
+        info!(
+            "Commit task main loop: unprocessed size after adding from stream: {}. Current next_checkpoint_sequence_number: {}",
+            unprocessed.len(),
+            next_checkpoint_sequence_number
+        );
+
         while let Some(checkpoint) = unprocessed.remove(&next_checkpoint_sequence_number) {
+            let current_cp_seq = checkpoint.checkpoint.sequence_number;
+            info!(
+                "Commit task inner loop: processing unprocessed checkpoint {} (matches next_checkpoint_sequence_number {}), adding to batch.",
+                current_cp_seq, next_checkpoint_sequence_number
+            );
             let epoch = checkpoint.epoch.clone();
             batch.push(checkpoint);
             next_checkpoint_sequence_number += 1;
+            info!(
+                "Commit task inner loop: batch_len: {}, checkpoint_commit_batch_size: {}, epoch_is_some: {}. New next_checkpoint_sequence_number: {}",
+                batch.len(),
+                checkpoint_commit_batch_size,
+                epoch.is_some(),
+                next_checkpoint_sequence_number
+            );
             if batch.len() == checkpoint_commit_batch_size || epoch.is_some() {
+                info!(
+                    "Commit task inner loop: condition met (batch full or epoch end). Calling commit_checkpoints for {} items. First_seq in batch: {}. Last_seq in batch: {}.",
+                    batch.len(),
+                    batch.first().map_or("N/A".to_string(), |cp| cp
+                        .checkpoint
+                        .sequence_number
+                        .to_string()),
+                    batch.last().map_or("N/A".to_string(), |cp| cp
+                        .checkpoint
+                        .sequence_number
+                        .to_string())
+                );
                 commit_checkpoints(&state, batch, epoch, &metrics).await;
                 batch = vec![];
+                info!("Commit task inner loop: batch cleared after commit.");
             }
         }
+        info!(
+            "Commit task main loop: finished inner while. Batch len: {}, Unprocessed len: {}.",
+            batch.len(),
+            unprocessed.len()
+        );
         if !batch.is_empty() && unprocessed.is_empty() {
+            info!(
+                "Commit task main loop: condition met (drain remaining). Calling commit_checkpoints for {} items. First_seq in batch: {}. Last_seq in batch: {}.",
+                batch.len(),
+                batch.first().map_or("N/A".to_string(), |cp| cp
+                    .checkpoint
+                    .sequence_number
+                    .to_string()),
+                batch.last().map_or("N/A".to_string(), |cp| cp
+                    .checkpoint
+                    .sequence_number
+                    .to_string())
+            );
             commit_checkpoints(&state, batch, None, &metrics).await;
             batch = vec![];
+            info!("Commit task main loop: batch cleared after draining commit.");
         }
     }
+    info!("Indexer checkpoint commit task ended.");
     Ok(())
 }
 
@@ -78,6 +142,31 @@ async fn commit_checkpoints<S>(
 ) where
     S: IndexerStore + Clone + Sync + Send + 'static,
 {
+    if indexed_checkpoint_batch.is_empty() {
+        // Should not happen due to caller logic, but good to guard.
+        info!("commit_checkpoints called with empty batch, skipping.");
+        return;
+    }
+
+    let first_seq = indexed_checkpoint_batch
+        .first()
+        .as_ref()
+        .unwrap()
+        .checkpoint
+        .sequence_number;
+    let last_seq = indexed_checkpoint_batch
+        .last()
+        .as_ref()
+        .unwrap()
+        .checkpoint
+        .sequence_number;
+    info!(
+        "Commit task (commit_checkpoints fn): processing batch of {} checkpoints from {} to {}.",
+        indexed_checkpoint_batch.len(),
+        first_seq,
+        last_seq
+    );
+
     let mut checkpoint_batch = vec![];
     let mut tx_batch = vec![];
     let mut events_batch = vec![];
@@ -155,12 +244,22 @@ async fn commit_checkpoints<S>(
             .into_iter()
             .map(|res| {
                 if res.is_err() {
-                    error!("Failed to persist data with error: {:?}", res);
+                    error!("Failed to persist partial data in batch {}-{}: {:?}", first_seq, last_seq, res);
                 }
                 res
             })
             .collect::<IndexerResult<Vec<_>>>()
-            .expect("Persisting data into DB should not fail.");
+            .tap_err(|e| {
+                error!("Critical error during batched data persistence for checkpoints {}-{}: {:?}. Data might be partially committed.", first_seq, last_seq, e);
+            })
+            .unwrap_or_else(|e| {
+                // Log and potentially trigger a more graceful shutdown if possible,
+                // instead of outright panic, especially if some data might be committed.
+                error!("FATAL: Persisting partial data into DB FAILED for batch {}-{}: {:?}. Cancelling commit task to prevent inconsistent state.", first_seq, last_seq, e);
+                // Ideally, we'd have a way to signal cancellation to the main task if we can't recover.
+                // For now, this will likely lead to the outer task also failing if it tries to proceed.
+                vec![] // Return an empty vec or handle error appropriately
+            });
     }
 
     let is_epoch_end = epoch.is_some();
@@ -191,11 +290,17 @@ async fn commit_checkpoints<S>(
         .await
         .tap_err(|e| {
             error!(
-                "Failed to persist checkpoint data with error: {}",
-                e.to_string()
+                "Failed to persist main checkpoint entries for {}-{}: {:?}",
+                first_seq, last_seq, e
             );
         })
-        .expect("Persisting data into DB should not fail.");
+        .unwrap_or_else(|e| {
+            error!(
+                "FATAL: Persisting main checkpoint entries FAILED for {}-{}: {:?}. Cancelling commit task.",
+                first_seq, last_seq, e
+            );
+            // Signal cancellation or handle error
+        });
 
     if is_epoch_end {
         // The epoch has advanced so we update the configs for the new protocol version,
@@ -218,7 +323,7 @@ async fn commit_checkpoints<S>(
         tx_count,
     );
     metrics
-        .latest_tx_checkpoint_sequence_number
+        .max_committed_checkpoint_sequence_number
         .set(last_checkpoint_seq as i64);
     metrics
         .total_tx_checkpoint_committed

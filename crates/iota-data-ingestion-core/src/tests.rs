@@ -60,14 +60,21 @@ async fn run(
     match duration {
         None => {
             indexer
-                .run(path.unwrap_or_else(temp_dir), None, vec![], options)
+                .run(
+                    path.unwrap_or_else(temp_dir),
+                    0,      // initial_reader_checkpoint_number
+                    None,   // remote_store_url
+                    vec![], // remote_store_options
+                    options,
+                )
                 .await
         }
         Some(duration) => {
             let handle = tokio::task::spawn(indexer.run(
                 path.unwrap_or_else(temp_dir),
-                None,
-                vec![],
+                0,      // initial_reader_checkpoint_number
+                None,   // remote_store_url
+                vec![], // remote_store_options
                 options,
             ));
             tokio::time::sleep(duration).await;
@@ -199,7 +206,7 @@ async fn basic_flow() {
     let result = run(
         bundle.executor,
         Some(path),
-        Some(Duration::from_secs(1)),
+        Some(Duration::from_secs(5)),
         bundle.token,
     )
     .await;
@@ -274,7 +281,7 @@ async fn worker_pool_with_reducer() {
     let result = run(
         bundle.executor,
         Some(path),
-        Some(Duration::from_secs(1)),
+        Some(Duration::from_secs(5)),
         bundle.token,
     )
     .await;

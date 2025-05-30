@@ -67,9 +67,16 @@ shared_test_runtime = []
 # external dependencies
 hex.workspace = true
 serde_json.workspace = true
+tonic = { workspace = true, features = ["transport", "server"] }
+tokio-stream = { workspace = true }
+tracing-subscriber = { workspace = true, features = ["fmt"] }
+shared-crypto = { workspace = true }
+parking_lot = { workspace = true }
+rand = { workspace = true }
 
 # internal dependencies
 iota-config.workspace = true
+iota-grpc-api = { workspace = true }
 iota-keys.workspace = true
 iota-move-build.workspace = true
 iota-swarm-config.workspace = true

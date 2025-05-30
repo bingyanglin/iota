@@ -25,7 +25,22 @@ async fn main() -> Result<(), IndexerError> {
     .unwrap();
     // TODO: Explore other options as in upstream.
     // For the moment we only use the fullnode for fetching checkpoints
-    indexer_config.remote_store_url = Some(format!("{}/api/v1", indexer_config.rpc_client_url));
+    // If remote_store_url is not provided, default to using rpc_client_url for REST
+    // API. Otherwise, use the provided remote_store_url (which could be gRPC,
+    // REST, or object store).
+    if indexer_config.remote_store_url.is_none() {
+        info!(
+            "remote_store_url not provided, defaulting to REST API endpoint derived from rpc_client_url: {}",
+            indexer_config.rpc_client_url
+        );
+        indexer_config.remote_store_url = Some(format!("{}/api/v1", indexer_config.rpc_client_url));
+    } else {
+        info!(
+            "Using explicitly provided remote_store_url: {:?}",
+            indexer_config.remote_store_url.as_ref().unwrap()
+        );
+    }
+
     info!("Parsed indexer config: {:#?}", indexer_config);
     let (_registry_service, registry) = start_prometheus_server(
         // NOTE: this parses the input host addr and port number for socket addr,
