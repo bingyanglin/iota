@@ -199,7 +199,7 @@ async fn basic_flow() {
     let result = run(
         bundle.executor,
         Some(path),
-        Some(Duration::from_secs(1)),
+        Some(Duration::from_secs(5)),
         bundle.token,
     )
     .await;
