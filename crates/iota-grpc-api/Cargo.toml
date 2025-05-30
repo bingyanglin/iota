@@ -17,13 +17,13 @@ thiserror.workspace = true
 bcs.workspace = true
 anyhow.workspace = true
 roaring.workspace = true
-tracing = { workspace = true }
+tracing.workspace = true
 
 iota-types.workspace = true
 move-core-types.workspace = true
 iota-protocol-config.workspace = true
-serde_json = { workspace = true }
-shared-crypto = { workspace = true }
+serde_json.workspace = true
+shared-crypto.workspace = true
 
 [build-dependencies]
 tonic-build.workspace = true
