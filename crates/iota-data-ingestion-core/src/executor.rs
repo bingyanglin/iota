@@ -166,6 +166,9 @@ impl<P: ProgressStore> IndexerExecutor<P> {
         remote_store_options: Vec<(String, String)>,
         reader_options: ReaderOptions,
     ) -> IngestionResult<ExecutorProgress> {
+        if self.pools.is_empty() {
+            return Err(IngestionError::EmptyWorkerPool);
+        }
         let mut current_gc_watermark_for_reader =
             self.progress_store.min_watermark().unwrap_or_default();
 

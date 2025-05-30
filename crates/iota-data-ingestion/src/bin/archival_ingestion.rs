@@ -62,6 +62,7 @@ async fn main() -> Result<()> {
     executor
         .run(
             tempfile::tempdir()?.into_path(),
+            0,
             Some(config.remote_store_url),
             vec![],
             ReaderOptions::default(),

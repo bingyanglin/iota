@@ -1255,7 +1255,7 @@ mod tests {
                 Ok(Some(Ok((checkpoint_data, _size)))) => {
                     assert_eq!(
                         checkpoint_data.checkpoint_summary.sequence_number,
-                        start_seq + 1 + i as u64
+                        start_seq + i as u64
                     );
                     received_count += 1;
                 }
