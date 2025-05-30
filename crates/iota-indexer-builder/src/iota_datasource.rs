@@ -74,6 +74,7 @@ impl Datasource<CheckpointTxnData> for IotaCheckpointDatasource {
             executor
                 .run(
                     checkpoint_path,
+                    starting_checkpoint,
                     Some(remote_store_url),
                     vec![], // optional remote store access options
                     ReaderOptions::default(),

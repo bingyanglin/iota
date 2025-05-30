@@ -65,13 +65,18 @@ pub async fn start_cluster(
             .await;
 
     // Starts indexer
+    let indexer_config = IndexerTypeConfig::writer_mode(
+        None, None, false, // use_grpc_streaming
+        None,  // start_ingestion_from_checkpoint_seq_num
+        None,  // grpc_address
+    );
     let (pg_store, pg_handle) = start_test_indexer_impl(
         db_url,
         // reset the existing db
         true,
         None,
         val_fn.rpc_url().to_string(),
-        IndexerTypeConfig::writer_mode(None, None, false /* use_grpc_streaming */, None),
+        indexer_config,
         Some(data_ingestion_path),
         cancellation_token.clone(),
     )
@@ -135,17 +140,20 @@ pub async fn serve_executor(
 
     info!("spawned executor server");
 
+    let indexer_config = IndexerTypeConfig::writer_mode(
+        snapshot_config.clone(),
+        epochs_to_keep,
+        false, // use_grpc_streaming
+        None,  // start_ingestion_from_checkpoint_seq_num
+        None,  // grpc_address
+    );
+
     let (pg_store, pg_handle) = start_test_indexer_impl(
         db_url,
         true,
         None,
         format!("http://{}", executor_server_url),
-        IndexerTypeConfig::writer_mode(
-            snapshot_config.clone(),
-            epochs_to_keep,
-            false, // use_grpc_streaming
-            None,
-        ),
+        indexer_config,
         Some(data_ingestion_path),
         cancellation_token.clone(),
     )

@@ -83,6 +83,7 @@ pub const MAX_CHECKPOINTS_IN_PROGRESS: usize = 10000;
 ///     executor
 ///         .run(
 ///             PathBuf::from("./chk".to_string()), // path to a local directory where checkpoints are stored.
+///             0,                                  // initial_reader_checkpoint_number
 ///             None,
 ///             vec![],                   // optional remote store access options.
 ///             ReaderOptions::default(), // remote_read_batch_size.

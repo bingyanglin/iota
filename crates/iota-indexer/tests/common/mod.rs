@@ -8,6 +8,7 @@ use std::{
     time::Duration,
 };
 
+use diesel::prelude::*;
 use iota_config::local_ip_utils::{get_available_port, new_local_tcp_socket_for_testing};
 use iota_indexer::{
     IndexerConfig,
@@ -310,6 +311,63 @@ pub fn _rpc_call_error_msg_matches<T>(
         }
         _ => false,
     })
+}
+
+/// Waits for a certain number of checkpoints to be present in the database.
+pub async fn wait_for_checkpoints_in_db(
+    pg_store: &PgIndexerStore,
+    expected_count: u64,
+    timeout_duration: Duration,
+) -> anyhow::Result<()> {
+    let start_time = std::time::Instant::now();
+    let mut last_reported_count: i64 = -1; // Initialize to a value that won't match any real count
+
+    while std::time::Instant::now().duration_since(start_time) < timeout_duration {
+        let mut conn = pg_store.blocking_cp().get().map_err(|e| {
+            tracing::error!(
+                "[CommonTestHelper] Failed to get DB connection from pool: {:?}",
+                e
+            );
+            anyhow::anyhow!("DB connection error in wait_for_checkpoints_in_db: {:?}", e)
+        })?;
+
+        let current_count: i64 = iota_indexer::schema::checkpoints::dsl::checkpoints
+            .count()
+            .get_result(&mut conn)
+            .map_err(|e| {
+                tracing::error!(
+                    "[CommonTestHelper] Failed to query checkpoint count: {:?}",
+                    e
+                );
+                anyhow::anyhow!("DB query error for checkpoint count: {:?}", e)
+            })?;
+
+        if current_count != last_reported_count {
+            tracing::info!(
+                "[CommonTestHelper] wait_for_checkpoints_in_db: Current count: {}, Expected: {}. Time elapsed: {:?}",
+                current_count,
+                expected_count,
+                std::time::Instant::now().duration_since(start_time)
+            );
+            last_reported_count = current_count;
+        }
+
+        if current_count >= expected_count as i64 {
+            tracing::info!(
+                "[CommonTestHelper] wait_for_checkpoints_in_db: Reached expected count of {}.",
+                expected_count
+            );
+            return Ok(());
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+
+    Err(anyhow::anyhow!(
+        "Timeout: Did not reach expected checkpoint count {} within {:?}. Last count: {}.",
+        expected_count,
+        timeout_duration,
+        last_reported_count
+    ))
 }
 
 /// Set up a test indexer fetching from a REST endpoint served by the given

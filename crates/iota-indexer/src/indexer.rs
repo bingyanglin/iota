@@ -76,17 +76,15 @@ impl Indexer {
             .map(|seq| seq + 1)
             .unwrap_or_default();
 
-        // If config specifies a starting sequence number, and it's higher than what the
-        // DB suggests, use the config's value. This ensures all components
-        // (Reader, Committer) start consistently.
+        // If config specifies a starting sequence number, use it to ensure all
+        // components (Reader, Committer) start consistently, regardless of
+        // what's in the DB.
         if let Some(start_seq_override) = config.start_ingestion_from_checkpoint_seq_num {
-            if start_seq_override > primary_watermark {
-                info!(
-                    "Overriding primary_watermark from {} to {} based on config.start_ingestion_from_checkpoint_seq_num",
-                    primary_watermark, start_seq_override
-                );
-                primary_watermark = start_seq_override;
-            }
+            info!(
+                "Overriding primary_watermark from {} to {} based on config.start_ingestion_from_checkpoint_seq_num",
+                primary_watermark, start_seq_override
+            );
+            primary_watermark = start_seq_override;
         }
 
         let download_queue_size = env::var("DOWNLOAD_QUEUE_SIZE")

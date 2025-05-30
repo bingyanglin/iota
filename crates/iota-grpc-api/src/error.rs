@@ -1,7 +1,5 @@
-// Placeholder for gRPC error handling
-
 use anyhow;
-use thiserror::Error; // To use anyhow::Error in the enum
+use thiserror::Error;
 
 #[derive(Debug, Error)]
 pub enum GrpcApiError {

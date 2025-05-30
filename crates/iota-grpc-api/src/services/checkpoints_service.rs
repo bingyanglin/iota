@@ -354,8 +354,7 @@ impl CheckpointGprcService for CheckpointServiceImpl {
 
         println!(
             "[gRPC CheckpointService] Client subscribed for new checkpoints starting from: {}, include_full_data: {}",
-            start_from_checkpoint_sequence_number,
-            request_include_full_data
+            start_from_checkpoint_sequence_number, request_include_full_data
         );
 
         let mut rx = self.checkpoint_event_sender.subscribe();
@@ -376,9 +375,10 @@ impl CheckpointGprcService for CheckpointServiceImpl {
                                 request_include_full_data
                             );
 
-                            let checkpoint_to_send_result: Result<StreamedCheckpoint, Status> = if request_include_full_data {
-                                match get_full_checkpoint_data_for_stream(
-                                    verified_checkpoint_arc.clone(), 
+                            let checkpoint_to_send_result: Result<StreamedCheckpoint, Status> =
+                                if request_include_full_data {
+                                    match get_full_checkpoint_data_for_stream(
+                                    verified_checkpoint_arc.clone(),
                                     &*state_reader_clone // Pass the cloned StateReader
                                 ).await {
                                     Ok(full_data_gprc) => Ok(StreamedCheckpoint {
@@ -387,14 +387,14 @@ impl CheckpointGprcService for CheckpointServiceImpl {
                                     Err(e_status) => {
                                         // get_full_checkpoint_data_for_stream already returns a Status
                                         error!(
-                                            "[gRPC CheckpointService] Error fetching full checkpoint data for {}: {}. Forwarding status to client.", 
+                                            "[gRPC CheckpointService] Error fetching full checkpoint data for {}: {}. Forwarding status to client.",
                                             checkpoint_seq_num, e_status
                                         );
-                                        Err(e_status) 
+                                        Err(e_status)
                                     }
                                 }
-                            } else {
-                                match convert_verified_checkpoint_to_gprc_summary(&*verified_checkpoint_arc) {
+                                } else {
+                                    match convert_verified_checkpoint_to_gprc_summary(&*verified_checkpoint_arc) {
                                     Ok(summary_gprc) => Ok(StreamedCheckpoint {
                                         checkpoint_type: Some(crate::proto::iota::gprc::v1::streamed_checkpoint::CheckpointType::Summary(summary_gprc)),
                                     }),
@@ -409,7 +409,7 @@ impl CheckpointGprcService for CheckpointServiceImpl {
                                         )))
                                     }
                                 }
-                            };
+                                };
 
                             if tx.send(checkpoint_to_send_result).await.is_err() {
                                 println!(
@@ -451,8 +451,9 @@ impl CheckpointGprcService for CheckpointServiceImpl {
 }
 
 // Helper to get full data, converting errors to Status
-// This helper function is now defined outside the CheckpointGprcService impl block
-// and does not have `&self` as it's called from a static context in the tokio::spawn task.
+// This helper function is now defined outside the CheckpointGprcService impl
+// block and does not have `&self` as it's called from a static context in the
+// tokio::spawn task.
 async fn get_full_checkpoint_data_for_stream(
     verified_checkpoint: Arc<VerifiedCheckpoint>,
     state_reader: &dyn RestStateReader, // Changed from ReadStore to RestStateReader
@@ -482,11 +483,10 @@ async fn get_full_checkpoint_data_for_stream(
             ))
         })?;
 
-    convert_full_checkpoint_data_to_gprc(&core_checkpoint_data)
-        .map_err(|conv_err| {
-            Status::internal(format!(
-                "Error converting CoreCheckpointData to gRPC for checkpoint {}: {}",
-                seq_num, conv_err
-            ))
-        })
+    convert_full_checkpoint_data_to_gprc(&core_checkpoint_data).map_err(|conv_err| {
+        Status::internal(format!(
+            "Error converting CoreCheckpointData to gRPC for checkpoint {}: {}",
+            seq_num, conv_err
+        ))
+    })
 }

@@ -1,91 +1,52 @@
 use std::{
     collections::BTreeMap,
-    // collections::BTreeMap, // Unused
     net::{SocketAddr, TcpListener},
-    sync::Arc,
-    sync::atomic::{AtomicU64, Ordering},
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
 };
 
 use futures::StreamExt;
-// use iota_grpc_api::conversions::checkpoints::convert_verified_checkpoint_to_gprc_summary; //
-// This will be removed by cargo fix if still unused after other fixes
 use iota_grpc_api::{
     proto::iota::gprc::v1::{
-        Direction,
-        GetCheckpointRequest,
-        ListCheckpointsRequest,
-        // StreamCheckpointsInRangeRequest, // REMOVED
-        // StreamedCheckpoint, // REMOVED (was unused, confirmed by previous checks)
-        SubscribeNewCheckpointsRequest,
+        GetCheckpointRequest, SubscribeNewCheckpointsRequest,
         checkpoint_gprc_service_client::CheckpointGprcServiceClient,
-        streamed_checkpoint::CheckpointType, /* Keep this if used by
-                                              * SubscribeNewCheckpointsRequest tests */
+        streamed_checkpoint::CheckpointType,
     },
     server::{GrpcServer, StateReader},
 };
-use iota_protocol_config::ProtocolConfig; // Added import
 use iota_types::{
-    base_types::{
-        AuthorityName,
-        IotaAddress,
-        MoveObjectType,
-        ObjectID,
-        ObjectRef,
-        SequenceNumber,
-        TransactionDigest,
-        VersionNumber, // Added VersionNumber
-    },
-    committee::CommitteeTrait, /* Added for Committee trait methods used in MockRestStateReader
-                                * TODO: Check if these are still needed or where they moved.
-                                * execution_status::ExecutionStatus, - Likely in effects or
-                                * transaction
-                                * gas::GasCostSummary, - Already imported above
-                                * id::ID, - Usually part of ObjectID or other ID types directly
-                                * versioned::Versioned, - Might be inherent or part of
-                                * object/transaction versioning */
-    committee::{Committee, CommitteeWithNetworkMetadata, EpochId, StakeUnit, TOTAL_VOTING_POWER}, /* Changed CommitteeWithNetAddresses */
+    base_types::{AuthorityName, IotaAddress, ObjectID, TransactionDigest, VersionNumber},
+    committee::{Committee, EpochId, StakeUnit, TOTAL_VOTING_POWER},
     crypto::{AuthorityKeyPair, AuthoritySignInfo, AuthorityStrongQuorumSignInfo, KeypairTraits},
     digests::{
         ChainIdentifier, CheckpointContentsDigest, CheckpointDigest, TransactionEventsDigest,
     },
-    effects::{TransactionEffects, TransactionEffectsAPI, TransactionEvents}, /* Removed TransactionEffectsV2 */
-    // epoch_boundary::EpochBoundary, // Removed
-    event::Event, // Changed EventWithDigests
+    effects::{TransactionEffects, TransactionEvents},
     full_checkpoint_content::CheckpointData,
     gas::GasCostSummary,
-    // input_object::InputObject, // Removed
     message_envelope::{Envelope, Message, VerifiedEnvelope},
     messages_checkpoint::{
-        CheckpointContents,
-        CheckpointSequenceNumber,
-        CheckpointSummary,
-        CheckpointTimestamp, // Changed AbstractCheckpointTimestamp
-        FullCheckpointContents as ActualFullCheckpointContents,
-        VerifiedCheckpoint,
+        CheckpointContents, CheckpointSequenceNumber, CheckpointSummary,
+        FullCheckpointContents as ActualFullCheckpointContents, VerifiedCheckpoint,
     },
-    object::{Data, MoveObject, Object, ObjectInner, Owner},
-    // output_object::OutputObject, // Removed
+    object::Object,
     storage::{
-        AccountOwnedObjectInfo,
-        CoinInfo,
-        DynamicFieldIndexInfo,
-        DynamicFieldKey,
-        ObjectStore as ActualObjectStore,
-        ReadStore as ActualReadStore, // BlobStore functionality is in ReadStore
+        AccountOwnedObjectInfo, CoinInfo, DynamicFieldIndexInfo, DynamicFieldKey,
+        ObjectStore as ActualObjectStore, ReadStore as ActualReadStore,
         RestStateReader as ActualRestStateReader,
-        error::Error as StorageError,
-        error::Result as StorageResult,
+        error::{Error as StorageError, Result as StorageResult},
     },
-    transaction::{Transaction, VerifiedTransaction}, // Removed TransactionLocation
+    transaction::VerifiedTransaction,
 };
-use move_core_types::language_storage::StructTag; // Kept StructTag
-use parking_lot::RwLock; // Added
-use shared_crypto::intent::Intent; // Removed IntentMessage, IntentScope
+use move_core_types::language_storage::StructTag;
+use parking_lot::RwLock;
+use shared_crypto::intent::Intent;
 use tokio::{
     sync::broadcast,
     time::{Duration, sleep, timeout},
 };
-use tonic::Request; // Added // Added for to_intent_message // Import for key generation
 
 fn get_available_port() -> u16 {
     TcpListener::bind("127.0.0.1:0")
@@ -254,17 +215,6 @@ impl MockRestStateReader {
         self.get_checkpoint_by_sequence_number_impl(seq)
     }
 
-    fn get_highest_verified_checkpoint_timestamp_impl(
-        &self,
-    ) -> StorageResult<Option<CheckpointTimestamp>> {
-        // Changed AbstractCheckpointTimestamp to CheckpointTimestamp
-        match self.get_highest_known_checkpoint_impl()? {
-            Some(cp) => Ok(Some(cp.timestamp_ms)), // Changed to direct field access, removed
-            // AbstractCheckpointTimestamp::new
-            None => Ok(None),
-        }
-    }
-
     fn get_lowest_available_checkpoint_impl(&self) -> StorageResult<CheckpointSequenceNumber> {
         let cache = self.mock_checkpoints_cache.lock().unwrap();
         Ok(cache.keys().min().cloned().unwrap_or(0))
@@ -280,17 +230,6 @@ impl MockRestStateReader {
             checkpoint_contents: contents,
             transactions: vec![],
         })
-    }
-
-    fn get_timestamp_for_checkpoint_sequence(
-        &self,
-        sequence_number: CheckpointSequenceNumber,
-    ) -> StorageResult<Option<CheckpointTimestamp>> {
-        match self.get_checkpoint_by_sequence_number_impl(sequence_number) {
-            Ok(Some(cp)) => Ok(Some(cp.timestamp_ms)), // Changed to direct field access
-            Ok(None) => Ok(None),
-            Err(e) => Err(e),
-        }
     }
 }
 
@@ -800,36 +739,6 @@ fn create_mock_checkpoint_contents(_seq_num: CheckpointSequenceNumber) -> Checkp
     CheckpointContents::new_with_digests_only_for_tests(Vec::new())
 }
 
-// Helper function to create a mock iota_types::object::Object
-fn create_mock_object(_object_id: &ObjectID, version_val: u64) -> Object {
-    let mock_move_object_type_str = "0x42::example_module::ExampleObject"; // Example type
-    let struct_tag = mock_move_object_type_str
-        .parse::<StructTag>()
-        .expect("Parsing mock StructTag failed");
-    let move_object_type = MoveObjectType::from(struct_tag);
-
-    let move_obj = MoveObject::new_from_execution(
-        move_object_type,
-        SequenceNumber::from_u64(version_val),
-        b"mock_contents".to_vec(),              // Example contents
-        &ProtocolConfig::get_for_min_version(), // Use a default protocol config
-    )
-    .unwrap();
-
-    ObjectInner {
-        data: Data::Move(move_obj),
-        owner: Owner::AddressOwner(IotaAddress::from(
-            ObjectID::from_hex_literal(
-                "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-            )
-            .unwrap(),
-        )),
-        previous_transaction: TransactionDigest::genesis_marker(),
-        storage_rebate: 100, // Example rebate
-    }
-    .into()
-}
-
 #[tokio::test]
 async fn test_get_checkpoint_full_dummy() {
     let (mut client, _addr, shutdown_tx, mock_reader_manager, _event_sender) =
@@ -929,8 +838,7 @@ async fn test_subscribe_new_checkpoints_receives_items() {
 
     let start_streaming_from_seq = 3u64;
     let num_checkpoints_to_target_for_publication = 5u64; // Number of checkpoints we specifically want to see after start_streaming_from_seq
-    // The mock will publish from its current latest_seq up to this + start_from_seq
-    let highest_seq_relevant_for_test =
+    let _highest_seq_relevant_for_test =
         start_streaming_from_seq + num_checkpoints_to_target_for_publication - 1;
 
     // The mock reader will be triggered to publish events up to (and including)

@@ -1,13 +1,3 @@
-// Include the `tonic::include_proto!` macro output
-// This assumes your auto-generated proto files will be in a module structure
-// that matches your package name in the .proto files (e.g., iota.gprc.v1)
-
-// Configure how tonic includes the generated files.
-// The OUT_DIR environment variable is set by Cargo and points to where
-// tonic_build places the generated files. The PROST_ आउट_DIR can be used by
-// prost directly if not using tonic_build for some reason.
-
-// pub mod types; // You might have a types.rs for shared Rust types or
 // conversions specific to gRPC layer
 pub mod conversions;
 pub mod error;
@@ -29,11 +19,3 @@ pub mod proto {
         }
     }
 }
-
-// Example re-export (optional, but can be convenient)
-// pub use proto::iota::gprc::v1::{
-// checkpoint_gprc_service_server::CheckpointGprcServiceServer,
-// CheckpointDataGprc,
-// GetCheckpointRequest,
-// ... other types and server traits
-// };
