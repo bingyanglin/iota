@@ -295,13 +295,11 @@ async fn components_graceful_shutdown(
 ///
 /// # Example
 /// ```rust,no_run
-/// use std::{collections::HashMap, sync::Arc};
+/// use std::sync::Arc;
 ///
 /// use async_trait::async_trait;
-/// use iota_data_ingestion_core::{IngestionError, ProgressStore, Worker, setup_single_workflow};
-/// use iota_types::{
-///     full_checkpoint_content::CheckpointData, messages_checkpoint::CheckpointSequenceNumber,
-/// };
+/// use iota_data_ingestion_core::{IngestionError, Worker, setup_single_workflow};
+/// use iota_types::full_checkpoint_content::CheckpointData;
 ///
 /// struct CustomWorker;
 ///

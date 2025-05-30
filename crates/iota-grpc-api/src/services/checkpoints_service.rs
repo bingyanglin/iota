@@ -29,7 +29,7 @@ use crate::{
         ListCheckpointsRequest, SignedCheckpointSummaryGprc, StreamedCheckpoint,
         SubscribeNewCheckpointsRequest, checkpoint_gprc_service_server::CheckpointGprcService,
     },
-}; // Import GrpcApiError for mapping // Ensure VerifiedCheckpoint is imported // Alias for clarity
+};
 
 // Helper enum for identifying checkpoint request type
 enum CheckpointIdentifier {
