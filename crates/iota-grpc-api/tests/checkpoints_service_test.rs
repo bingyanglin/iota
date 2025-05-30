@@ -127,14 +127,6 @@ impl MockRestStateReader {
         let mut cache = self.mock_checkpoints_cache.lock().unwrap();
         let seq = checkpoint.inner().sequence_number();
         cache.insert(*seq, checkpoint.clone());
-
-        // DO NOT add default content here. Content addition should be explicit.
-        // let mut contents_cache =
-        // self.mock_checkpoint_contents_cache.lock().unwrap();
-        // contents_cache
-        //     .entry(*seq)
-        //     .or_insert_with(||
-        // Arc::new(create_mock_checkpoint_contents(*seq)));
     }
 
     // Helper to specifically add mock contents
@@ -146,13 +138,6 @@ impl MockRestStateReader {
         let mut contents_cache = self.mock_checkpoint_contents_cache.lock().unwrap();
         contents_cache.insert(seq, contents);
     }
-
-    // Methods from ActualRestStateReader trait (some were already here, some added)
-    // Note: The user's previous diff showed many of these as already existing, but
-    // the linter errors indicated they were either missing from the trait impl
-    // or had wrong signatures. We will define them here and then ensure they are
-    // correctly listed in the `impl ActualRestStateReader for MockRestStateReader`
-    // block.
 
     fn get_checkpoint_by_sequence_number_impl(
         &self,

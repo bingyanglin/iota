@@ -9,28 +9,10 @@ use iota_types::storage::RestStateReader; // Import the actual RestStateReader
 use tokio::sync::broadcast;
 use tonic::transport::Server;
 
-use crate::proto::iota::gprc::v1::checkpoint_gprc_service_server::CheckpointGprcServiceServer;
-// ... import other service servers as they are created ...
-use crate::services::checkpoints_service::CheckpointServiceImpl;
-
-// Define a placeholder trait and a concrete type for StateReader within this
-// module In a real application, this would likely be imported from another
-// crate (e.g., iota_storage or a core types crate) and the GrpcServer would be
-// generic or take a trait object.
-// #[async_trait::async_trait]
-// pub trait RestStateReaderExt: Send + Sync + 'static {
-// async fn get_some_data(&self) -> String; // Example method
-// Add other methods that your gRPC services will need to read state
-// }
-
-// Dummy implementation of the StateReader trait for example purposes
-// pub struct DummyStateReader;
-// #[async_trait::async_trait]
-// impl RestStateReaderExt for DummyStateReader {
-// async fn get_some_data(&self) -> String {
-// "data_from_dummy_reader".to_string()
-// }
-// }
+use crate::{
+    proto::iota::gprc::v1::checkpoint_gprc_service_server::CheckpointGprcServiceServer,
+    services::checkpoints_service::CheckpointServiceImpl,
+};
 
 // Type alias for convenience, using the concrete dummy type for now.
 // In a real scenario, this would be Arc<dyn RestStateReaderExt> or a generic

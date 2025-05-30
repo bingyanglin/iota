@@ -10,7 +10,6 @@ prost.workspace = true
 tokio = { workspace = true, features = ["full"] }
 futures.workspace = true
 serde = { workspace = true, features = ["derive"] }
-config = "0.13"
 async-trait.workspace = true
 tower.workspace = true
 tokio-stream.workspace = true

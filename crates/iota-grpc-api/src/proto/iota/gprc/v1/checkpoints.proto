@@ -3,13 +3,7 @@ syntax = "proto3";
 package iota.gprc.v1;
 
 import "iota/gprc/v1/common.proto";
-// Potentially import other types if they become complex, e.g., transaction.proto if CheckpointTransaction becomes very detailed here
 
-// Corresponds to iota_sdk2::types::CheckpointSequenceNumber (u64)
-// Using StringU64 from common.proto if it's passed as a string in paths, otherwise can be uint64.
-// For path parameters that can be number or digest, we usually take string and parse server-side.
-
-// Corresponds to iota_sdk2::types::CheckpointDigest (struct with a [u8; 32])
 message CheckpointDigestGprc {
     bytes digest = 1; // Or string if hex-encoded
 }
@@ -63,7 +57,6 @@ message SignedCheckpointSummaryGprc {
 message CheckpointDataGprc {
     SignedCheckpointSummaryGprc summary = 1;
     repeated CheckpointTransactionGprc transactions = 2;
-    // Vec<iota_sdk2::types::effects::TransactionEffects> effects = 3; // Not present in iota_types::full_checkpoint_content::CheckpointData
 }
 
 // Request for GetCheckpoint and GetCheckpointFull
