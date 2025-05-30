@@ -647,18 +647,10 @@ impl<T: ReadStore + ?Sized> ReadStore for Arc<T> {
     }
 }
 
-/// Enum to specify the direction of listing for paginated queries.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ListDirection {
-    Ascending,
-    Descending,
-}
-
 /// Trait used to provide functionality to the REST API service.
 ///
 /// It extends both ObjectStore and ReadStore by adding functionality that may
 /// require more detailed underlying databases or indexes to support.
-#[async_trait::async_trait]
 pub trait RestStateReader: ObjectStore + ReadStore + Send + Sync {
     fn get_transaction_checkpoint(
         &self,

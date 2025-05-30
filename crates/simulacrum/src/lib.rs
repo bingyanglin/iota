@@ -48,8 +48,8 @@ use iota_types::{
     signature::VerifyParams,
     storage::{ObjectStore, ReadStore, RestStateReader},
     transaction::{
-        EndOfEpochTransactionKind, GasData, Transaction, TransactionData,
-        TransactionKind, VerifiedTransaction,
+        EndOfEpochTransactionKind, GasData, Transaction, TransactionData, TransactionKind,
+        VerifiedTransaction,
     },
 };
 use move_core_types::language_storage::StructTag;
@@ -556,7 +556,6 @@ impl<T, V: store::SimulatorStore> ReadStore for Simulacrum<T, V> {
     }
 }
 
-#[async_trait::async_trait]
 impl<T: Send + Sync, V: store::SimulatorStore + Send + Sync> RestStateReader for Simulacrum<T, V> {
     fn get_transaction_checkpoint(
         &self,
@@ -564,9 +563,7 @@ impl<T: Send + Sync, V: store::SimulatorStore + Send + Sync> RestStateReader for
     ) -> iota_types::storage::error::Result<
         Option<iota_types::messages_checkpoint::CheckpointSequenceNumber>,
     > {
-        unimplemented!(
-            "get_transaction_checkpoint not yet implemented for Simulacrum's RestStateReader"
-        )
+        todo!()
     }
 
     fn get_lowest_available_checkpoint_objects(
