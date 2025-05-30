@@ -25,7 +25,6 @@ move-core-types.workspace = true
 iota-protocol-config.workspace = true
 serde_json = { workspace = true }
 shared-crypto = { workspace = true }
-test-strategy = "0.3"
 
 [build-dependencies]
 tonic-build.workspace = true
