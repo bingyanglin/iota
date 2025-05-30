@@ -93,5 +93,4 @@ Therefore, to use the public gRPC API, ensure the `grpc_public_api_address` is c
 *   **Error Handling & Conversions:** Continue to refine error types and ensure comprehensive error handling across the `CheckpointGprcService`. Complete any remaining conversion logic for checkpoint-related data if new fields or types are introduced.
 *   **Parity Testing:** Conduct thorough testing to ensure parity with the existing REST API for checkpoint fetching where functionalities overlap, especially if this gRPC service were to replace parts of it.
 *   **Integration with `iota-indexer` (Ongoing):** The `iota-indexer` has been modified in this PoC to use this gRPC API, including historical catch-up and streaming. Further refinements and production hardening would be needed.
-*   **Security:** Implement appropriate authentication and authorization mechanisms if this API were to be exposed in a production environment.
-*   **Performance Optimization:** Profile and optimize the gRPC service and client interactions for high-throughput scenarios.
+*   **COPYRIGHT:** Add copyright headers to all files.
