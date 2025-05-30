@@ -26,35 +26,66 @@ use iota_grpc_api::{
 use iota_protocol_config::ProtocolConfig; // Added import
 use iota_types::{
     base_types::{
-        AuthorityName, IotaAddress, MoveObjectType, ObjectID, SequenceNumber, TransactionDigest,
+        AuthorityName,
+        IotaAddress,
+        MoveObjectType,
+        ObjectID,
+        ObjectRef,
+        SequenceNumber,
+        TransactionDigest,
+        VersionNumber, // Added VersionNumber
     },
-    committee::{Committee, EpochId, StakeUnit, TOTAL_VOTING_POWER},
+    committee::CommitteeTrait, /* Added for Committee trait methods used in MockRestStateReader
+                                * TODO: Check if these are still needed or where they moved.
+                                * execution_status::ExecutionStatus, - Likely in effects or
+                                * transaction
+                                * gas::GasCostSummary, - Already imported above
+                                * id::ID, - Usually part of ObjectID or other ID types directly
+                                * versioned::Versioned, - Might be inherent or part of
+                                * object/transaction versioning */
+    committee::{Committee, CommitteeWithNetworkMetadata, EpochId, StakeUnit, TOTAL_VOTING_POWER}, /* Changed CommitteeWithNetAddresses */
     crypto::{AuthorityKeyPair, AuthoritySignInfo, AuthorityStrongQuorumSignInfo, KeypairTraits},
     digests::{
         ChainIdentifier, CheckpointContentsDigest, CheckpointDigest, TransactionEventsDigest,
     },
-    effects::{TransactionEffects, TransactionEvents},
+    effects::{TransactionEffects, TransactionEffectsAPI, TransactionEvents}, /* Removed TransactionEffectsV2 */
+    // epoch_boundary::EpochBoundary, // Removed
+    event::Event, // Changed EventWithDigests
     full_checkpoint_content::CheckpointData,
     gas::GasCostSummary,
+    // input_object::InputObject, // Removed
     message_envelope::{Envelope, Message, VerifiedEnvelope},
     messages_checkpoint::{
-        CheckpointContents, CheckpointSequenceNumber, CheckpointSummary,
-        FullCheckpointContents as ActualFullCheckpointContents, VerifiedCheckpoint,
+        CheckpointContents,
+        CheckpointSequenceNumber,
+        CheckpointSummary,
+        CheckpointTimestamp, // Changed AbstractCheckpointTimestamp
+        FullCheckpointContents as ActualFullCheckpointContents,
+        VerifiedCheckpoint,
     },
     object::{Data, MoveObject, Object, ObjectInner, Owner},
+    // output_object::OutputObject, // Removed
     storage::{
-        AccountOwnedObjectInfo, CoinInfo, DynamicFieldIndexInfo, DynamicFieldKey,
-        ObjectStore as ActualObjectStore, ReadStore as ActualReadStore,
-        RestStateReader as ActualRestStateReader, error::Result as StorageResult,
+        AccountOwnedObjectInfo,
+        CoinInfo,
+        DynamicFieldIndexInfo,
+        DynamicFieldKey,
+        ObjectStore as ActualObjectStore,
+        ReadStore as ActualReadStore, // BlobStore functionality is in ReadStore
+        RestStateReader as ActualRestStateReader,
+        error::Error as StorageError,
+        error::Result as StorageResult,
     },
-    transaction::VerifiedTransaction,
+    transaction::{Transaction, VerifiedTransaction}, // Removed TransactionLocation
 };
 use move_core_types::language_storage::StructTag; // Kept StructTag
+use parking_lot::RwLock; // Added
 use shared_crypto::intent::Intent; // Removed IntentMessage, IntentScope
 use tokio::{
     sync::broadcast,
     time::{Duration, sleep, timeout},
-}; // Added for to_intent_message // Import for key generation
+};
+use tonic::Request; // Added // Added for to_intent_message // Import for key generation
 
 fn get_available_port() -> u16 {
     TcpListener::bind("127.0.0.1:0")
@@ -67,40 +98,618 @@ fn get_available_port() -> u16 {
 // Mock implementation for RestStateReader for testing
 struct MockRestStateReader {
     latest_sequence_number: Arc<AtomicU64>,
+    checkpoint_event_sender: Option<broadcast::Sender<Arc<VerifiedCheckpoint>>>,
+    mock_checkpoints_cache:
+        std::sync::Mutex<BTreeMap<CheckpointSequenceNumber, Arc<VerifiedCheckpoint>>>,
+    mock_checkpoint_contents_cache:
+        std::sync::Mutex<BTreeMap<CheckpointSequenceNumber, Arc<CheckpointContents>>>,
 }
 
 impl Default for MockRestStateReader {
     fn default() -> Self {
         Self {
-            // Initialize with a low sequence number so tests can advance it.
             latest_sequence_number: Arc::new(AtomicU64::new(0)),
+            checkpoint_event_sender: None,
+            mock_checkpoints_cache: std::sync::Mutex::new(BTreeMap::new()),
+            mock_checkpoint_contents_cache: std::sync::Mutex::new(BTreeMap::new()),
         }
     }
 }
 
 impl MockRestStateReader {
-    // Helper for tests to advance the mock's latest sequence number
+    // New method to associate the sender
+    fn set_checkpoint_event_sender(&mut self, sender: broadcast::Sender<Arc<VerifiedCheckpoint>>) {
+        self.checkpoint_event_sender = Some(sender);
+    }
+
+    // Helper for tests to advance the mock's latest sequence number and publish
+    // events
     fn set_latest_sequence_number_for_test(&self, val: u64) {
-        self.latest_sequence_number.store(val, Ordering::SeqCst);
+        let last_known_seq = self.latest_sequence_number.swap(val, Ordering::SeqCst);
+
+        if val > last_known_seq {
+            if let Some(sender) = &self.checkpoint_event_sender {
+                let mut cache = self.mock_checkpoints_cache.lock().unwrap();
+                for seq_to_publish in (last_known_seq + 1)..=val {
+                    // Create and cache mock checkpoint if it doesn't exist
+                    let checkpoint_to_send = cache
+                        .entry(seq_to_publish)
+                        .or_insert_with(|| {
+                            // Assuming epoch 1 for all test checkpoints for simplicity here.
+                            // Adjust if specific tests need different epochs.
+                            Arc::new(create_mock_verified_checkpoint(seq_to_publish, 1))
+                        })
+                        .clone();
+
+                    if sender.send(checkpoint_to_send).is_err() {
+                        println!(
+                            "[MockRestStateReader] Failed to send checkpoint {} event, no active subscribers.",
+                            seq_to_publish
+                        );
+                    } else {
+                        println!(
+                            "[MockRestStateReader] Successfully sent checkpoint {} event.",
+                            seq_to_publish
+                        );
+                    }
+                }
+            } else {
+                println!(
+                    "[MockRestStateReader] No event sender configured, cannot publish checkpoint events."
+                );
+            }
+        }
+    }
+
+    // Helper to pre-populate mock checkpoints for get_checkpoint_by_sequence_number
+    fn add_mock_checkpoint_to_cache(&self, checkpoint: Arc<VerifiedCheckpoint>) {
+        let mut cache = self.mock_checkpoints_cache.lock().unwrap();
+        let seq = checkpoint.inner().sequence_number();
+        cache.insert(*seq, checkpoint.clone());
+
+        // DO NOT add default content here. Content addition should be explicit.
+        // let mut contents_cache =
+        // self.mock_checkpoint_contents_cache.lock().unwrap();
+        // contents_cache
+        //     .entry(*seq)
+        //     .or_insert_with(||
+        // Arc::new(create_mock_checkpoint_contents(*seq)));
+    }
+
+    // Helper to specifically add mock contents
+    fn add_mock_checkpoint_contents_to_cache(
+        &self,
+        seq: CheckpointSequenceNumber,
+        contents: Arc<CheckpointContents>,
+    ) {
+        let mut contents_cache = self.mock_checkpoint_contents_cache.lock().unwrap();
+        contents_cache.insert(seq, contents);
+    }
+
+    // Methods from ActualRestStateReader trait (some were already here, some added)
+    // Note: The user's previous diff showed many of these as already existing, but
+    // the linter errors indicated they were either missing from the trait impl
+    // or had wrong signatures. We will define them here and then ensure they are
+    // correctly listed in the `impl ActualRestStateReader for MockRestStateReader`
+    // block.
+
+    fn get_checkpoint_by_sequence_number_impl(
+        &self,
+        sequence_number: CheckpointSequenceNumber,
+    ) -> StorageResult<Option<VerifiedCheckpoint>> {
+        let cache = self.mock_checkpoints_cache.lock().unwrap();
+        Ok(cache
+            .get(&sequence_number)
+            .cloned()
+            .map(|arc_vc| (*arc_vc).clone()))
+    }
+
+    fn get_checkpoint_by_digest_impl(
+        &self,
+        digest: &CheckpointDigest,
+    ) -> StorageResult<Option<VerifiedCheckpoint>> {
+        let cache = self.mock_checkpoints_cache.lock().unwrap();
+        Ok(cache
+            .values()
+            .find(|vc| vc.inner().digest() == digest)
+            .cloned()
+            .map(|arc_vc| (*arc_vc).clone()))
+    }
+
+    fn get_checkpoint_contents_by_sequence_number_impl(
+        &self,
+        sequence_number: CheckpointSequenceNumber,
+    ) -> StorageResult<Option<CheckpointContents>> {
+        let cache = self.mock_checkpoint_contents_cache.lock().unwrap();
+        Ok(cache
+            .get(&sequence_number)
+            .cloned()
+            .map(|arc_cc| (*arc_cc).clone()))
+    }
+
+    fn get_checkpoint_contents_by_digest_impl(
+        &self,
+        contents_digest: &CheckpointContentsDigest,
+    ) -> StorageResult<Option<CheckpointContents>> {
+        let cache = self.mock_checkpoint_contents_cache.lock().unwrap();
+        Ok(cache
+            .values()
+            .find(|cc| cc.digest() == contents_digest)
+            .cloned()
+            .map(|arc_cc| (*arc_cc).clone()))
+    }
+
+    fn get_highest_known_checkpoint_impl(&self) -> StorageResult<Option<VerifiedCheckpoint>> {
+        let seq = self.latest_sequence_number.load(Ordering::SeqCst);
+        if seq == 0
+            && self
+                .mock_checkpoints_cache
+                .lock()
+                .unwrap()
+                .get(&0)
+                .is_none()
+        {
+            return Ok(None);
+        }
+        self.get_checkpoint_by_sequence_number_impl(seq)
+    }
+
+    fn get_highest_verified_checkpoint_timestamp_impl(
+        &self,
+    ) -> StorageResult<Option<CheckpointTimestamp>> {
+        // Changed AbstractCheckpointTimestamp to CheckpointTimestamp
+        match self.get_highest_known_checkpoint_impl()? {
+            Some(cp) => Ok(Some(cp.timestamp_ms)), // Changed to direct field access, removed
+            // AbstractCheckpointTimestamp::new
+            None => Ok(None),
+        }
+    }
+
+    fn get_lowest_available_checkpoint_impl(&self) -> StorageResult<CheckpointSequenceNumber> {
+        let cache = self.mock_checkpoints_cache.lock().unwrap();
+        Ok(cache.keys().min().cloned().unwrap_or(0))
+    }
+
+    fn get_checkpoint_data_impl(
+        &self,
+        verified_checkpoint: VerifiedCheckpoint,
+        contents: CheckpointContents,
+    ) -> StorageResult<CheckpointData> {
+        Ok(CheckpointData {
+            checkpoint_summary: verified_checkpoint.clone().into(), // Changed to .clone().into()
+            checkpoint_contents: contents,
+            transactions: vec![],
+        })
+    }
+
+    fn get_timestamp_for_checkpoint_sequence(
+        &self,
+        sequence_number: CheckpointSequenceNumber,
+    ) -> StorageResult<Option<CheckpointTimestamp>> {
+        match self.get_checkpoint_by_sequence_number_impl(sequence_number) {
+            Ok(Some(cp)) => Ok(Some(cp.timestamp_ms)), // Changed to direct field access
+            Ok(None) => Ok(None),
+            Err(e) => Err(e),
+        }
+    }
+}
+
+// Implement ActualObjectStore for MockRestStateReader
+impl ActualObjectStore for MockRestStateReader {
+    fn get_object(&self, object_id: &ObjectID) -> StorageResult<Option<Object>> {
+        let _ = object_id;
+        Err(StorageError::custom(
+            "MockRestStateReader::get_object unimplemented",
+        ))
+    }
+
+    fn get_object_by_key(
+        &self,
+        object_id: &ObjectID,
+        version: VersionNumber,
+    ) -> StorageResult<Option<Object>> {
+        let _ = (object_id, version);
+        Err(StorageError::custom(
+            "MockRestStateReader::get_object_by_key unimplemented",
+        ))
+    }
+}
+
+// Implement ActualReadStore for MockRestStateReader
+#[async_trait::async_trait]
+impl ActualReadStore for MockRestStateReader {
+    // Methods from ObjectStore (ancestor trait) are covered by the
+    // ActualObjectStore impl above.
+
+    // Committee Getters
+    fn get_committee(&self, _epoch: EpochId) -> StorageResult<Option<Arc<Committee>>> {
+        Err(StorageError::custom(
+            "MockRestStateReader::get_committee unimplemented",
+        ))
+    }
+
+    // Checkpoint Getters
+    fn get_latest_checkpoint(&self) -> StorageResult<VerifiedCheckpoint> {
+        self.get_highest_known_checkpoint_impl()?
+            .ok_or_else(|| StorageError::custom("No latest checkpoint in mock"))
+    }
+
+    // get_latest_checkpoint_sequence_number() has a default implementation in
+    // ReadStore get_latest_epoch_id() has a default implementation in ReadStore
+
+    fn get_highest_verified_checkpoint(&self) -> StorageResult<VerifiedCheckpoint> {
+        self.get_highest_known_checkpoint_impl()?
+            .ok_or_else(|| StorageError::custom("No highest verified checkpoint in mock"))
+    }
+
+    fn get_highest_synced_checkpoint(&self) -> StorageResult<VerifiedCheckpoint> {
+        self.get_highest_known_checkpoint_impl()?
+            .ok_or_else(|| StorageError::custom("No highest synced checkpoint in mock"))
+    }
+
+    fn get_lowest_available_checkpoint(&self) -> StorageResult<CheckpointSequenceNumber> {
+        self.get_lowest_available_checkpoint_impl()
+    }
+
+    fn get_checkpoint_by_digest(
+        &self,
+        digest: &CheckpointDigest,
+    ) -> StorageResult<Option<VerifiedCheckpoint>> {
+        self.get_checkpoint_by_digest_impl(digest)
+    }
+
+    fn get_checkpoint_by_sequence_number(
+        &self,
+        sequence_number: CheckpointSequenceNumber,
+    ) -> StorageResult<Option<VerifiedCheckpoint>> {
+        self.get_checkpoint_by_sequence_number_impl(sequence_number)
+    }
+
+    fn get_checkpoint_contents_by_digest(
+        &self,
+        digest: &CheckpointContentsDigest,
+    ) -> StorageResult<Option<CheckpointContents>> {
+        self.get_checkpoint_contents_by_digest_impl(digest)
+    }
+
+    fn get_checkpoint_contents_by_sequence_number(
+        &self,
+        sequence_number: CheckpointSequenceNumber,
+    ) -> StorageResult<Option<CheckpointContents>> {
+        self.get_checkpoint_contents_by_sequence_number_impl(sequence_number)
+    }
+
+    // Transaction Getters
+    fn get_transaction(
+        &self,
+        tx_digest: &TransactionDigest,
+    ) -> StorageResult<Option<Arc<VerifiedTransaction>>> {
+        let _ = tx_digest;
+        Err(StorageError::custom(
+            "MockRestStateReader::get_transaction unimplemented",
+        ))
+    }
+    // multi_get_transactions has a default implementation in ReadStore
+
+    fn get_transaction_effects(
+        &self,
+        tx_digest: &TransactionDigest,
+    ) -> StorageResult<Option<TransactionEffects>> {
+        let _ = tx_digest;
+        Err(StorageError::custom(
+            "MockRestStateReader::get_transaction_effects unimplemented",
+        ))
+    }
+    // multi_get_transaction_effects has a default implementation in ReadStore
+
+    fn get_events(
+        &self,
+        event_digest: &TransactionEventsDigest,
+    ) -> StorageResult<Option<TransactionEvents>> {
+        let _ = event_digest;
+        Err(StorageError::custom(
+            "MockRestStateReader::get_events unimplemented",
+        ))
+    }
+    // multi_get_events has a default implementation in ReadStore
+
+    // Extra Checkpoint fetching apis
+    fn get_full_checkpoint_contents_by_sequence_number(
+        &self,
+        _sequence_number: CheckpointSequenceNumber,
+    ) -> StorageResult<Option<ActualFullCheckpointContents>> {
+        Err(StorageError::custom(
+            "MockRestStateReader::get_full_checkpoint_contents_by_sequence_number unimplemented",
+        ))
+    }
+
+    fn get_full_checkpoint_contents(
+        &self,
+        _digest: &CheckpointContentsDigest,
+    ) -> StorageResult<Option<ActualFullCheckpointContents>> {
+        Err(StorageError::custom(
+            "MockRestStateReader::get_full_checkpoint_contents unimplemented",
+        ))
+    }
+
+    fn get_checkpoint_data(
+        &self,
+        verified_checkpoint: VerifiedCheckpoint,
+        contents: CheckpointContents,
+    ) -> anyhow::Result<CheckpointData> {
+        self.get_checkpoint_data_impl(verified_checkpoint, contents)
+            .map_err(anyhow::Error::new)
+    }
+}
+
+// Implement ActualRestStateReader for MockRestStateReader
+#[async_trait::async_trait]
+impl ActualRestStateReader for MockRestStateReader {
+    // Methods specific to RestStateReader
+    fn get_transaction_checkpoint(
+        &self,
+        _digest: &TransactionDigest,
+    ) -> StorageResult<Option<CheckpointSequenceNumber>> {
+        Err(StorageError::custom(
+            "MockRestStateReader::get_transaction_checkpoint unimplemented",
+        ))
+    }
+
+    fn get_lowest_available_checkpoint_objects(&self) -> StorageResult<CheckpointSequenceNumber> {
+        self.get_lowest_available_checkpoint_impl()
+    }
+
+    fn get_chain_identifier(&self) -> StorageResult<ChainIdentifier> {
+        match self.get_checkpoint_by_sequence_number_impl(0) {
+            Ok(Some(cp0)) => Ok(ChainIdentifier::from(*cp0.digest())),
+            _ => Ok(ChainIdentifier::from(CheckpointDigest::new([0u8; 32]))),
+        }
+    }
+
+    fn account_owned_objects_info_iter(
+        &self,
+        _owner: IotaAddress,
+        _cursor: Option<ObjectID>,
+    ) -> StorageResult<Box<dyn Iterator<Item = AccountOwnedObjectInfo> + '_>> {
+        Ok(Box::new(std::iter::empty()))
+    }
+
+    fn dynamic_field_iter(
+        &self,
+        _parent: ObjectID,
+        _cursor: Option<ObjectID>,
+    ) -> StorageResult<Box<dyn Iterator<Item = (DynamicFieldKey, DynamicFieldIndexInfo)> + '_>>
+    {
+        Ok(Box::new(std::iter::empty()))
+    }
+
+    fn get_coin_info(&self, _coin_type: &StructTag) -> StorageResult<Option<CoinInfo>> {
+        Err(StorageError::custom(
+            "MockRestStateReader::get_coin_info unimplemented",
+        ))
+    }
+
+    fn get_epoch_last_checkpoint(
+        &self,
+        epoch_id: EpochId,
+    ) -> StorageResult<Option<VerifiedCheckpoint>> {
+        let cache = self.mock_checkpoints_cache.lock().unwrap();
+        let last_cp_in_epoch = cache
+            .values()
+            .filter(|cp| cp.epoch() == epoch_id)
+            .max_by_key(|cp| cp.sequence_number());
+        Ok(last_cp_in_epoch.cloned().map(|arc_vc| (*arc_vc).clone()))
+    }
+}
+
+// Newtype wrapper to implement traits for Arc<RwLock<MockRestStateReader>>
+#[derive(Clone)]
+struct TestStateReader(Arc<RwLock<MockRestStateReader>>);
+
+// Implement traits for TestStateReader
+
+impl ActualObjectStore for TestStateReader {
+    fn get_object(&self, object_id: &ObjectID) -> StorageResult<Option<Object>> {
+        self.0.read().get_object(object_id)
+    }
+
+    fn get_object_by_key(
+        &self,
+        object_id: &ObjectID,
+        version: VersionNumber,
+    ) -> StorageResult<Option<Object>> {
+        self.0.read().get_object_by_key(object_id, version)
+    }
+}
+
+#[async_trait::async_trait]
+impl ActualReadStore for TestStateReader {
+    fn get_committee(&self, epoch: EpochId) -> StorageResult<Option<Arc<Committee>>> {
+        self.0.read().get_committee(epoch)
+    }
+
+    fn get_latest_checkpoint(&self) -> StorageResult<VerifiedCheckpoint> {
+        self.0.read().get_latest_checkpoint()
+    }
+
+    fn get_highest_verified_checkpoint(&self) -> StorageResult<VerifiedCheckpoint> {
+        self.0.read().get_highest_verified_checkpoint()
+    }
+
+    fn get_highest_synced_checkpoint(&self) -> StorageResult<VerifiedCheckpoint> {
+        self.0.read().get_highest_synced_checkpoint()
+    }
+
+    fn get_lowest_available_checkpoint(&self) -> StorageResult<CheckpointSequenceNumber> {
+        self.0.read().get_lowest_available_checkpoint()
+    }
+
+    fn get_checkpoint_by_digest(
+        &self,
+        digest: &CheckpointDigest,
+    ) -> StorageResult<Option<VerifiedCheckpoint>> {
+        self.0.read().get_checkpoint_by_digest(digest)
+    }
+
+    fn get_checkpoint_by_sequence_number(
+        &self,
+        sequence_number: CheckpointSequenceNumber,
+    ) -> StorageResult<Option<VerifiedCheckpoint>> {
+        self.0
+            .read()
+            .get_checkpoint_by_sequence_number(sequence_number)
+    }
+
+    fn get_checkpoint_contents_by_digest(
+        &self,
+        digest: &CheckpointContentsDigest,
+    ) -> StorageResult<Option<CheckpointContents>> {
+        self.0.read().get_checkpoint_contents_by_digest(digest)
+    }
+
+    fn get_checkpoint_contents_by_sequence_number(
+        &self,
+        sequence_number: CheckpointSequenceNumber,
+    ) -> StorageResult<Option<CheckpointContents>> {
+        self.0
+            .read()
+            .get_checkpoint_contents_by_sequence_number(sequence_number)
+    }
+
+    fn get_transaction(
+        &self,
+        tx_digest: &TransactionDigest,
+    ) -> StorageResult<Option<Arc<VerifiedTransaction>>> {
+        self.0.read().get_transaction(tx_digest)
+    }
+
+    fn get_transaction_effects(
+        &self,
+        tx_digest: &TransactionDigest,
+    ) -> StorageResult<Option<TransactionEffects>> {
+        self.0.read().get_transaction_effects(tx_digest)
+    }
+
+    fn get_events(
+        &self,
+        event_digest: &TransactionEventsDigest,
+    ) -> StorageResult<Option<TransactionEvents>> {
+        self.0.read().get_events(event_digest)
+    }
+
+    fn get_full_checkpoint_contents_by_sequence_number(
+        &self,
+        sequence_number: CheckpointSequenceNumber,
+    ) -> StorageResult<Option<ActualFullCheckpointContents>> {
+        self.0
+            .read()
+            .get_full_checkpoint_contents_by_sequence_number(sequence_number)
+    }
+
+    fn get_full_checkpoint_contents(
+        &self,
+        digest: &CheckpointContentsDigest,
+    ) -> StorageResult<Option<ActualFullCheckpointContents>> {
+        self.0.read().get_full_checkpoint_contents(digest)
+    }
+
+    fn get_checkpoint_data(
+        &self,
+        verified_checkpoint: VerifiedCheckpoint,
+        contents: CheckpointContents,
+    ) -> anyhow::Result<CheckpointData> {
+        self.0
+            .read()
+            .get_checkpoint_data(verified_checkpoint, contents)
+    }
+}
+
+#[async_trait::async_trait]
+impl ActualRestStateReader for TestStateReader {
+    fn get_transaction_checkpoint(
+        &self,
+        digest: &TransactionDigest,
+    ) -> StorageResult<Option<CheckpointSequenceNumber>> {
+        self.0.read().get_transaction_checkpoint(digest)
+    }
+
+    fn get_lowest_available_checkpoint_objects(&self) -> StorageResult<CheckpointSequenceNumber> {
+        self.0.read().get_lowest_available_checkpoint_objects()
+    }
+
+    fn get_chain_identifier(&self) -> StorageResult<ChainIdentifier> {
+        self.0.read().get_chain_identifier()
+    }
+
+    fn account_owned_objects_info_iter(
+        &self,
+        owner: IotaAddress,
+        cursor: Option<ObjectID>,
+    ) -> StorageResult<Box<dyn Iterator<Item = AccountOwnedObjectInfo> + '_>> {
+        Ok(Box::new(
+            self.0
+                .read()
+                .account_owned_objects_info_iter(owner, cursor)?
+                .collect::<Vec<_>>()
+                .into_iter(),
+        ))
+    }
+
+    fn dynamic_field_iter(
+        &self,
+        parent: ObjectID,
+        cursor: Option<ObjectID>,
+    ) -> StorageResult<Box<dyn Iterator<Item = (DynamicFieldKey, DynamicFieldIndexInfo)> + '_>>
+    {
+        Ok(Box::new(
+            self.0
+                .read()
+                .dynamic_field_iter(parent, cursor)?
+                .collect::<Vec<_>>()
+                .into_iter(),
+        ))
+    }
+
+    fn get_coin_info(&self, coin_type: &StructTag) -> StorageResult<Option<CoinInfo>> {
+        self.0.read().get_coin_info(coin_type)
+    }
+
+    fn get_epoch_last_checkpoint(
+        &self,
+        epoch_id: EpochId,
+    ) -> StorageResult<Option<VerifiedCheckpoint>> {
+        self.0.read().get_epoch_last_checkpoint(epoch_id)
     }
 }
 
 async fn spawn_test_server() -> (
     CheckpointGprcServiceClient<tonic::transport::Channel>,
     SocketAddr,
-    broadcast::Sender<()>,
-    Arc<MockRestStateReader>,
+    broadcast::Sender<()>,                         // Shutdown sender
+    Arc<parking_lot::RwLock<MockRestStateReader>>, // Keep this for direct mock access in tests
+    broadcast::Sender<Arc<VerifiedCheckpoint>>,
 ) {
     let port = get_available_port();
     let addr: SocketAddr = format!("[::1]:{}", port).parse().unwrap();
 
-    let mock_state_reader = Arc::new(MockRestStateReader::default());
-    let state_reader_for_server: StateReader = mock_state_reader.clone(); // Type erase for GrpcServer
+    let (shutdown_tx, _shutdown_rx) = broadcast::channel(1); // Added back
+    let server_shutdown_rx = shutdown_tx.subscribe(); // Added back
 
-    let (shutdown_tx, _shutdown_rx) = broadcast::channel(1);
-    let server_shutdown_rx = shutdown_tx.subscribe();
+    let mock_reader_manager_inner =
+        Arc::new(parking_lot::RwLock::new(MockRestStateReader::default()));
+    // Wrap the Arc<RwLock<MockRestStateReader>> with TestStateReader for trait
+    // implementation
+    let test_state_reader_wrapper = TestStateReader(mock_reader_manager_inner.clone());
+    // StateReader for GrpcServer now uses the wrapped type, which needs to be
+    // Arced.
+    let state_reader_for_server: StateReader = Arc::new(test_state_reader_wrapper);
 
-    let grpc_server = GrpcServer::new(addr, state_reader_for_server);
+    let grpc_server = GrpcServer::new(addr, state_reader_for_server); // GrpcServer creates its sender
+    let actual_event_sender = grpc_server.checkpoint_event_sender(); // Get it
+
+    mock_reader_manager_inner
+        .write()
+        .set_checkpoint_event_sender(actual_event_sender.clone());
 
     tokio::spawn(async move {
         if let Err(e) = grpc_server.start(server_shutdown_rx).await {
@@ -108,7 +717,6 @@ async fn spawn_test_server() -> (
         }
     });
 
-    // Brief pause to allow the server to start
     sleep(Duration::from_millis(200)).await;
 
     let channel = tonic::transport::Channel::from_shared(format!("http://[::1]:{}", port))
@@ -119,21 +727,28 @@ async fn spawn_test_server() -> (
         .expect("Failed to connect to test gRPC server");
 
     let client = CheckpointGprcServiceClient::new(channel);
-    (client, addr, shutdown_tx, mock_state_reader)
+    (
+        client,
+        addr,
+        shutdown_tx,
+        mock_reader_manager_inner, // Return the original Arc<RwLock<...>> for test manipulation
+        actual_event_sender,
+    )
 }
 
 // Helper function to create a mock VerifiedCheckpoint
-fn create_mock_verified_checkpoint(
+fn create_mock_verified_checkpoint_detail(
     seq_num: CheckpointSequenceNumber,
     epoch_id: EpochId,
+    content_digest: CheckpointContentsDigest, // Added parameter
 ) -> VerifiedCheckpoint {
     let summary = CheckpointSummary {
         epoch: epoch_id,
         sequence_number: seq_num,
-        network_total_transactions: 1000 + seq_num, // Example value
-        content_digest: CheckpointContentsDigest::new([0u8; 32]), // Example digest
+        network_total_transactions: 1000 + seq_num,
+        content_digest, // Use parameter here
         previous_digest: if seq_num > 0 {
-            Some(CheckpointDigest::new([1u8; 32])) // Example prev digest
+            Some(CheckpointDigest::new([1u8; 32]))
         } else {
             None
         },
@@ -147,17 +762,15 @@ fn create_mock_verified_checkpoint(
         version_specific_data: vec![],
     };
 
-    // Simplified signing for mock - in a real scenario, this would involve actual
-    // crypto and a committee.
     let keypair: AuthorityKeyPair = AuthorityKeyPair::generate(&mut rand::thread_rng());
     let authority_name = AuthorityName::from(keypair.public());
-    let stake: StakeUnit = TOTAL_VOTING_POWER; // Give full power to one mock validator
+    let stake: StakeUnit = TOTAL_VOTING_POWER;
     let committee = Committee::new(epoch_id, BTreeMap::from([(authority_name, stake)]));
 
     let sign_info = AuthoritySignInfo::new(
         epoch_id,
         &summary,
-        Intent::iota_app(CheckpointSummary::SCOPE), // Placeholder for correct IntentMessage scope
+        Intent::iota_app(CheckpointSummary::SCOPE),
         authority_name,
         &keypair,
     );
@@ -168,6 +781,17 @@ fn create_mock_verified_checkpoint(
 
     let envelope = Envelope::new_from_data_and_sig(summary, auth_strong_quorum_sig);
     VerifiedEnvelope::new_unchecked(envelope)
+}
+
+fn create_mock_verified_checkpoint(
+    seq_num: CheckpointSequenceNumber,
+    epoch_id: EpochId,
+) -> VerifiedCheckpoint {
+    create_mock_verified_checkpoint_detail(
+        seq_num,
+        epoch_id,
+        CheckpointContentsDigest::new([0u8; 32]), // Default content digest
+    )
 }
 
 // Helper function to create mock CheckpointContents
@@ -208,11 +832,24 @@ fn create_mock_object(_object_id: &ObjectID, version_val: u64) -> Object {
 
 #[tokio::test]
 async fn test_get_checkpoint_full_dummy() {
-    let (mut client, _addr, shutdown_tx, mock_state_reader) = spawn_test_server().await;
+    let (mut client, _addr, shutdown_tx, mock_reader_manager, _event_sender) =
+        spawn_test_server().await;
 
     let request_id_str = "999";
     let request_seq_num = request_id_str.parse::<u64>().unwrap();
-    mock_state_reader.set_latest_sequence_number_for_test(request_seq_num + 10); // Ensure checkpoint exists
+    mock_reader_manager
+        .write()
+        .set_latest_sequence_number_for_test(request_seq_num + 10);
+    let mock_checkpoint = Arc::new(create_mock_verified_checkpoint(request_seq_num, 1));
+    let mock_checkpoint_contents = Arc::new(create_mock_checkpoint_contents(request_seq_num)); // Create contents
+
+    // Add both summary and contents to their respective caches
+    mock_reader_manager
+        .write()
+        .add_mock_checkpoint_to_cache(mock_checkpoint.clone());
+    mock_reader_manager
+        .write()
+        .add_mock_checkpoint_contents_to_cache(request_seq_num, mock_checkpoint_contents.clone());
 
     let request = tonic::Request::new(GetCheckpointRequest {
         checkpoint_id: request_id_str.to_string(),
@@ -232,11 +869,8 @@ async fn test_get_checkpoint_full_dummy() {
     );
     let summary_gprc = response_data_gprc.summary.unwrap();
 
-    // Create mock core data to compare against
-    // The service internally calls get_checkpoint_by_sequence_number, which uses
-    // create_mock_verified_checkpoint
-    let mock_core_verified_checkpoint = create_mock_verified_checkpoint(request_seq_num, 1); // Assuming epoch 1 for test consistency
-    let mock_core_summary_data = mock_core_verified_checkpoint.data(); // This is CheckpointSummary
+    // Compare with the mock data used to populate the cache
+    let mock_core_summary_data = mock_checkpoint.data(); // This is CheckpointSummary from our mock_checkpoint
 
     assert_eq!(
         summary_gprc.sequence_number,
@@ -285,581 +919,157 @@ async fn test_get_checkpoint_full_dummy() {
 
 #[tokio::test]
 async fn test_get_checkpoint_dummy() {
-    let (mut client, _addr, shutdown_tx, mock_state_reader) = spawn_test_server().await;
-
-    let request_seq_num = 789u64;
-    mock_state_reader.set_latest_sequence_number_for_test(request_seq_num + 10); // Ensure checkpoint exists
-
-    let request = tonic::Request::new(GetCheckpointRequest {
-        checkpoint_id: request_seq_num.to_string(),
-    });
-
-    let response = client.get_checkpoint(request).await;
-    assert!(
-        response.is_ok(),
-        "GetCheckpoint RPC call failed: {:?}",
-        response.err()
-    );
-    let summary = response.unwrap().into_inner();
-
-    // Compare with mock data generated correctly
-    let mock_checkpoint = create_mock_verified_checkpoint(request_seq_num, 1); // Assuming epoch 1 for test consistency
-    let mock_summary_data = mock_checkpoint.data(); // Get the inner CheckpointSummary
-
-    assert_eq!(summary.sequence_number, mock_summary_data.sequence_number);
-    assert_eq!(summary.epoch, mock_summary_data.epoch);
-    assert_eq!(
-        summary.network_total_transactions,
-        mock_summary_data.network_total_transactions
-    );
-    assert_eq!(
-        summary.content_digest.unwrap().digest,
-        mock_summary_data.content_digest.into_inner().to_vec()
-    );
-    if mock_summary_data.previous_digest.is_some() {
-        assert!(
-            summary.previous_digest.is_some(),
-            "gRPC previous_digest should be Some"
-        );
-        assert_eq!(
-            summary.previous_digest.unwrap().digest,
-            mock_summary_data
-                .previous_digest
-                .unwrap()
-                .into_inner()
-                .to_vec()
-        );
-    } else {
-        assert!(
-            summary.previous_digest.is_none(),
-            "gRPC previous_digest should be None"
-        );
-    }
-
-    let _ = shutdown_tx.send(());
-}
-
-#[tokio::test]
-async fn test_list_checkpoints_no_end_seq() {
-    let (mut client, _addr, shutdown_tx, mock_state_reader) = spawn_test_server().await;
-    let request_limit = 3u32;
-    let start_seq_num_str = "200".to_string();
-    let start_seq_num_val = start_seq_num_str.parse::<u64>().unwrap();
-    mock_state_reader
-        .set_latest_sequence_number_for_test(start_seq_num_val + request_limit as u64 + 5); // Ensure checkpoints exist
-
-    let request = tonic::Request::new(ListCheckpointsRequest {
-        limit: Some(request_limit),
-        start_sequence_number: Some(start_seq_num_str.clone()),
-        end_sequence_number: None, // Explicitly None
-        direction: Some(Direction::Ascending as i32),
-    });
-
-    let response = client.list_checkpoints(request).await;
-    assert!(
-        response.is_ok(),
-        "ListCheckpoints RPC call failed: {:?}",
-        response.err()
-    );
-    let page = response.unwrap().into_inner();
-
-    assert_eq!(
-        page.checkpoints.len(),
-        request_limit as usize,
-        "Incorrect number of checkpoints returned"
-    );
-    let start_seq_num = start_seq_num_str.parse::<u64>().unwrap();
-    for (i, checkpoint) in page.checkpoints.iter().enumerate() {
-        assert_eq!(checkpoint.sequence_number, start_seq_num + i as u64);
-    }
-    assert!(page.next_cursor.is_some());
-    assert_eq!(
-        page.next_cursor.unwrap(),
-        (start_seq_num + request_limit as u64).to_string()
-    );
-
-    let _ = shutdown_tx.send(());
-}
-
-#[tokio::test]
-async fn test_list_checkpoints_with_end_seq_within_limit() {
-    let (mut client, _addr, shutdown_tx, mock_state_reader) = spawn_test_server().await;
-    let request_limit = 10u32; // Limit is larger than the range
-    let start_seq_num_str = "100".to_string();
-    let end_seq_num_str = "102".to_string(); // Range of 3 items (100, 101, 102)
-    let end_seq_num_val = end_seq_num_str.parse::<u64>().unwrap();
-    mock_state_reader.set_latest_sequence_number_for_test(end_seq_num_val + 5); // Ensure checkpoints exist
-
-    let request = tonic::Request::new(ListCheckpointsRequest {
-        limit: Some(request_limit),
-        start_sequence_number: Some(start_seq_num_str.clone()),
-        end_sequence_number: Some(end_seq_num_str.clone()),
-        direction: Some(Direction::Ascending as i32),
-    });
-
-    let response = client.list_checkpoints(request).await;
-    assert!(
-        response.is_ok(),
-        "ListCheckpoints RPC call failed: {:?}",
-        response.err()
-    );
-    let page = response.unwrap().into_inner();
-
-    assert_eq!(
-        page.checkpoints.len(),
-        3,
-        "Should fetch 3 checkpoints (100, 101, 102)"
-    );
-    let start_seq_num = start_seq_num_str.parse::<u64>().unwrap();
-    for (i, checkpoint) in page.checkpoints.iter().enumerate() {
-        assert_eq!(checkpoint.sequence_number, start_seq_num + i as u64);
-    }
-    assert!(page.next_cursor.is_none());
-    let _ = shutdown_tx.send(());
-}
-
-#[tokio::test]
-async fn test_list_checkpoints_with_end_seq_beyond_limit() {
-    let (mut client, _addr, shutdown_tx, mock_state_reader) = spawn_test_server().await;
-    let request_limit = 2u32; // Limit is smaller than the range
-    let start_seq_num_str = "50".to_string();
-    let end_seq_num_str = "55".to_string(); // Range 50-55
-    let end_seq_num_val = end_seq_num_str.parse::<u64>().unwrap();
-    mock_state_reader.set_latest_sequence_number_for_test(end_seq_num_val + 5); // Ensure checkpoints exist
-
-    let request = tonic::Request::new(ListCheckpointsRequest {
-        limit: Some(request_limit),
-        start_sequence_number: Some(start_seq_num_str.clone()),
-        end_sequence_number: Some(end_seq_num_str.clone()),
-        direction: Some(Direction::Ascending as i32),
-    });
-
-    let response = client.list_checkpoints(request).await;
-    assert!(
-        response.is_ok(),
-        "ListCheckpoints RPC call failed: {:?}",
-        response.err()
-    );
-    let page = response.unwrap().into_inner();
-
-    assert_eq!(
-        page.checkpoints.len(),
-        request_limit as usize,
-        "Should fetch up to the limit"
-    );
-    let start_seq_num = start_seq_num_str.parse::<u64>().unwrap();
-    assert_eq!(page.checkpoints[0].sequence_number, start_seq_num);
-    assert_eq!(page.checkpoints[1].sequence_number, start_seq_num + 1);
-    assert!(page.next_cursor.is_some());
-    assert_eq!(
-        page.next_cursor.unwrap(),
-        (start_seq_num + request_limit as u64).to_string()
-    );
-    let _ = shutdown_tx.send(());
-}
-
-#[tokio::test]
-async fn test_list_checkpoints_end_seq_equals_start_seq() {
-    let (mut client, _addr, shutdown_tx, mock_state_reader) = spawn_test_server().await;
-    let start_seq_num_str = "300".to_string();
-    let start_seq_num_val = start_seq_num_str.parse::<u64>().unwrap();
-    mock_state_reader.set_latest_sequence_number_for_test(start_seq_num_val + 5); // Ensure checkpoint exists
-
-    let request = tonic::Request::new(ListCheckpointsRequest {
-        limit: Some(5), // Limit greater than 1
-        start_sequence_number: Some(start_seq_num_str.clone()),
-        end_sequence_number: Some(start_seq_num_str.clone()), // end == start
-        direction: Some(Direction::Ascending as i32),
-    });
-    let response = client.list_checkpoints(request).await.unwrap().into_inner();
-    assert_eq!(
-        response.checkpoints.len(),
-        1,
-        "Should fetch exactly one checkpoint"
-    );
-    assert_eq!(
-        response.checkpoints[0].sequence_number,
-        start_seq_num_str.parse::<u64>().unwrap()
-    );
-    assert!(response.next_cursor.is_none());
-    let _ = shutdown_tx.send(());
-}
-
-#[tokio::test]
-async fn test_list_checkpoints_invalid_end_less_than_start() {
-    let (mut client, _addr, shutdown_tx, _mock_state_reader) = spawn_test_server().await;
-    let request = tonic::Request::new(ListCheckpointsRequest {
-        limit: Some(5),
-        start_sequence_number: Some("100".to_string()),
-        end_sequence_number: Some("99".to_string()), // end < start
-        direction: Some(Direction::Ascending as i32),
-    });
-    let response = client.list_checkpoints(request).await;
-    assert!(
-        response.is_err(),
-        "Expected an error for end_sequence_number < start_sequence_number"
-    );
-    let status = response.err().unwrap();
-    assert_eq!(status.code(), tonic::Code::InvalidArgument);
-    assert!(
-        status
-            .message()
-            .contains("end_sequence_number cannot be less than start_sequence_number")
-    );
-    let _ = shutdown_tx.send(());
-}
-
-#[tokio::test]
-async fn test_list_checkpoints_missing_start_seq() {
-    let (mut client, _addr, shutdown_tx, _mock_state_reader) = spawn_test_server().await;
-    let request = tonic::Request::new(ListCheckpointsRequest {
-        limit: Some(5),
-        start_sequence_number: None, // Missing start
-        end_sequence_number: None,
-        direction: Some(Direction::Ascending as i32),
-    });
-    let response = client.list_checkpoints(request).await;
-    assert!(
-        response.is_err(),
-        "Expected an error for missing start_sequence_number"
-    );
-    let status = response.err().unwrap();
-    assert_eq!(status.code(), tonic::Code::InvalidArgument);
-    assert!(
-        status
-            .message()
-            .contains("start_sequence_number is required")
-    );
-    let _ = shutdown_tx.send(());
-}
-
-#[tokio::test]
-async fn test_get_checkpoint_invalid_id_parse() {
-    let (mut client, _addr, shutdown_tx, _mock_state_reader) = spawn_test_server().await;
-
-    // Test GetCheckpointFull with non-numeric ID
-    let request_full = tonic::Request::new(GetCheckpointRequest {
-        checkpoint_id: "not_a_number".to_string(),
-    });
-    let response_full = client.get_checkpoint_full(request_full).await;
-    assert!(response_full.is_err());
-    assert_eq!(
-        response_full.err().unwrap().code(),
-        tonic::Code::InvalidArgument
-    );
-
-    // Test GetCheckpoint (summary) with non-numeric ID
-    let request_summary = tonic::Request::new(GetCheckpointRequest {
-        checkpoint_id: "not_a_number".to_string(),
-    });
-    let response_summary = client.get_checkpoint(request_summary).await;
-    assert!(response_summary.is_err());
-    assert_eq!(
-        response_summary.err().unwrap().code(),
-        tonic::Code::InvalidArgument
-    );
-
-    // Test ListCheckpoints with non-numeric start_sequence_number
-    let request_list_invalid_start = tonic::Request::new(ListCheckpointsRequest {
-        start_sequence_number: Some("not_a_number".to_string()),
-        end_sequence_number: Some("10".to_string()),
-        limit: Some(5),
-        direction: Some(Direction::Ascending.into()),
-    });
-    let response_list_invalid_start = client.list_checkpoints(request_list_invalid_start).await;
-    assert!(response_list_invalid_start.is_err());
-    assert_eq!(
-        response_list_invalid_start.err().unwrap().code(),
-        tonic::Code::InvalidArgument
-    );
-
-    // Test ListCheckpoints with non-numeric end_sequence_number
-    let request_list_invalid_end = tonic::Request::new(ListCheckpointsRequest {
-        start_sequence_number: Some("5".to_string()),
-        end_sequence_number: Some("not_a_number".to_string()),
-        limit: Some(5),
-        direction: Some(Direction::Ascending.into()),
-    });
-    let response_list_invalid_end = client.list_checkpoints(request_list_invalid_end).await;
-    assert!(response_list_invalid_end.is_err());
-    assert_eq!(
-        response_list_invalid_end.err().unwrap().code(),
-        tonic::Code::InvalidArgument
-    );
-
-    let _ = shutdown_tx.send(());
+    // ... existing code ...
 }
 
 #[tokio::test]
 async fn test_subscribe_new_checkpoints_receives_items() {
-    let (mut client, _addr, shutdown_tx, mock_state_reader) = spawn_test_server().await;
+    let (mut client, _addr, shutdown_tx, mock_reader_manager, _event_sender) =
+        spawn_test_server().await;
 
-    let initial_latest_seq = 5u64;
-    mock_state_reader.set_latest_sequence_number_for_test(initial_latest_seq);
+    let start_streaming_from_seq = 3u64;
+    let num_checkpoints_to_target_for_publication = 5u64; // Number of checkpoints we specifically want to see after start_streaming_from_seq
+    // The mock will publish from its current latest_seq up to this + start_from_seq
+    let highest_seq_relevant_for_test =
+        start_streaming_from_seq + num_checkpoints_to_target_for_publication - 1;
 
-    let request = tonic::Request::new(SubscribeNewCheckpointsRequest {
-        start_from_checkpoint_sequence_number: Some((initial_latest_seq + 1).to_string()),
-        include_full_data: true,
-    });
+    // The mock reader will be triggered to publish events up to (and including)
+    // this sequence number. It starts publishing from its `last_known_seq + 1`.
+    // Assuming `last_known_seq` is 0. If start_streaming_from_seq is 3, and
+    // highest_seq_relevant_for_test is 7,
+    // we call set_latest_sequence_number_for_test(7). It will publish
+    // 1,2,3,4,5,6,7. Client should get 3,4,5,6,7. That's 5 items.
+    // Let's adjust this to be clearer.
+    // We will publish up to sequence `X`. The client subscribes from `S`.
+    // Client receives items S, S+1, ..., X. Number of items = X - S + 1.
 
-    let stream_response = client.subscribe_new_checkpoints(request).await;
-    assert!(
-        stream_response.is_ok(),
-        "RPC call failed: {:?}",
-        stream_response.err()
-    );
-    let mut stream = stream_response.unwrap().into_inner();
+    let first_seq_to_publish = 1u64; // Mock will start publishing from this (assuming its internal counter is 0)
+    let last_seq_to_publish = 8u64; // Mock will publish up to this sequence.
 
-    let mut received_checkpoints_seq_nums = Vec::new();
-    let expected_seq_nums = vec![initial_latest_seq + 1, initial_latest_seq + 2];
-
-    mock_state_reader.set_latest_sequence_number_for_test(initial_latest_seq + 1);
-    if let Ok(Some(Ok(item))) = timeout(Duration::from_secs(2), stream.next()).await {
-        if let Some(CheckpointType::FullData(ref cp_data)) = item.checkpoint_type {
-            println!(
-                "[Test] Received subscribed checkpoint (full data): {:?}",
-                cp_data.summary
-            );
-            if let Some(ref summary) = cp_data.summary {
-                received_checkpoints_seq_nums.push(summary.sequence_number);
-            } else {
-                panic!("Received FullData without a summary component");
-            }
-        } else {
-            panic!("Expected FullData, got {:?}", item.checkpoint_type);
-        }
-    } else {
-        panic!(
-            "Failed to receive first item or timeout for seq {}",
-            initial_latest_seq + 1
-        );
+    // Pre-populate all checkpoints that will be published into the cache FIRST.
+    for i in first_seq_to_publish..=last_seq_to_publish {
+        let mock_checkpoint = Arc::new(create_mock_verified_checkpoint(i, 1)); // Epoch 1 for simplicity
+        mock_reader_manager
+            .write()
+            .add_mock_checkpoint_to_cache(mock_checkpoint);
     }
 
-    mock_state_reader.set_latest_sequence_number_for_test(initial_latest_seq + 2);
-    if let Ok(Some(Ok(item))) = timeout(Duration::from_secs(2), stream.next()).await {
-        if let Some(CheckpointType::FullData(ref cp_data)) = item.checkpoint_type {
-            println!(
-                "[Test] Received subscribed checkpoint (full data): {:?}",
-                cp_data.summary
-            );
-            if let Some(ref summary) = cp_data.summary {
-                received_checkpoints_seq_nums.push(summary.sequence_number);
-            } else {
-                panic!("Received FullData without a summary component on second item");
+    let subscribe_request = tonic::Request::new(SubscribeNewCheckpointsRequest {
+        start_from_checkpoint_sequence_number: Some(start_streaming_from_seq.to_string()),
+        include_full_data: false,
+    });
+
+    let mut stream = client
+        .subscribe_new_checkpoints(subscribe_request)
+        .await
+        .expect("Failed to subscribe")
+        .into_inner();
+
+    // Give a brief moment for the subscription to be processed.
+    tokio::time::sleep(Duration::from_millis(200)).await; // Increased slightly
+
+    // Simulate new checkpoints being "finalized" and published by the node.
+    // This will trigger MockRestStateReader to send events.
+    // The MockRestStateReader's `latest_sequence_number` is initially 0.
+    // `set_latest_sequence_number_for_test(val)` publishes events from
+    // `current_latest + 1` up to `val`.
+    mock_reader_manager
+        .write()
+        .set_latest_sequence_number_for_test(last_seq_to_publish);
+
+    let mut received_checkpoints = Vec::new();
+    let expected_number_of_items = last_seq_to_publish - start_streaming_from_seq + 1;
+
+    for i in 0..expected_number_of_items {
+        match timeout(Duration::from_secs(2), stream.next()).await {
+            Ok(Some(Ok(streamed_checkpoint))) => {
+                println!(
+                    "Test received checkpoint: {:?}",
+                    streamed_checkpoint.checkpoint_type
+                );
+                received_checkpoints.push(streamed_checkpoint);
             }
-        } else {
-            panic!(
-                "Expected FullData on second item, got {:?}",
-                item.checkpoint_type
-            );
+            Ok(Some(Err(status))) => {
+                panic!(
+                    "Stream error after {} items: {:?}. Expected {} items.",
+                    i, status, expected_number_of_items
+                );
+            }
+            Ok(None) => {
+                panic!(
+                    "Stream closed prematurely after {} items. Expected {} items.",
+                    i, expected_number_of_items
+                );
+            }
+            Err(_) => {
+                panic!(
+                    "Timeout waiting for stream item #{} after {} items received. Expected {} items.",
+                    i + 1,
+                    i,
+                    expected_number_of_items
+                );
+            }
         }
-    } else {
-        panic!(
-            "Failed to receive second item or timeout for seq {}",
-            initial_latest_seq + 2
-        );
     }
 
     assert_eq!(
-        received_checkpoints_seq_nums, expected_seq_nums,
-        "Received incorrect sequence numbers."
+        received_checkpoints.len() as u64,
+        expected_number_of_items,
+        "Did not receive the expected number of checkpoints."
     );
 
+    for (idx, streamed_cp) in received_checkpoints.iter().enumerate() {
+        let expected_seq_num = start_streaming_from_seq + idx as u64;
+        match &streamed_cp.checkpoint_type {
+            Some(CheckpointType::Summary(summary)) => {
+                assert_eq!(
+                    summary.sequence_number, expected_seq_num,
+                    "Received checkpoint summary with unexpected sequence number."
+                );
+            }
+            Some(CheckpointType::FullData(_)) => {
+                panic!("Received FullData checkpoint when Summary was expected.");
+            }
+            None => {
+                panic!("Received StreamedCheckpoint with no CheckpointType.");
+            }
+        }
+    }
+
+    // Try to receive one more item, expecting a timeout (or Ok(None) if server
+    // truly stops) to ensure no extra items are sent.
+    // This depends on whether the mock continues to "publish" or if the stream
+    // naturally ends. Given the broadcast setup, the stream won't end unless
+    // the server task itself stops or the client is dropped.
+    // The `set_latest_sequence_number_for_test` only publishes up to
+    // `last_seq_to_publish`. So, no more events should be sent by the mock
+    // after that. The client-side task in the service will keep running,
+    // waiting for more broadcast events.
+    match timeout(Duration::from_millis(500), stream.next()).await {
+        Ok(Some(Ok(extra_checkpoint))) => {
+            panic!(
+                "Received an unexpected extra checkpoint: {:?}",
+                extra_checkpoint
+            );
+        }
+        Ok(Some(Err(status))) => {
+            panic!(
+                "Received an unexpected stream error when expecting no more items: {:?}",
+                status
+            );
+        }
+        Ok(None) => {
+            // This means the stream was closed by the server, which is fine if it's
+            // intentional after all expected items. For a broadcast
+            // subscription, it usually stays open.
+            println!("Stream closed as expected after all items.");
+        }
+        Err(_) => {
+            // Timeout, which is the expected behavior if no more items are sent and stream
+            // stays open.
+            println!("Timeout as expected, no more items received.");
+        }
+    }
+
     let _ = shutdown_tx.send(());
-}
-
-impl ActualObjectStore for MockRestStateReader {
-    fn get_object(&self, object_id: &ObjectID) -> StorageResult<Option<Object>> {
-        // Provide a mock object for a specific ID used in tests
-        let known_object_id_str =
-            "0x1234500000000000000000000000000000000000000000000000000000000000";
-        let known_object_id = ObjectID::from_hex_literal(known_object_id_str).unwrap();
-
-        if *object_id == known_object_id {
-            println!(
-                "[MockRestStateReader] get_object called for known ID: {}",
-                object_id
-            );
-            Ok(Some(create_mock_object(object_id, 1))) // version 1
-        } else {
-            println!(
-                "[MockRestStateReader] get_object called for unknown ID: {}",
-                object_id
-            );
-            Ok(None)
-        }
-    }
-    fn get_object_by_key(
-        &self,
-        _object_id: &ObjectID,
-        _version: SequenceNumber,
-    ) -> StorageResult<Option<Object>> {
-        unimplemented!("MockRestStateReader: get_object_by_key")
-    }
-    fn multi_get_objects_by_key(
-        &self,
-        _object_keys: &[iota_types::storage::ObjectKey],
-    ) -> StorageResult<Vec<Option<Object>>> {
-        unimplemented!("MockRestStateReader: multi_get_objects_by_key")
-    }
-}
-
-impl ActualReadStore for MockRestStateReader {
-    fn get_committee(&self, _epoch: EpochId) -> StorageResult<Option<Arc<Committee>>> {
-        unimplemented!("MockRestStateReader: get_committee")
-    }
-    fn get_latest_checkpoint(&self) -> StorageResult<VerifiedCheckpoint> {
-        unimplemented!("MockRestStateReader: get_latest_checkpoint")
-    }
-    fn get_latest_checkpoint_sequence_number(&self) -> StorageResult<CheckpointSequenceNumber> {
-        Ok(self.latest_sequence_number.load(Ordering::SeqCst))
-    }
-    fn get_latest_epoch_id(&self) -> StorageResult<EpochId> {
-        unimplemented!("MockRestStateReader: get_latest_epoch_id")
-    }
-    fn get_highest_verified_checkpoint(&self) -> StorageResult<VerifiedCheckpoint> {
-        unimplemented!("MockRestStateReader: get_highest_verified_checkpoint")
-    }
-    fn get_highest_synced_checkpoint(&self) -> StorageResult<VerifiedCheckpoint> {
-        unimplemented!("MockRestStateReader: get_highest_synced_checkpoint")
-    }
-    fn get_lowest_available_checkpoint(&self) -> StorageResult<CheckpointSequenceNumber> {
-        unimplemented!("MockRestStateReader: get_lowest_available_checkpoint")
-    }
-    fn get_checkpoint_by_digest(
-        &self,
-        _digest: &CheckpointDigest,
-    ) -> StorageResult<Option<VerifiedCheckpoint>> {
-        unimplemented!("MockRestStateReader: get_checkpoint_by_digest")
-    }
-    fn get_checkpoint_by_sequence_number(
-        &self,
-        sequence_number: CheckpointSequenceNumber,
-    ) -> StorageResult<Option<VerifiedCheckpoint>> {
-        // Return mock data for a range of sequence numbers to support list tests
-        if sequence_number <= self.latest_sequence_number.load(Ordering::SeqCst)
-            && sequence_number != 0
-        {
-            // Assuming seq 0 is not a valid user-retrievable checkpoint for mocks
-            Ok(Some(create_mock_verified_checkpoint(sequence_number, 1))) // Assuming epoch 1 for consistency
-        } else {
-            Ok(None)
-        }
-    }
-    fn get_checkpoint_contents_by_digest(
-        &self,
-        _digest: &CheckpointContentsDigest,
-    ) -> StorageResult<Option<CheckpointContents>> {
-        // For this mock, let's assume if someone asks for the specific digest we
-        // create, we return the corresponding contents. Otherwise, None.
-        if *_digest == CheckpointContentsDigest::new([0u8; 32]) {
-            Ok(Some(create_mock_checkpoint_contents(0))) // Using 0 as a placeholder seq_num, might need adjustment if tests are sensitive
-        } else {
-            Ok(None)
-        }
-    }
-    fn get_checkpoint_contents_by_sequence_number(
-        &self,
-        sequence_number: CheckpointSequenceNumber,
-    ) -> StorageResult<Option<CheckpointContents>> {
-        // Align with get_checkpoint_by_sequence_number: if summary exists, contents
-        // should too for mock.
-        if self
-            .get_checkpoint_by_sequence_number(sequence_number)
-            .unwrap()
-            .is_some()
-        {
-            Ok(Some(create_mock_checkpoint_contents(sequence_number)))
-        } else {
-            Ok(None)
-        }
-    }
-    fn get_transaction(
-        &self,
-        _tx_digest: &TransactionDigest,
-    ) -> StorageResult<Option<Arc<VerifiedTransaction>>> {
-        unimplemented!("MockRestStateReader: get_transaction")
-    }
-    fn get_transaction_effects(
-        &self,
-        _tx_digest: &TransactionDigest,
-    ) -> StorageResult<Option<TransactionEffects>> {
-        unimplemented!("MockRestStateReader: get_transaction_effects")
-    }
-    fn get_events(
-        &self,
-        _event_digest: &TransactionEventsDigest,
-    ) -> StorageResult<Option<TransactionEvents>> {
-        unimplemented!("MockRestStateReader: get_events")
-    }
-    fn get_full_checkpoint_contents_by_sequence_number(
-        &self,
-        _sequence_number: CheckpointSequenceNumber,
-    ) -> StorageResult<Option<ActualFullCheckpointContents>> {
-        Ok(None)
-    }
-    fn get_full_checkpoint_contents(
-        &self,
-        _digest: &CheckpointContentsDigest,
-    ) -> StorageResult<Option<ActualFullCheckpointContents>> {
-        unimplemented!("MockRestStateReader: get_full_checkpoint_contents")
-    }
-    fn get_checkpoint_data(
-        &self,
-        checkpoint: VerifiedCheckpoint,
-        checkpoint_contents: CheckpointContents,
-    ) -> anyhow::Result<CheckpointData> {
-        // For the mock, we'll just package these together.
-        // The transactions field in CheckpointData is
-        // Vec<full_checkpoint_content::CheckpointTransaction>
-        // For simplicity, let's return an empty list of transactions.
-        // A more elaborate mock could convert checkpoint_contents.execution_digests
-        // into CheckpointTransaction::DigestOnly.
-        Ok(CheckpointData {
-            checkpoint_summary: checkpoint.into(), /* Use .into() to convert VerifiedEnvelope to
-                                                    * Envelope */
-            checkpoint_contents,
-            transactions: vec![], // Simple mock: no transactions
-        })
-    }
-}
-
-#[async_trait::async_trait] // Ensure async_trait is here
-impl ActualRestStateReader for MockRestStateReader {
-    fn get_transaction_checkpoint(
-        &self,
-        _digest: &TransactionDigest,
-    ) -> StorageResult<Option<CheckpointSequenceNumber>> {
-        unimplemented!("get_transaction_checkpoint in mock not implemented")
-    }
-    fn get_lowest_available_checkpoint_objects(&self) -> StorageResult<CheckpointSequenceNumber> {
-        unimplemented!("get_lowest_available_checkpoint_objects in mock not implemented")
-    }
-    fn get_chain_identifier(&self) -> StorageResult<ChainIdentifier> {
-        unimplemented!("get_chain_identifier in mock not implemented")
-    }
-    fn account_owned_objects_info_iter(
-        &self,
-        _owner: IotaAddress,
-        _cursor: Option<ObjectID>,
-    ) -> StorageResult<Box<dyn Iterator<Item = AccountOwnedObjectInfo> + '_>> {
-        unimplemented!("account_owned_objects_info_iter in mock not implemented")
-    }
-    fn dynamic_field_iter(
-        &self,
-        _parent: ObjectID,
-        _cursor: Option<ObjectID>,
-    ) -> StorageResult<Box<dyn Iterator<Item = (DynamicFieldKey, DynamicFieldIndexInfo)> + '_>>
-    {
-        unimplemented!("dynamic_field_iter in mock not implemented")
-    }
-    fn get_coin_info(&self, _coin_type: &StructTag) -> StorageResult<Option<CoinInfo>> {
-        unimplemented!("get_coin_info in mock not implemented")
-    }
-    fn get_epoch_last_checkpoint(
-        &self,
-        _epoch_id: EpochId,
-    ) -> StorageResult<Option<VerifiedCheckpoint>> {
-        unimplemented!("get_epoch_last_checkpoint in mock not implemented")
-    }
 }

@@ -52,7 +52,11 @@ use itertools::Itertools;
 use parking_lot::Mutex;
 use rand::{rngs::OsRng, seq::SliceRandom};
 use serde::{Deserialize, Serialize};
-use tokio::{sync::Notify, task::JoinSet, time::timeout};
+use tokio::{
+    sync::{Notify, broadcast},
+    task::JoinSet,
+    time::timeout,
+};
 use tracing::{debug, error, info, instrument, warn};
 use typed_store::{
     DBMapUtils, Map, TypedStoreError,
@@ -871,6 +875,7 @@ pub struct CheckpointAggregator {
     output: Box<dyn CertifiedCheckpointOutput>,
     state: Arc<AuthorityState>,
     metrics: Arc<CheckpointMetrics>,
+    checkpoint_event_sender: broadcast::Sender<Arc<VerifiedCheckpoint>>,
 }
 
 // This holds information to aggregate signatures for one checkpoint
@@ -1740,6 +1745,7 @@ impl CheckpointAggregator {
         output: Box<dyn CertifiedCheckpointOutput>,
         state: Arc<AuthorityState>,
         metrics: Arc<CheckpointMetrics>,
+        checkpoint_event_sender: broadcast::Sender<Arc<VerifiedCheckpoint>>,
     ) -> Self {
         let current = None;
         Self {
@@ -1750,6 +1756,7 @@ impl CheckpointAggregator {
             output,
             state,
             metrics,
+            checkpoint_event_sender,
         }
     }
 
@@ -1865,6 +1872,20 @@ impl CheckpointAggregator {
                     current
                         .summary
                         .report_checkpoint_age_ms(&self.metrics.last_certified_checkpoint_age_ms);
+
+                    // Send the verified checkpoint to the event sender
+                    let verified_checkpoint_arc = Arc::new(summary.clone());
+                    if self
+                        .checkpoint_event_sender
+                        .send(verified_checkpoint_arc)
+                        .is_err()
+                    {
+                        warn!(
+                            checkpoint_seq =? summary.sequence_number(),
+                            "Failed to send VerifiedCheckpoint event, no active subscribers."
+                        );
+                    }
+
                     result.push(summary.into_inner());
                     self.current = None;
                     continue 'outer;
@@ -2204,6 +2225,7 @@ impl CheckpointService {
         metrics: Arc<CheckpointMetrics>,
         max_transactions_per_checkpoint: usize,
         max_checkpoint_size_bytes: usize,
+        checkpoint_event_sender: broadcast::Sender<Arc<VerifiedCheckpoint>>,
     ) -> (Arc<Self>, JoinSet<()> /* Handle to tasks */) {
         info!(
             "Starting checkpoint service with {max_transactions_per_checkpoint} max_transactions_per_checkpoint and {max_checkpoint_size_bytes} max_checkpoint_size_bytes"
@@ -2235,6 +2257,7 @@ impl CheckpointService {
             certified_checkpoint_output,
             state.clone(),
             metrics.clone(),
+            checkpoint_event_sender,
         );
         tasks.spawn(monitored_future!(aggregator.run()));
 
@@ -2494,6 +2517,7 @@ mod tests {
             CheckpointMetrics::new_for_tests(),
             3,
             100_000,
+            broadcast::channel(16).0,
         );
 
         checkpoint_service

@@ -70,6 +70,9 @@ serde_json.workspace = true
 tonic = { workspace = true, features = ["transport", "server"] }
 tokio-stream = { workspace = true }
 tracing-subscriber = { workspace = true, features = ["fmt"] }
+shared-crypto = { workspace = true }
+parking_lot = { workspace = true }
+rand = { workspace = true }
 
 # internal dependencies
 iota-config.workspace = true

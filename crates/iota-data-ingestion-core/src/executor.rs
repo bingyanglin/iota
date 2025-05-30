@@ -2,8 +2,9 @@
 // Modifications Copyright (c) 2024 IOTA Stiftung
 // SPDX-License-Identifier: Apache-2.0
 
-use std::{path::PathBuf, pin::Pin, sync::Arc};
+use std::{collections::HashMap, path::PathBuf, pin::Pin, sync::Arc};
 
+use async_trait::async_trait;
 use futures::Future;
 use iota_metrics::spawn_monitored_task;
 use iota_rest_api::CheckpointData;
@@ -18,7 +19,7 @@ use tracing;
 
 use crate::{
     DataIngestionMetrics, IngestionError, IngestionResult, ReaderOptions, Worker,
-    progress_store::{ExecutorProgress, ProgressStore, ProgressStoreWrapper, ShimProgressStore},
+    progress_store::{ExecutorProgress, ProgressStore, ProgressStoreWrapper},
     reader::CheckpointReader,
     worker_pool::{WorkerPool, WorkerPoolStatus},
 };
@@ -160,19 +161,29 @@ impl<P: ProgressStore> IndexerExecutor<P> {
     pub async fn run(
         mut self,
         path: PathBuf,
+        initial_reader_checkpoint_number: CheckpointSequenceNumber,
         remote_store_url: Option<String>,
         remote_store_options: Vec<(String, String)>,
         reader_options: ReaderOptions,
     ) -> IngestionResult<ExecutorProgress> {
-        let mut reader_checkpoint_number = self.progress_store.min_watermark()?;
+        let mut current_gc_watermark_for_reader =
+            self.progress_store.min_watermark().unwrap_or_default();
+
         let (checkpoint_reader, mut checkpoint_recv, gc_sender, exit_sender) =
             CheckpointReader::initialize(
                 path,
-                reader_checkpoint_number,
+                initial_reader_checkpoint_number,
                 remote_store_url,
                 remote_store_options,
                 reader_options,
             );
+
+        let cp_num_from_instance = checkpoint_reader.current_checkpoint_number;
+        tracing::info!(
+            "IndexerExecutor::run: CheckpointReader initialized. Initial CP from instance: {}. Value passed for init: {}",
+            cp_num_from_instance,
+            initial_reader_checkpoint_number
+        );
 
         let checkpoint_reader_handle = spawn_monitored_task!(checkpoint_reader.run());
 
@@ -189,15 +200,15 @@ impl<P: ProgressStore> IndexerExecutor<P> {
                     match worker_pool_progress_msg {
                         WorkerPoolStatus::Running((task_name, watermark)) => {
                             self.progress_store.save(task_name.clone(), watermark).await.map_err(|err| IngestionError::ProgressStore(err.to_string()))?;
-                            let seq_number = self.progress_store.min_watermark()?;
-                            if seq_number > reader_checkpoint_number {
-                                gc_sender.send(seq_number).await.map_err(|_| {
+                            let new_min_watermark_for_gc = self.progress_store.min_watermark().unwrap_or_default();
+                            if new_min_watermark_for_gc > current_gc_watermark_for_reader {
+                                gc_sender.send(new_min_watermark_for_gc).await.map_err(|_| {
                                     IngestionError::Channel(
                                         "unable to send GC operation to checkpoint reader, receiver half closed"
-                                            .to_owned(),
+                                            .to_string(),
                                     )
                                 })?;
-                                reader_checkpoint_number = seq_number;
+                                current_gc_watermark_for_reader = new_min_watermark_for_gc;
                             }
                             self.metrics.data_ingestion_checkpoint.with_label_values(&[&task_name]).set(watermark as i64);
                         }
@@ -280,11 +291,13 @@ async fn components_graceful_shutdown(
 ///
 /// # Example
 /// ```rust,no_run
-/// use std::sync::Arc;
+/// use std::{collections::HashMap, sync::Arc};
 ///
 /// use async_trait::async_trait;
-/// use iota_data_ingestion_core::{IngestionError, Worker, setup_single_workflow};
-/// use iota_types::full_checkpoint_content::CheckpointData;
+/// use iota_data_ingestion_core::{IngestionError, ProgressStore, Worker, setup_single_workflow};
+/// use iota_types::{
+///     full_checkpoint_content::CheckpointData, messages_checkpoint::CheckpointSequenceNumber,
+/// };
 ///
 /// struct CustomWorker;
 ///
@@ -320,6 +333,38 @@ async fn components_graceful_shutdown(
 ///     executor.await.unwrap();
 /// }
 /// ```
+///
+/// Define a simple shim progress store for example usage.
+struct ExampleShimProgressStore {
+    watermarks: HashMap<String, CheckpointSequenceNumber>,
+}
+
+impl ExampleShimProgressStore {
+    fn new() -> Self {
+        Self {
+            watermarks: HashMap::new(),
+        }
+    }
+}
+
+#[async_trait]
+impl ProgressStore for ExampleShimProgressStore {
+    type Error = IngestionError;
+
+    async fn load(&mut self, task_name: String) -> Result<CheckpointSequenceNumber, Self::Error> {
+        Ok(self.watermarks.get(&task_name).copied().unwrap_or_default())
+    }
+
+    async fn save(
+        &mut self,
+        task_name: String,
+        watermark: CheckpointSequenceNumber,
+    ) -> Result<(), Self::Error> {
+        self.watermarks.insert(task_name, watermark);
+        Ok(())
+    }
+}
+
 pub async fn setup_single_workflow<W: Worker + 'static>(
     worker: W,
     remote_store_url: String,
@@ -331,23 +376,35 @@ pub async fn setup_single_workflow<W: Worker + 'static>(
     CancellationToken,
 )> {
     let metrics = DataIngestionMetrics::new(&Registry::new());
-    let progress_store = ShimProgressStore(initial_checkpoint_number);
+    let mut progress_store = ExampleShimProgressStore::new();
+    // Initialize the progress store with the initial checkpoint number for the
+    // default task.
+    progress_store
+        .save("test_worker".to_string(), initial_checkpoint_number)
+        .await?;
     let token = CancellationToken::new();
-    let mut executor = IndexerExecutor::new(progress_store, 1, metrics, token.child_token());
+    let mut executor = IndexerExecutor::new(progress_store, 1, metrics, token.clone());
     let worker_pool = WorkerPool::new(
         worker,
-        "workflow".to_string(),
+        "test_worker".to_string(),
         concurrency,
         Default::default(),
     );
     executor.register(worker_pool).await?;
+    let options = reader_options.unwrap_or_default();
+
     Ok((
-        executor.run(
-            tempfile::tempdir()?.into_path(),
-            Some(remote_store_url),
-            vec![],
-            reader_options.unwrap_or_default(),
-        ),
+        Box::pin(async move {
+            executor
+                .run(
+                    PathBuf::from("./"),
+                    initial_checkpoint_number,
+                    Some(remote_store_url),
+                    vec![],
+                    options,
+                )
+                .await
+        }),
         token,
     ))
 }

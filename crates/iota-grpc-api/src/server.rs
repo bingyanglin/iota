@@ -3,6 +3,7 @@
 // ... import other service implementations ...
 use std::{net::SocketAddr, sync::Arc, time::Instant};
 
+use iota_types::messages_checkpoint::VerifiedCheckpoint;
 // IOTA-specific imports
 use iota_types::storage::RestStateReader; // Import the actual RestStateReader
 use tokio::sync::broadcast;
@@ -43,6 +44,7 @@ pub type StateReader = Arc<dyn RestStateReader + Send + Sync + 'static>; // Use 
 pub struct GrpcServer {
     addr: SocketAddr,
     checkpoint_service: CheckpointServiceImpl,
+    checkpoint_event_sender: broadcast::Sender<Arc<VerifiedCheckpoint>>,
     #[allow(dead_code)] // app_start_time might not be used directly by GrpcServer itself yet
     app_start_time: Arc<Instant>,
 }
@@ -51,12 +53,21 @@ impl GrpcServer {
     pub fn new(addr: SocketAddr, state_reader: StateReader) -> Self {
         let app_start_time = Arc::new(Instant::now());
 
-        let checkpoint_service = CheckpointServiceImpl::new(state_reader.clone());
+        // Create the broadcast channel for checkpoint events
+        let (checkpoint_event_tx, _rx) = broadcast::channel::<Arc<VerifiedCheckpoint>>(32_usize);
+
+        let checkpoint_service =
+            CheckpointServiceImpl::new(state_reader.clone(), checkpoint_event_tx.clone());
         Self {
             addr,
             checkpoint_service,
+            checkpoint_event_sender: checkpoint_event_tx,
             app_start_time,
         }
+    }
+
+    pub fn checkpoint_event_sender(&self) -> broadcast::Sender<Arc<VerifiedCheckpoint>> {
+        self.checkpoint_event_sender.clone()
     }
 
     pub async fn start(

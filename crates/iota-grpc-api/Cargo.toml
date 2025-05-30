@@ -7,9 +7,9 @@ publish = false
 [dependencies]
 tonic.workspace = true
 prost.workspace = true
-tokio.workspace = true
+tokio = { workspace = true, features = ["full"] }
 futures.workspace = true
-serde.workspace = true
+serde = { workspace = true, features = ["derive"] }
 config = "0.13"
 async-trait.workspace = true
 tower.workspace = true
@@ -18,11 +18,15 @@ thiserror.workspace = true
 bcs.workspace = true
 anyhow.workspace = true
 roaring.workspace = true
+tracing = { workspace = true }
 
 iota-types.workspace = true
 iota-sdk2.workspace = true
 move-core-types.workspace = true
 iota-protocol-config.workspace = true
+serde_json = { workspace = true }
+shared-crypto = { workspace = true }
+test-strategy = "0.3"
 
 [build-dependencies]
 tonic-build.workspace = true
@@ -34,3 +38,4 @@ iota-protocol-config.workspace = true
 fastcrypto.workspace = true
 shared-crypto.workspace = true
 rand.workspace = true
+parking_lot.workspace = true

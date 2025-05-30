@@ -37,77 +37,68 @@ use tokio::{runtime::Runtime, task::JoinHandle};
 
 const POSTGRES_URL: &str = "postgres://postgres:postgrespw@localhost:5432";
 const DEFAULT_DB: &str = "iota_indexer";
-const DEFAULT_INDEXER_IP: &str = "127.0.0.1";
-const DEFAULT_INDEXER_PORT: u16 = 9005;
-const DEFAULT_SERVER_PORT: u16 = 3000;
-pub const FIXTURES_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/data");
+const _DEFAULT_INDEXER_IP: &str = "127.0.0.1";
+const _DEFAULT_INDEXER_PORT: u16 = 9005;
+const _DEFAULT_SERVER_PORT: u16 = 3000;
+pub const _FIXTURES_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/data");
 
-static GLOBAL_API_TEST_SETUP: OnceLock<ApiTestSetup> = OnceLock::new();
+static _GLOBAL_API_TEST_SETUP: OnceLock<_ApiTestSetup> = OnceLock::new();
 
-pub struct ApiTestSetup {
+pub struct _ApiTestSetup {
     pub runtime: Runtime,
     pub cluster: TestCluster,
     pub store: PgIndexerStore,
     /// Indexer RPC Client
-    pub client: HttpClient,
+    pub indexer_rpc_client: HttpClient,
 }
 
-impl ApiTestSetup {
-    pub fn get_or_init() -> &'static ApiTestSetup {
-        GLOBAL_API_TEST_SETUP.get_or_init(|| {
+impl _ApiTestSetup {
+    pub fn _get_or_init() -> &'static _ApiTestSetup {
+        _GLOBAL_API_TEST_SETUP.get_or_init(|| {
             let runtime = tokio::runtime::Runtime::new().unwrap();
-
-            let (cluster, store, client) =
-                runtime.block_on(start_test_cluster_with_read_write_indexer(
-                    Some("shared_test_indexer_db"),
-                    None,
-                    None,
-                ));
-
-            Self {
+            let (cluster, store, indexer_rpc_client) = runtime.block_on(
+                _start_test_cluster_with_read_write_indexer(None, None, Some(20)),
+            );
+            _ApiTestSetup {
                 runtime,
                 cluster,
                 store,
-                client,
+                indexer_rpc_client,
             }
         })
     }
 }
 
-pub struct SimulacrumTestSetup {
+pub struct _SimulacrumTestSetup {
     pub runtime: Runtime,
     pub sim: Arc<Simulacrum>,
     pub store: PgIndexerStore,
     /// Indexer RPC Client
-    pub client: HttpClient,
+    pub indexer_rpc_client: HttpClient,
 }
 
-impl SimulacrumTestSetup {
-    pub fn get_or_init<'a>(
+impl _SimulacrumTestSetup {
+    pub fn _get_or_init<'a>(
         unique_env_name: &str,
         env_initializer: impl Fn(PathBuf) -> Simulacrum,
-        initialized_env_container: &'a OnceLock<SimulacrumTestSetup>,
-    ) -> &'a SimulacrumTestSetup {
+        initialized_env_container: &'a OnceLock<_SimulacrumTestSetup>,
+    ) -> &'a _SimulacrumTestSetup {
         initialized_env_container.get_or_init(|| {
             let runtime = tokio::runtime::Runtime::new().unwrap();
             let data_ingestion_path = tempdir().unwrap().into_path();
-
-            let sim = env_initializer(data_ingestion_path.clone());
-            let sim = Arc::new(sim);
-
-            let db_name = format!("simulacrum_env_db_{}", unique_env_name);
-            let (_, store, _, client) =
-                runtime.block_on(start_simulacrum_rest_api_with_read_write_indexer(
+            let sim = Arc::new(env_initializer(data_ingestion_path.clone()));
+            let (_server_handle, store, _pg_handle, indexer_rpc_client) =
+                runtime.block_on(_start_simulacrum_rest_api_with_read_write_indexer(
                     sim.clone(),
                     data_ingestion_path,
-                    Some(&db_name),
+                    Some(unique_env_name),
                 ));
 
-            SimulacrumTestSetup {
+            _SimulacrumTestSetup {
                 runtime,
                 sim,
                 store,
-                client,
+                indexer_rpc_client,
             }
         })
     }
@@ -115,7 +106,7 @@ impl SimulacrumTestSetup {
 
 /// Start a [`TestCluster`][`test_cluster::TestCluster`] with a `Read` &
 /// `Write` indexer. Set `epochs_to_keep` (> 0) to enable indexer pruning.
-pub async fn start_test_cluster_with_read_write_indexer(
+pub async fn _start_test_cluster_with_read_write_indexer(
     database_name: Option<&str>,
     builder_modifier: Option<Box<dyn FnOnce(TestClusterBuilder) -> TestClusterBuilder>>,
     epochs_to_keep: Option<u64>,
@@ -136,17 +127,17 @@ pub async fn start_test_cluster_with_read_write_indexer(
         true,
         None,
         cluster.rpc_url().to_string(),
-        IndexerTypeConfig::writer_mode(None, epochs_to_keep, false, None),
+        IndexerTypeConfig::writer_mode(None, epochs_to_keep, false, None, None),
         None,
     )
     .await;
 
     // start indexer in read mode
-    let indexer_port = start_indexer_reader(cluster.rpc_url().to_owned(), temp, database_name);
+    let indexer_port = _start_indexer_reader(cluster.rpc_url().to_owned(), temp, database_name);
 
     // create an RPC client by using the indexer url
     let rpc_client = HttpClientBuilder::default()
-        .build(format!("http://{DEFAULT_INDEXER_IP}:{indexer_port}"))
+        .build(format!("http://{_DEFAULT_INDEXER_IP}:{indexer_port}"))
         .unwrap();
 
     (cluster, pg_store, rpc_client)
@@ -162,7 +153,7 @@ pub fn get_indexer_db_url(database_name: Option<&str>) -> String {
 /// Wait for the indexer to catch up to the given checkpoint sequence number
 ///
 /// Indexer starts storing data after checkpoint 0
-pub async fn indexer_wait_for_checkpoint(
+pub async fn _indexer_wait_for_checkpoint(
     pg_store: &PgIndexerStore,
     checkpoint_sequence_number: u64,
 ) {
@@ -183,7 +174,7 @@ pub async fn indexer_wait_for_checkpoint(
 
 /// Wait for the indexer to catch up to the latest node checkpoint sequence
 /// number. Indexer starts storing data after checkpoint 0
-pub async fn indexer_wait_for_latest_checkpoint(pg_store: &PgIndexerStore, cluster: &TestCluster) {
+pub async fn _indexer_wait_for_latest_checkpoint(pg_store: &PgIndexerStore, cluster: &TestCluster) {
     let latest_checkpoint = cluster
         .iota_client()
         .read_api()
@@ -191,11 +182,11 @@ pub async fn indexer_wait_for_latest_checkpoint(pg_store: &PgIndexerStore, clust
         .await
         .unwrap();
 
-    indexer_wait_for_checkpoint(pg_store, latest_checkpoint).await;
+    _indexer_wait_for_checkpoint(pg_store, latest_checkpoint).await;
 }
 
 /// Wait for the indexer to catch up to the given object sequence number
-pub async fn indexer_wait_for_object(
+pub async fn _indexer_wait_for_object(
     client: &HttpClient,
     object_id: ObjectID,
     sequence_number: SequenceNumber,
@@ -222,7 +213,7 @@ pub async fn indexer_wait_for_object(
 }
 
 /// Wait for the indexer to prune the given checkpoint number
-pub async fn indexer_wait_for_checkpoint_pruned(
+pub async fn _indexer_wait_for_checkpoint_pruned(
     pg_store: &PgIndexerStore,
     checkpoint_sequence_number: u64,
 ) {
@@ -244,7 +235,7 @@ pub async fn indexer_wait_for_checkpoint_pruned(
     .expect("Timeout waiting for indexer to prune checkpoint");
 }
 
-pub async fn indexer_wait_for_transaction(
+pub async fn _indexer_wait_for_transaction(
     tx_digest: TransactionDigest,
     pg_store: &PgIndexerStore,
     indexer_client: &HttpClient,
@@ -256,7 +247,7 @@ pub async fn indexer_wait_for_transaction(
                 .await
             {
                 if let Some(checkpoint) = tx.checkpoint {
-                    indexer_wait_for_checkpoint(pg_store, checkpoint).await;
+                    _indexer_wait_for_checkpoint(pg_store, checkpoint).await;
                     break;
                 }
             }
@@ -267,7 +258,7 @@ pub async fn indexer_wait_for_transaction(
     .expect("Timeout waiting for indexer to catchup to given transaction");
 }
 
-pub async fn execute_tx_and_wait_for_indexer(
+pub async fn _execute_tx_and_wait_for_indexer(
     indexer_client: &HttpClient,
     cluster: &TestCluster,
     store: &PgIndexerStore,
@@ -276,23 +267,23 @@ pub async fn execute_tx_and_wait_for_indexer(
 ) {
     let txn = to_sender_signed_transaction(tx_bytes.to_data().unwrap(), keypair);
     let res = cluster.wallet.execute_transaction_must_succeed(txn).await;
-    indexer_wait_for_transaction(res.digest, store, indexer_client).await;
+    _indexer_wait_for_transaction(res.digest, store, indexer_client).await;
 }
 
 /// Start an Indexer instance in `Read` mode
-fn start_indexer_reader(
+fn _start_indexer_reader(
     fullnode_rpc_url: impl Into<String>,
     data_ingestion_path: PathBuf,
     database_name: Option<&str>,
 ) -> u16 {
     let db_url = get_indexer_db_url(database_name);
-    let port = get_available_port(DEFAULT_INDEXER_IP);
+    let port = get_available_port(_DEFAULT_INDEXER_IP);
     let config = IndexerConfig {
         db_url: Some(db_url.clone().into()),
         rpc_client_url: fullnode_rpc_url.into(),
         reset_db: true,
         rpc_server_worker: true,
-        rpc_server_url: DEFAULT_INDEXER_IP.to_owned(),
+        rpc_server_url: _DEFAULT_INDEXER_IP.to_owned(),
         rpc_server_port: port,
         data_ingestion_path: Some(data_ingestion_path),
         ..Default::default()
@@ -307,7 +298,7 @@ fn start_indexer_reader(
 
 /// Check if provided error message does match with
 /// the [`jsonrpsee::core::ClientError::Call`] Error variant
-pub fn rpc_call_error_msg_matches<T>(
+pub fn _rpc_call_error_msg_matches<T>(
     result: Result<T, jsonrpsee::core::ClientError>,
     raw_msg: &str,
 ) -> bool {
@@ -323,7 +314,7 @@ pub fn rpc_call_error_msg_matches<T>(
 
 /// Set up a test indexer fetching from a REST endpoint served by the given
 /// Simulacrum.
-pub async fn start_simulacrum_rest_api_with_write_indexer(
+pub async fn _start_simulacrum_rest_api_with_write_indexer(
     sim: Arc<Simulacrum>,
     data_ingestion_path: PathBuf,
     server_url: Option<SocketAddr>,
@@ -340,7 +331,7 @@ pub async fn start_simulacrum_rest_api_with_write_indexer(
             .start_service(server_url)
             .await;
     });
-    // Starts indexer
+
     let (pg_store, pg_handle) = start_test_indexer(
         get_indexer_db_url(database_name),
         true,
@@ -354,6 +345,7 @@ pub async fn start_simulacrum_rest_api_with_write_indexer(
             None,
             false,
             None,
+            None,
         ),
         Some(data_ingestion_path),
     )
@@ -361,7 +353,7 @@ pub async fn start_simulacrum_rest_api_with_write_indexer(
     (server_handle, pg_store, pg_handle)
 }
 
-pub async fn start_simulacrum_rest_api_with_read_write_indexer(
+pub async fn _start_simulacrum_rest_api_with_read_write_indexer(
     sim: Arc<Simulacrum>,
     data_ingestion_path: PathBuf,
     database_name: Option<&str>,
@@ -372,7 +364,7 @@ pub async fn start_simulacrum_rest_api_with_read_write_indexer(
     HttpClient,
 ) {
     let simulacrum_server_url = new_local_tcp_socket_for_testing();
-    let (server_handle, pg_store, pg_handle) = start_simulacrum_rest_api_with_write_indexer(
+    let (server_handle, pg_store, pg_handle) = _start_simulacrum_rest_api_with_write_indexer(
         sim,
         data_ingestion_path.clone(),
         Some(simulacrum_server_url),
@@ -382,7 +374,7 @@ pub async fn start_simulacrum_rest_api_with_read_write_indexer(
     .await;
 
     // start indexer in read mode
-    let indexer_port = start_indexer_reader(
+    let indexer_port = _start_indexer_reader(
         format!("http://{}", simulacrum_server_url),
         data_ingestion_path,
         database_name,
@@ -390,7 +382,7 @@ pub async fn start_simulacrum_rest_api_with_read_write_indexer(
 
     // create an RPC client by using the indexer url
     let rpc_client = HttpClientBuilder::default()
-        .build(format!("http://{DEFAULT_INDEXER_IP}:{indexer_port}"))
+        .build(format!("http://{_DEFAULT_INDEXER_IP}:{indexer_port}"))
         .unwrap();
 
     (server_handle, pg_store, pg_handle, rpc_client)
@@ -398,7 +390,7 @@ pub async fn start_simulacrum_rest_api_with_read_write_indexer(
 
 /// Wait for the indexer to catch up to the given checkpoint sequence number for
 /// objects snapshot.
-pub async fn wait_for_objects_snapshot(
+pub async fn _wait_for_objects_snapshot(
     pg_store: &PgIndexerStore,
     checkpoint_sequence_number: u64,
 ) -> Result<(), IndexerError> {

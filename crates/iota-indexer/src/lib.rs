@@ -95,6 +95,11 @@ pub struct IndexerConfig {
     /// fresh or skipping ahead.
     #[arg(long)]
     pub start_ingestion_from_checkpoint_seq_num: Option<u64>,
+    /// Optional. The address of the gRPC server for checkpoint streaming.
+    /// If not provided, and `use_grpc_streaming` is true, it might default
+    /// or lead to an error if not derivable from `rpc_client_url`.
+    #[arg(long)]
+    pub grpc_address: Option<String>,
     #[command(flatten)]
     pub iota_names_options: IotaNamesOptions,
 }
@@ -171,6 +176,7 @@ impl Default for IndexerConfig {
             analytical_worker: false,
             use_grpc_streaming: false,
             start_ingestion_from_checkpoint_seq_num: None,
+            grpc_address: None,
             iota_names_options: IotaNamesOptions::default(),
         }
     }

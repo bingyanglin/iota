@@ -1,9 +1,9 @@
 use std::str::FromStr; // Added for CheckpointDigest::from_str
 use std::sync::Arc; // For Arc<VerifiedCheckpoint>
-use std::time::Duration; // For tokio::time::interval
 
 use anyhow; // Ensure anyhow is in scope
 use iota_types::storage::error::Error as StorageError; // Direct import with alias
+use iota_types::storage::{ReadStore, RestStateReader}; // Added RestStateReader
 use iota_types::{
     digests::CheckpointDigest,                                     // Added
     full_checkpoint_content::CheckpointData as CoreCheckpointData, // Alias to avoid conflict
@@ -12,6 +12,7 @@ use iota_types::{
 use tokio::sync::{broadcast, mpsc};
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::{Request, Response, Status};
+use tracing::error; // Added for logging macros, removed info and warn
 
 use crate::conversions::checkpoints::{
     convert_full_checkpoint_data_to_gprc, convert_verified_checkpoint_to_gprc_summary,
@@ -53,94 +54,18 @@ fn parse_checkpoint_id_str(id_str: &str) -> Result<CheckpointIdentifier, Status>
 pub struct CheckpointServiceImpl {
     state_reader: StateReader,
     checkpoint_event_sender: broadcast::Sender<Arc<VerifiedCheckpoint>>,
-    // Keep a receiver to prevent the channel from closing immediately if no one subscribes right
-    // away. Or ensure the poller task keeps a receiver. For simplicity, the poller will keep
-    // one.
 }
 
 impl CheckpointServiceImpl {
-    pub fn new(state_reader: StateReader) -> Self {
-        let (tx, _rx) = broadcast::channel::<Arc<VerifiedCheckpoint>>(32_usize); // Buffer size 32, can be tuned
-
-        let poller_state_reader = state_reader.clone();
-        let poller_tx = tx.clone();
-
-        tokio::spawn(async move {
-            let mut last_known_seq = match poller_state_reader
-                .get_latest_checkpoint_sequence_number()
-            {
-                Ok(seq) => seq,
-                Err(e) => {
-                    eprintln!(
-                        "[CheckpointPoller] Failed to get initial latest sequence number: {e:?}. Starting from 0."
-                    );
-                    0
-                }
-            };
-            println!(
-                "[CheckpointPoller] Initialized. Last known sequence number: {last_known_seq}"
-            );
-
-            let mut interval = tokio::time::interval(Duration::from_secs(1)); // Polling interval
-
-            // Keep a receiver to ensure the channel stays open as long as the poller is
-            // running.
-            let _poller_self_receiver = poller_tx.subscribe();
-
-            loop {
-                interval.tick().await;
-                match poller_state_reader.get_latest_checkpoint_sequence_number() {
-                    Ok(current_latest_seq) => {
-                        if current_latest_seq > last_known_seq {
-                            println!(
-                                "[CheckpointPoller] New checkpoints detected. From {} up to {}",
-                                last_known_seq + 1,
-                                current_latest_seq
-                            );
-                            for seq_to_fetch in (last_known_seq + 1)..=current_latest_seq {
-                                match poller_state_reader
-                                    .get_checkpoint_by_sequence_number(seq_to_fetch)
-                                {
-                                    Ok(Some(verified_checkpoint)) => {
-                                        // println!("[CheckpointPoller] Publishing checkpoint {}",
-                                        // seq_to_fetch);
-                                        if poller_tx.send(Arc::new(verified_checkpoint)).is_err() {
-                                            // This happens if all receivers are dropped.
-                                            // The poller_self_receiver should prevent this unless
-                                            // it's also dropped somehow
-                                            // or the channel is explicitly closed.
-                                            println!(
-                                                "[CheckpointPoller] No active subscribers to send checkpoint {seq_to_fetch}. Polling continues."
-                                            );
-                                        }
-                                    }
-                                    Ok(None) => {
-                                        eprintln!(
-                                            "[CheckpointPoller] Checkpoint {seq_to_fetch} reported as latest but not found. Possible inconsistency."
-                                        );
-                                    }
-                                    Err(e) => {
-                                        eprintln!(
-                                            "[CheckpointPoller] Error fetching checkpoint {seq_to_fetch} for broadcast: {e:?}"
-                                        );
-                                    }
-                                }
-                            }
-                            last_known_seq = current_latest_seq;
-                        }
-                    }
-                    Err(e) => {
-                        eprintln!(
-                            "[CheckpointPoller] Error polling latest checkpoint sequence number: {e:?}"
-                        );
-                    }
-                }
-            }
-        });
-
+    pub fn new(
+        state_reader: StateReader,
+        checkpoint_event_sender: broadcast::Sender<Arc<VerifiedCheckpoint>>,
+    ) -> Self {
+        // The polling loop is removed.
+        // The checkpoint_event_sender is now passed in directly.
         Self {
             state_reader,
-            checkpoint_event_sender: tx,
+            checkpoint_event_sender,
         }
     }
 }
@@ -417,138 +342,151 @@ impl CheckpointGprcService for CheckpointServiceImpl {
         &self,
         request: Request<SubscribeNewCheckpointsRequest>,
     ) -> Result<Response<Self::SubscribeNewCheckpointsStream>, Status> {
-        let req = request.into_inner();
+        let req_inner = request.into_inner();
+        let request_start_seq_str = req_inner.start_from_checkpoint_sequence_number;
+        let request_include_full_data = req_inner.include_full_data;
+
+        let start_from_checkpoint_sequence_number = request_start_seq_str
+            .as_deref()
+            .unwrap_or("0") // Default to 0 if not provided
+            .parse::<u64>()
+            .unwrap_or(0); // Default to 0 on parse error
+
         println!(
-            "[gRPC CheckpointService] Received SubscribeNewCheckpoints request: {:?}",
-            req
+            "[gRPC CheckpointService] Client subscribed for new checkpoints starting from: {}, include_full_data: {}",
+            start_from_checkpoint_sequence_number,
+            request_include_full_data
         );
 
-        let include_full_data = req.include_full_data;
-        let requested_start_seq_opt = req
-            .start_from_checkpoint_sequence_number
-            .as_deref()
-            .and_then(|s| s.parse::<u64>().ok());
+        let mut rx = self.checkpoint_event_sender.subscribe();
+        let (tx, client_rx) = mpsc::channel(32); // Buffer for the client stream
 
-        let mut broadcast_rx = self.checkpoint_event_sender.subscribe();
-        let (tx_to_client, rx_from_task) = mpsc::channel(16); // Channel to client stream
-
-        let state_reader_clone_for_full_data = self.state_reader.clone();
+        let state_reader_clone = self.state_reader.clone(); // Clone for the spawned task
 
         tokio::spawn(async move {
             loop {
-                match broadcast_rx.recv().await {
+                match rx.recv().await {
                     Ok(verified_checkpoint_arc) => {
-                        let checkpoint_seq_num_ref = verified_checkpoint_arc.sequence_number();
+                        let checkpoint_seq_num = *verified_checkpoint_arc.sequence_number();
+                        if checkpoint_seq_num >= start_from_checkpoint_sequence_number {
+                            println!(
+                                "[gRPC CheckpointService] Processing checkpoint {} for client (requested start: {}, full_data: {}).",
+                                checkpoint_seq_num,
+                                start_from_checkpoint_sequence_number,
+                                request_include_full_data
+                            );
 
-                        // Filter based on start_from_sequence_number
-                        if let Some(start_from) = requested_start_seq_opt {
-                            if *checkpoint_seq_num_ref < start_from {
-                                // println!("[gRPC Subscribe Task] Skipping checkpoint {} as it is <
-                                // start_from_sequence_number {}.", *checkpoint_seq_num_ref,
-                                // start_from);
-                                continue;
-                            }
-                        }
-                        // println!("[gRPC Subscribe Task] Processing checkpoint {} for client.",
-                        // *checkpoint_seq_num_ref);
-
-                        let checkpoint_result: Result<StreamedCheckpoint, Status> =
-                            if include_full_data {
-                                match state_reader_clone_for_full_data
-                                    .get_checkpoint_contents_by_sequence_number(
-                                        *checkpoint_seq_num_ref,
-                                    ) {
-                                    Ok(Some(checkpoint_contents)) => {
-                                        let core_verified_checkpoint =
-                                            (*verified_checkpoint_arc).clone();
-                                        match state_reader_clone_for_full_data.get_checkpoint_data(core_verified_checkpoint, checkpoint_contents) {
-                                        Ok(core_data) => convert_full_checkpoint_data_to_gprc(&core_data)
-                                            .map(|gprc_data| StreamedCheckpoint {
-                                                checkpoint_type: Some(crate::proto::iota::gprc::v1::streamed_checkpoint::CheckpointType::FullData(gprc_data)),
-                                            })
-                                            .map_err(|e| {
-                                                eprintln!("[gRPC Subscribe Task] Convert full data error {}: {:?}. Skipping for client.", *checkpoint_seq_num_ref, e);
-                                                Status::internal(format!("Skipping {} due to conversion error", *checkpoint_seq_num_ref))
-                                            }),
-                                        Err(e) => {
-                                            eprintln!("[gRPC Subscribe Task] Get CheckpointData error {}: {:?}. Skipping for client.", *checkpoint_seq_num_ref, e);
-                                            Err(Status::internal(format!("Skipping {} due to data construction error", *checkpoint_seq_num_ref)))
-                                        }
-                                    }
-                                    }
-                                    Ok(None) => {
-                                        eprintln!(
-                                            "[gRPC Subscribe Task] Contents for {} not found (needed for full_data). Skipping for client.",
-                                            *checkpoint_seq_num_ref
+                            let checkpoint_to_send_result: Result<StreamedCheckpoint, Status> = if request_include_full_data {
+                                match get_full_checkpoint_data_for_stream(
+                                    verified_checkpoint_arc.clone(), 
+                                    &*state_reader_clone // Pass the cloned StateReader
+                                ).await {
+                                    Ok(full_data_gprc) => Ok(StreamedCheckpoint {
+                                        checkpoint_type: Some(crate::proto::iota::gprc::v1::streamed_checkpoint::CheckpointType::FullData(full_data_gprc)),
+                                    }),
+                                    Err(e_status) => {
+                                        // get_full_checkpoint_data_for_stream already returns a Status
+                                        error!(
+                                            "[gRPC CheckpointService] Error fetching full checkpoint data for {}: {}. Forwarding status to client.", 
+                                            checkpoint_seq_num, e_status
                                         );
-                                        Err(Status::internal(format!(
-                                            "Skipping {} due to missing contents for full data",
-                                            *checkpoint_seq_num_ref
-                                        )))
-                                    }
-                                    Err(e) => {
-                                        eprintln!(
-                                            "[gRPC Subscribe Task] Storage error for contents {}: {:?}. Skipping for client.",
-                                            *checkpoint_seq_num_ref, e
-                                        );
-                                        Err(Status::internal(format!(
-                                            "Skipping {} due to storage error for contents",
-                                            *checkpoint_seq_num_ref
-                                        )))
+                                        Err(e_status) 
                                     }
                                 }
                             } else {
-                                convert_verified_checkpoint_to_gprc_summary(&verified_checkpoint_arc)
-                                .map(|summary_gprc| StreamedCheckpoint {
-                                    checkpoint_type: Some(crate::proto::iota::gprc::v1::streamed_checkpoint::CheckpointType::Summary(summary_gprc)),
-                                })
-                                .map_err(|e| {
-                                     eprintln!("[gRPC Subscribe Task] Convert summary error {}: {:?}. Skipping for client.", *checkpoint_seq_num_ref, e);
-                                     Status::internal(format!("Skipping {} due to conversion error", *checkpoint_seq_num_ref))
-                                })
+                                match convert_verified_checkpoint_to_gprc_summary(&*verified_checkpoint_arc) {
+                                    Ok(summary_gprc) => Ok(StreamedCheckpoint {
+                                        checkpoint_type: Some(crate::proto::iota::gprc::v1::streamed_checkpoint::CheckpointType::Summary(summary_gprc)),
+                                    }),
+                                    Err(e) => {
+                                        error!(
+                                            "[gRPC CheckpointService] Error converting checkpoint summary for {}: {}. Sending internal error.", 
+                                            checkpoint_seq_num, e
+                                        );
+                                        Err(Status::internal(format!(
+                                            "Error converting checkpoint summary for {}: {}",
+                                            checkpoint_seq_num, e
+                                        )))
+                                    }
+                                }
                             };
 
-                        match checkpoint_result {
-                            Ok(streamed_item) => {
-                                if tx_to_client.send(Ok(streamed_item)).await.is_err() {
-                                    println!("[gRPC Subscribe Task] Client disconnected. Halting.");
-                                    return;
-                                }
-                            }
-                            Err(_status) => {
-                                // Error already logged by the conversion/fetch
-                                // logic if it was a skip.
-                                // If client disconnected, loop will break on
-                                // next send attempt or here.
-                                // If it was a genuine error that should be
-                                // propagated, it can be sent:
-                                // if tx_to_client.send(Err(status)).await.
-                                // is_err() { /*...*/ }
-                                // Current design: log and skip problematic
-                                // items, client sees no error for these.
+                            if tx.send(checkpoint_to_send_result).await.is_err() {
+                                println!(
+                                    "[gRPC CheckpointService] Client for checkpoint stream (seq start: {}) disconnected.",
+                                    start_from_checkpoint_sequence_number
+                                );
+                                break; // Break from the loop if client is gone
                             }
                         }
                     }
                     Err(broadcast::error::RecvError::Lagged(n)) => {
                         eprintln!(
-                            "[gRPC Subscribe Task] Lagged by {n} messages. Some checkpoints were missed."
+                            "[gRPC CheckpointService] Checkpoint broadcast receiver lagged by {n} messages. Sending DataLoss to client."
                         );
-                        // Potentially send an error to the client or try to
-                        // resync? For now, just log.
-                        // This client might need to re-subscribe if strict
-                        // ordering and no-loss is critical.
+                        if tx.send(Err(Status::data_loss(format!(
+                            "Checkpoint stream lagged by {} messages. Some checkpoints were missed.",
+                            n
+                        )))).await.is_err() {
+                            println!(
+                                "[gRPC CheckpointService] Client for checkpoint stream (seq start: {}) disconnected while sending Lagged error.",
+                                start_from_checkpoint_sequence_number
+                            );
+                        }
+                        break; // Lagged, terminate this specific client stream
                     }
                     Err(broadcast::error::RecvError::Closed) => {
                         println!(
-                            "[gRPC Subscribe Task] Broadcast channel closed. Terminating client subscription."
+                            "[gRPC CheckpointService] Checkpoint broadcast channel closed. Terminating client stream (seq start: {}).",
+                            start_from_checkpoint_sequence_number
                         );
-                        break; // Broadcaster (poller) stopped or channel closed.
+                        break; // Channel closed, terminate client stream
                     }
                 }
             }
-            println!("[gRPC Subscribe Task] Terminated for client.");
         });
 
-        Ok(Response::new(ReceiverStream::new(rx_from_task)))
+        Ok(Response::new(ReceiverStream::new(client_rx)))
     }
+}
+
+// Helper to get full data, converting errors to Status
+// This helper function is now defined outside the CheckpointGprcService impl block
+// and does not have `&self` as it's called from a static context in the tokio::spawn task.
+async fn get_full_checkpoint_data_for_stream(
+    verified_checkpoint: Arc<VerifiedCheckpoint>,
+    state_reader: &dyn RestStateReader, // Changed from ReadStore to RestStateReader
+) -> Result<crate::proto::iota::gprc::v1::CheckpointDataGprc, Status> {
+    let seq_num = *verified_checkpoint.sequence_number();
+    let contents = state_reader
+        .get_checkpoint_contents_by_sequence_number(seq_num)
+        .map_err(|db_err| {
+            Status::internal(format!(
+                "Database error fetching contents for checkpoint {}: {}",
+                seq_num, db_err
+            ))
+        })?
+        .ok_or_else(|| {
+            Status::not_found(format!(
+                "Checkpoint contents for sequence number {} not found",
+                seq_num
+            ))
+        })?;
+
+    let core_checkpoint_data = state_reader
+        .get_checkpoint_data((*verified_checkpoint).clone(), contents)
+        .map_err(|anyhow_err| {
+            Status::internal(format!(
+                "Error constructing CoreCheckpointData for checkpoint {}: {}",
+                seq_num, anyhow_err
+            ))
+        })?;
+
+    convert_full_checkpoint_data_to_gprc(&core_checkpoint_data)
+        .map_err(|conv_err| {
+            Status::internal(format!(
+                "Error converting CoreCheckpointData to gRPC for checkpoint {}: {}",
+                seq_num, conv_err
+            ))
+        })
 }

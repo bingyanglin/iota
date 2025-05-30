@@ -6959,17 +6959,21 @@ dependencies = [
  "iota-rust-sdk",
  "iota-types",
  "move-core-types",
+ "parking_lot 0.12.3",
  "prost",
  "rand 0.8.5",
  "roaring",
  "serde",
+ "serde_json",
  "shared-crypto",
+ "test-strategy",
  "thiserror 1.0.64",
  "tokio",
  "tokio-stream",
  "tonic 0.13.1",
  "tonic-build",
  "tower 0.4.13",
+ "tracing",
 ]
 
 [[package]]
@@ -7038,13 +7042,16 @@ dependencies = [
  "move-binary-format",
  "move-bytecode-utils",
  "move-core-types",
+ "parking_lot 0.12.3",
  "prometheus",
+ "rand 0.8.5",
  "rayon",
  "regex",
  "secrecy",
  "serde",
  "serde_json",
  "serde_with",
+ "shared-crypto",
  "simulacrum",
  "tap",
  "telemetry-subscribers",
@@ -14384,6 +14391,29 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7da8b5736845d9f2fcb837ea5d9e2628564b3b043a70948a3f0b778838c5fb4f"
 
 [[package]]
+name = "structmeta"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "78ad9e09554f0456d67a69c1584c9798ba733a5b50349a6c0d0948710523922d"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "structmeta-derive",
+ "syn 2.0.100",
+]
+
+[[package]]
+name = "structmeta-derive"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a60bcaff7397072dca0017d1db428e30d5002e00b6847703e2e42005c95fbe00"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.100",
+]
+
+[[package]]
 name = "strum"
 version = "0.24.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -14852,6 +14882,18 @@ dependencies = [
  "serde",
  "sha-1",
  "test-fuzz-internal",
+]
+
+[[package]]
+name = "test-strategy"
+version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b8361c808554228ad09bfed70f5c823caf8a3450b6881cc3a38eb57e8c08c1d9"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "structmeta",
+ "syn 2.0.100",
 ]
 
 [[package]]

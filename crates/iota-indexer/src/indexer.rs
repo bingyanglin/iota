@@ -101,11 +101,12 @@ impl Indexer {
             .unwrap_or(CHECKPOINT_PROCESSING_BATCH_DATA_LIMIT.to_string())
             .parse::<usize>()
             .unwrap();
-        let extra_reader_options = ReaderOptions {
+        let fully_configured_reader_options = ReaderOptions {
             batch_size: download_queue_size,
             timeout_secs: ingestion_reader_timeout_secs,
             data_limit,
             use_grpc_streaming: config.use_grpc_streaming,
+            grpc_address: config.grpc_address.clone(),
             ..Default::default()
         };
 
@@ -142,6 +143,11 @@ impl Indexer {
             store.persist_protocol_configs_and_feature_flags(chain_id)?;
         }
 
+        info!(
+            "[Indexer::start_writer_with_config] ShimIndexerProgressStore will be initialized with primary_watermark: {}",
+            primary_watermark
+        );
+
         let mut executor = IndexerExecutor::new(
             ShimIndexerProgressStore::new(vec![
                 ("primary".to_string(), primary_watermark),
@@ -158,28 +164,31 @@ impl Indexer {
             download_queue_size,
             Default::default(),
         );
-
         executor.register(worker_pool).await?;
 
-        let worker_pool = WorkerPool::new(
+        let worker_pool_obj_snapshot = WorkerPool::new(
             object_snapshot_worker,
             "object_snapshot".to_string(),
             download_queue_size,
             Default::default(),
         );
-        executor.register(worker_pool).await?;
+        executor.register(worker_pool_obj_snapshot).await?;
         info!("Starting data ingestion executor...");
+
+        // Start the executor.
         executor
             .run(
                 config
                     .data_ingestion_path
                     .clone()
-                    .unwrap_or(tempfile::tempdir().unwrap().into_path()),
+                    .unwrap_or_else(|| std::path::PathBuf::from("./")), // path
+                primary_watermark, // initial_reader_checkpoint_number
                 config.remote_store_url.clone(),
-                vec![],
-                extra_reader_options,
+                vec![], // remote_store_options, pass empty as these are in ReaderOptions now
+                fully_configured_reader_options,
             )
             .await?;
+
         Ok(())
     }
 

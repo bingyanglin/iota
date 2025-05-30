@@ -45,7 +45,7 @@ pub struct CheckpointReader {
     path: PathBuf,
     remote_store_url: Option<String>,
     remote_store_options: Vec<(String, String)>,
-    current_checkpoint_number: CheckpointSequenceNumber,
+    pub current_checkpoint_number: CheckpointSequenceNumber,
     last_pruned_watermark: CheckpointSequenceNumber,
     checkpoint_sender: mpsc::Sender<Arc<CheckpointData>>,
     processed_receiver: mpsc::Receiver<CheckpointSequenceNumber>,
@@ -80,6 +80,8 @@ pub struct ReaderOptions {
     /// Whether to use gRPC streaming for fetching checkpoints if gRPC is
     /// configured. Default: false (uses unary GetCheckpointFull calls).
     pub use_grpc_streaming: bool,
+    /// The address of the gRPC server, if gRPC is used.
+    pub grpc_address: Option<String>,
 }
 
 impl Default for ReaderOptions {
@@ -90,6 +92,7 @@ impl Default for ReaderOptions {
             batch_size: 10,
             data_limit: 0,
             use_grpc_streaming: false,
+            grpc_address: None,
         }
     }
 }
@@ -134,6 +137,10 @@ impl CheckpointReader {
             if self.exceeds_capacity(checkpoint.checkpoint_summary.sequence_number) {
                 break;
             }
+            info!(
+                "CheckpointReader::local_fetch: Read checkpoint {} from local filesystem.",
+                checkpoint.checkpoint_summary.sequence_number
+            );
             checkpoints.push(checkpoint);
         }
         Ok(checkpoints)
@@ -207,7 +214,13 @@ impl CheckpointReader {
                     .fetch_from_full_node_grpc_streaming(Some(checkpoint_number))
                     .await
                 {
-                    Ok(Some((checkpoint_arc, size))) => Ok((checkpoint_arc, size)),
+                    Ok(Some((checkpoint_arc, size))) => {
+                        info!(
+                            "CheckpointReader::remote_fetch (via remote_fetch_checkpoint_internal): Fetched checkpoint {} from gRPC streaming.",
+                            checkpoint_arc.checkpoint_summary.sequence_number
+                        );
+                        Ok((checkpoint_arc, size))
+                    }
                     Ok(None) => Err(IngestionError::GrpcCheckpointNotFound(format!(
                         "Stream yielded no checkpoint for requested sequence {}",
                         checkpoint_number
@@ -253,76 +266,115 @@ impl CheckpointReader {
         let batch_size = self.options.batch_size;
         let start_checkpoint_from_config = self.current_checkpoint_number;
         let (sender, receiver) = mpsc::channel(batch_size);
-        let url = self.remote_store_url.clone().ok_or_else(|| {
-            IngestionError::Upstream(anyhow::anyhow!("Remote store URL not configured"))
-        })?;
 
         let use_grpc_streaming = self.options.use_grpc_streaming;
+        let grpc_address_override = self.options.grpc_address.clone();
 
-        let mut store_for_task = if let Some((fn_url, remote_url)) = url.split_once('|') {
-            let object_store = create_remote_store_client(
-                remote_url.to_string(),
-                self.remote_store_options.clone(),
-                self.options.timeout_secs,
-            )?;
-            RemoteStore::Hybrid(object_store, RestClient::new(fn_url.to_string()))
-        } else if url.starts_with("grpc://") {
-            if use_grpc_streaming {
-                match CheckpointGprcServiceClient::connect(url.clone()).await {
-                    Ok(grpc_client) => {
-                        info!(
-                            "CheckpointReader: Initializing RemoteStore::GrpcStreaming for URL: {}",
-                            url
-                        );
-                        RemoteStore::GrpcStreaming(GrpcStreamingReader {
-                            grpc_client,
-                            grpc_stream: None, // Stream will be initialized on first fetch
-                            server_address: url.clone(),
-                        })
-                    }
-                    Err(e) => {
-                        error!(
-                            "Failed to connect to gRPC endpoint {} for streaming: {}. Falling back or erroring.",
-                            url, e
-                        );
-                        return Err(IngestionError::Upstream(anyhow::anyhow!(
-                            "Failed to connect to gRPC endpoint {} for streaming: {}",
-                            url,
-                            e
-                        )));
-                    }
+        let mut store_for_task = if use_grpc_streaming && grpc_address_override.is_some() {
+            let grpc_socket_addr_str = grpc_address_override.unwrap();
+            let grpc_uri = format!("http://{}", grpc_socket_addr_str);
+            match CheckpointGprcServiceClient::connect(grpc_uri.clone()).await {
+                Ok(grpc_client) => {
+                    info!(
+                        "CheckpointReader: Initializing RemoteStore::GrpcStreaming for URL: {}",
+                        grpc_uri
+                    );
+                    RemoteStore::GrpcStreaming(GrpcStreamingReader {
+                        grpc_client,
+                        grpc_stream: None, // Stream will be initialized on first fetch
+                        server_address: grpc_socket_addr_str, /* Keep original SocketAddr string for
+                                            * GrpcStreamingReader */
+                    })
                 }
-            } else {
-                match CheckpointGprcServiceClient::connect(url.clone()).await {
-                    Ok(client) => {
-                        info!(
-                            "CheckpointReader: Initializing RemoteStore::Grpc (unary) for URL: {}",
-                            url
-                        );
-                        RemoteStore::Grpc(client)
-                    }
-                    Err(e) => {
-                        error!(
-                            "Failed to connect to gRPC endpoint {} for unary: {}.",
-                            url, e
-                        );
-                        return Err(IngestionError::Upstream(anyhow::anyhow!(
-                            "Failed to connect to gRPC endpoint {} for unary: {}",
-                            url,
-                            e
-                        )));
-                    }
+                Err(e) => {
+                    error!(
+                        "Failed to connect to gRPC endpoint {} for streaming: {}. Falling back or erroring.",
+                        grpc_uri, e
+                    );
+                    return Err(IngestionError::Upstream(anyhow::anyhow!(
+                        "Failed to connect to gRPC endpoint {} for streaming: {}",
+                        grpc_uri,
+                        e
+                    )));
                 }
             }
-        } else if url.ends_with("/api/v1") {
-            RemoteStore::Rest(RestClient::new(url.to_string()))
         } else {
-            let object_store = create_remote_store_client(
-                url.to_string(),
-                self.remote_store_options.clone(),
-                self.options.timeout_secs,
-            )?;
-            RemoteStore::ObjectStore(object_store)
+            // Fallback to existing logic if gRPC streaming is not used or no specific gRPC
+            // address is provided
+            let url = self.remote_store_url.clone().ok_or_else(|| {
+                IngestionError::Upstream(anyhow::anyhow!(
+                    "Remote store URL not configured for non-gRPC streaming fallback"
+                ))
+            })?;
+
+            if let Some((fn_url, remote_url)) = url.split_once('|') {
+                let object_store = create_remote_store_client(
+                    remote_url.to_string(),
+                    self.remote_store_options.clone(),
+                    self.options.timeout_secs,
+                )?;
+                RemoteStore::Hybrid(object_store, RestClient::new(fn_url.to_string()))
+            } else if url.starts_with("grpc://") {
+                // This branch is now less likely if grpc_address_override was handled above,
+                // but kept for robustness or if use_grpc_streaming is false but url is grpc.
+                if use_grpc_streaming {
+                    // Should ideally use grpc_address_override if available
+                    match CheckpointGprcServiceClient::connect(url.clone()).await {
+                        Ok(grpc_client) => {
+                            info!(
+                                "CheckpointReader: Initializing RemoteStore::GrpcStreaming (via fallback URL) for URL: {}",
+                                url
+                            );
+                            RemoteStore::GrpcStreaming(GrpcStreamingReader {
+                                grpc_client,
+                                grpc_stream: None,
+                                server_address: url.clone(),
+                            })
+                        }
+                        Err(e) => {
+                            error!(
+                                "Failed to connect to gRPC endpoint {} (via fallback URL) for streaming: {}.",
+                                url, e
+                            );
+                            return Err(IngestionError::Upstream(anyhow::anyhow!(
+                                "Failed to connect to gRPC endpoint {} (via fallback URL) for streaming: {}",
+                                url,
+                                e
+                            )));
+                        }
+                    }
+                } else {
+                    match CheckpointGprcServiceClient::connect(url.clone()).await {
+                        Ok(client) => {
+                            info!(
+                                "CheckpointReader: Initializing RemoteStore::Grpc (unary) for URL: {}",
+                                url
+                            );
+                            RemoteStore::Grpc(client)
+                        }
+                        Err(e) => {
+                            error!(
+                                "Failed to connect to gRPC endpoint {} for unary: {}.",
+                                url, e
+                            );
+                            return Err(IngestionError::Upstream(anyhow::anyhow!(
+                                "Failed to connect to gRPC endpoint {} for unary: {}",
+                                url,
+                                e
+                            )));
+                        }
+                    }
+                }
+            } else if url.ends_with("/api/v1") {
+                RemoteStore::Rest(RestClient::new(url.to_string()))
+            } else {
+                let object_store = create_remote_store_client(
+                    url.to_string(),
+                    self.remote_store_options.clone(),
+                    self.options.timeout_secs,
+                )?;
+                RemoteStore::ObjectStore(object_store)
+            }
         };
 
         spawn_monitored_task!({
@@ -349,6 +401,18 @@ impl CheckpointReader {
                         )
                         .await;
 
+                        if let Ok((data, size)) = &result {
+                            info!(
+                                "[CheckpointReader::start_remote_fetcher] Successfully fetched CP {}, size {}. Sending to internal channel.",
+                                data.checkpoint_summary.sequence_number, size
+                            );
+                        } else if let Err(e) = &result {
+                            info!(
+                                "[CheckpointReader::start_remote_fetcher] Fetch for CP {} failed: {:?}. Error will be sent to internal channel.",
+                                checkpoint_num_to_fetch, e
+                            );
+                        }
+
                         let result_is_ok = result.is_ok();
                         if sender.send(result).await.is_err() {
                             info!(
@@ -357,6 +421,10 @@ impl CheckpointReader {
                             return;
                         }
                         if result_is_ok {
+                            info!(
+                                "[CheckpointReader::start_remote_fetcher] Successfully sent result for CP {} to internal channel.",
+                                checkpoint_num_to_fetch
+                            );
                             sent_any_success_in_batch = true;
                         }
                     }
@@ -547,6 +615,12 @@ impl CheckpointReader {
     }
 
     pub async fn run(mut self) -> IngestionResult<()> {
+        let initial_cp_for_log = self.current_checkpoint_number;
+        info!(
+            "CheckpointReader::run: Starting main loop. Initial CP for log: {}",
+            initial_cp_for_log
+        );
+        let tick_interval = Duration::from_millis(self.options.tick_interval_ms);
         let (inotify_sender, mut inotify_recv) = mpsc::channel(1);
         std::fs::create_dir_all(self.path.clone()).expect("failed to create a directory");
         let mut watcher = notify::recommended_watcher(move |res| {
@@ -580,7 +654,7 @@ impl CheckpointReader {
                     tracing::info!("CheckpointReader::run: Received GC for CP: {}", gc_checkpoint_number);
                     self.gc_processed_files(gc_checkpoint_number).expect("Failed to clean the directory");
                 }
-                Ok(Some(_)) | Err(_) = timeout(Duration::from_millis(self.options.tick_interval_ms), inotify_recv.recv())  => {
+                Ok(Some(_)) | Err(_) = timeout(tick_interval, inotify_recv.recv())  => {
                     tracing::info!(
                         "CheckpointReader::run: Tick or inotify event. Current CP before sync: {}",
                         self.current_checkpoint_number
@@ -685,7 +759,6 @@ impl RemoteStore {
     // Err(e)
     // }
     // }
-    // }
     // RemoteStore::Grpc(client) => {
     // let target_seq = last_processed_sequence_number.map_or(0, |s| s + 1);
     // tracing::info!(
@@ -760,32 +833,29 @@ impl RemoteStore {
 impl GrpcStreamingReader {
     async fn fetch_from_full_node_grpc_streaming(
         &mut self,
-        current_processed_checkpoint_seq_num: Option<CheckpointSequenceNumber>,
+        requested_checkpoint_seq_num: Option<CheckpointSequenceNumber>,
     ) -> Result<Option<(Arc<CheckpointData>, usize)>, IngestionError> {
-        tracing::info!(
-            "CORE_READER_STREAM: fetch_from_full_node_grpc_streaming called. Current processed CP: {:?}",
-            current_processed_checkpoint_seq_num
+        info!(
+            "GrpcStreamingReader::fetch_from_full_node_grpc_streaming called with requested_checkpoint_seq_num: {:?}",
+            requested_checkpoint_seq_num
         );
+        // If the stream is not initialized, or if it's ended, re-initialize.
+        let stream_needs_reinit = self.grpc_stream.is_none();
 
-        if self.grpc_stream.is_none() {
+        if stream_needs_reinit {
             tracing::info!(
                 "CORE_READER_STREAM: No active stream for {}. Attempting to subscribe.",
                 self.server_address
             );
-            let start_from_checkpoint_sequence_number_str = current_processed_checkpoint_seq_num
-                .map(|val| val + 1)
-                .unwrap_or(0)
-                .to_string();
-            tracing::info!(
-                "CORE_READER_STREAM: Subscribing with start_from_checkpoint_sequence_number: {}",
-                start_from_checkpoint_sequence_number_str
+            let start_from_seq = requested_checkpoint_seq_num.unwrap_or(0);
+            info!(
+                "GrpcStreamingReader: Initializing new stream, requesting from sequence: {}",
+                start_from_seq
             );
-            let request = SubscribeNewCheckpointsRequest {
-                start_from_checkpoint_sequence_number: Some(
-                    start_from_checkpoint_sequence_number_str,
-                ),
+            let request = tonic::Request::new(SubscribeNewCheckpointsRequest {
+                start_from_checkpoint_sequence_number: Some(start_from_seq.to_string()),
                 include_full_data: true,
-            };
+            });
             match self
                 .grpc_client
                 .clone()
