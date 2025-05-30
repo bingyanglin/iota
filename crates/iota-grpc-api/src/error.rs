@@ -37,17 +37,17 @@ impl From<GrpcApiError> for tonic::Status {
             GrpcApiError::NotFound(msg) => tonic::Status::not_found(msg),
             GrpcApiError::InvalidArgument(msg) => tonic::Status::invalid_argument(msg),
             GrpcApiError::ConversionError(msg) => {
-                tonic::Status::internal(format!("Conversion failed: {}", msg))
+                tonic::Status::internal(format!("Conversion failed: {msg}"))
             }
             GrpcApiError::SerializationError(msg) => {
-                tonic::Status::internal(format!("Serialization failed: {}", msg))
+                tonic::Status::internal(format!("Serialization failed: {msg}"))
             }
             GrpcApiError::DeserializationError(msg) => {
-                tonic::Status::internal(format!("Deserialization failed: {}", msg))
+                tonic::Status::internal(format!("Deserialization failed: {msg}"))
             }
             GrpcApiError::SystemError(err) => {
                 // Handle new variant
-                tonic::Status::internal(format!("System error: {}", err))
+                tonic::Status::internal(format!("System error: {err}"))
             }
             GrpcApiError::Internal(msg) => tonic::Status::internal(msg),
         }

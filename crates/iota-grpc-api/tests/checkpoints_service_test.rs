@@ -865,34 +865,4 @@ impl ActualRestStateReader for MockRestStateReader {
     ) -> StorageResult<Option<VerifiedCheckpoint>> {
         unimplemented!("get_epoch_last_checkpoint in mock not implemented")
     }
-
-    fn list_transactions(
-        &self,
-        _cursor: Option<iota_types::digests::TransactionDigest>,
-        _limit: u64,
-        _direction: iota_types::storage::ListDirection,
-    ) -> iota_types::storage::error::Result<
-        Vec<(
-            iota_types::digests::TransactionDigest,
-            Arc<iota_types::transaction::VerifiedTransaction>,
-        )>,
-    > {
-        Ok(Vec::new())
-    }
-
-    async fn execute_transaction_for_gprc(
-        &self,
-        _transaction: SignedTransaction,
-    ) -> std::result::Result<QuorumDriverResponse, QuorumDriverError> {
-        // Mock implementation: return an error or a default response
-        // For now, returning an error similar to other transactional test runner
-        // implementations
-        Err(QuorumDriverError::QuorumDriverInternal(
-            IotaError::UserInput {
-                error: UserInputError::Unsupported(
-                    "execute_transaction_for_gprc is not supported in this mock.".to_string(),
-                ),
-            },
-        ))
-    }
 }

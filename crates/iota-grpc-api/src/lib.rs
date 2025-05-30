@@ -13,7 +13,6 @@ pub mod conversions;
 pub mod error;
 pub mod server;
 pub mod services;
-pub mod utils;
 
 // This module will be populated by tonic_build from your .proto files.
 // The name of the module (e.g., "iota_gprc_v1") should match the package

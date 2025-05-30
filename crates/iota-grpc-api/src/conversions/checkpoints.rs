@@ -8,7 +8,8 @@ use iota_types::{
     message_envelope::{Envelope, Message as CoreMessage},
     messages_checkpoint::{
         CheckpointContents, // CheckpointSequenceNumber,
-        CheckpointSummary, VerifiedCheckpoint,
+        CheckpointSummary,
+        VerifiedCheckpoint,
     },
     signature::GenericSignature,
     transaction::{self, SenderSignedData, TransactionData},
@@ -74,8 +75,8 @@ pub fn convert_full_checkpoint_data_to_gprc(
     let mut gprc_transactions = Vec::new();
     for core_tx in &core_checkpoint_data.transactions {
         let raw_tx_bytes = bcs::to_bytes(core_tx.transaction.transaction_data()).map_err(|e| {
-            eprintln!("BCS serialization failed for transaction data: {:?}", e);
-            GrpcApiError::SerializationError(format!("Failed to serialize transaction data: {}", e))
+            eprintln!("BCS serialization failed for transaction data: {e:?}");
+            GrpcApiError::SerializationError(format!("Failed to serialize transaction data: {e}"))
         })?;
 
         let full_tx_gprc = VerifiedTransactionGprc {
@@ -168,7 +169,7 @@ pub fn convert_checkpoint_data_gprc_to_core(
                 crate::proto::iota::gprc::v1::checkpoint_transaction_gprc::Content::FullTransaction(verified_tx_gprc) => {
                     let core_tx_data: TransactionData =
                         bcs::from_bytes(&verified_tx_gprc.raw_tx).map_err(|e| {
-                            GrpcApiError::DeserializationError(format!("Failed to deserialize transaction data from gRPC: {}", e))
+                            GrpcApiError::DeserializationError(format!("Failed to deserialize transaction data from gRPC: {e}"))
                         })?;
 
                     let sender_signed_data = SenderSignedData::new(core_tx_data, Vec::<GenericSignature>::new());

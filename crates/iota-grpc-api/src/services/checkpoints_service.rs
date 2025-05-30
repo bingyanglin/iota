@@ -44,8 +44,7 @@ fn parse_checkpoint_id_str(id_str: &str) -> Result<CheckpointIdentifier, Status>
         Ok(CheckpointIdentifier::Digest(digest))
     } else {
         Err(Status::invalid_argument(format!(
-            "Invalid checkpoint_id format: '{}'. Expected u64 sequence number or hex digest.",
-            id_str
+            "Invalid checkpoint_id format: '{id_str}'. Expected u64 sequence number or hex digest."
         )))
     }
 }
@@ -73,15 +72,13 @@ impl CheckpointServiceImpl {
                 Ok(seq) => seq,
                 Err(e) => {
                     eprintln!(
-                        "[CheckpointPoller] Failed to get initial latest sequence number: {:?}. Starting from 0.",
-                        e
+                        "[CheckpointPoller] Failed to get initial latest sequence number: {e:?}. Starting from 0."
                     );
                     0
                 }
             };
             println!(
-                "[CheckpointPoller] Initialized. Last known sequence number: {}",
-                last_known_seq
+                "[CheckpointPoller] Initialized. Last known sequence number: {last_known_seq}"
             );
 
             let mut interval = tokio::time::interval(Duration::from_secs(1)); // Polling interval
@@ -113,21 +110,18 @@ impl CheckpointServiceImpl {
                                             // it's also dropped somehow
                                             // or the channel is explicitly closed.
                                             println!(
-                                                "[CheckpointPoller] No active subscribers to send checkpoint {}. Polling continues.",
-                                                seq_to_fetch
+                                                "[CheckpointPoller] No active subscribers to send checkpoint {seq_to_fetch}. Polling continues."
                                             );
                                         }
                                     }
                                     Ok(None) => {
                                         eprintln!(
-                                            "[CheckpointPoller] Checkpoint {} reported as latest but not found. Possible inconsistency.",
-                                            seq_to_fetch
+                                            "[CheckpointPoller] Checkpoint {seq_to_fetch} reported as latest but not found. Possible inconsistency."
                                         );
                                     }
                                     Err(e) => {
                                         eprintln!(
-                                            "[CheckpointPoller] Error fetching checkpoint {} for broadcast: {:?}",
-                                            seq_to_fetch, e
+                                            "[CheckpointPoller] Error fetching checkpoint {seq_to_fetch} for broadcast: {e:?}"
                                         );
                                     }
                                 }
@@ -137,8 +131,7 @@ impl CheckpointServiceImpl {
                     }
                     Err(e) => {
                         eprintln!(
-                            "[CheckpointPoller] Error polling latest checkpoint sequence number: {:?}",
-                            e
+                            "[CheckpointPoller] Error polling latest checkpoint sequence number: {e:?}"
                         );
                     }
                 }
@@ -177,8 +170,7 @@ impl CheckpointGprcService for CheckpointServiceImpl {
                     .map_err(|e: StorageError| GrpcApiError::SystemError(anyhow::Error::new(e)))?
                     .ok_or_else(|| {
                         Status::not_found(format!(
-                            "Checkpoint with sequence number {} not found",
-                            seq_num
+                            "Checkpoint with sequence number {seq_num} not found"
                         ))
                     })?;
 
@@ -186,8 +178,7 @@ impl CheckpointGprcService for CheckpointServiceImpl {
                     .map_err(|e: StorageError| GrpcApiError::SystemError(anyhow::Error::new(e)))?
                     .ok_or_else(|| {
                         Status::not_found(format!(
-                            "Checkpoint contents for sequence number {} not found. This may indicate data inconsistency.",
-                            seq_num
+                            "Checkpoint contents for sequence number {seq_num} not found. This may indicate data inconsistency."
                         ))
                     })?;
             }
@@ -197,10 +188,7 @@ impl CheckpointGprcService for CheckpointServiceImpl {
                     .get_checkpoint_by_digest(&digest)
                     .map_err(|e: StorageError| GrpcApiError::SystemError(anyhow::Error::new(e)))?
                     .ok_or_else(|| {
-                        Status::not_found(format!(
-                            "Checkpoint with digest {} not found",
-                            digest.to_string()
-                        ))
+                        Status::not_found(format!("Checkpoint with digest {digest} not found"))
                     })?;
 
                 checkpoint_contents = self.state_reader.get_checkpoint_contents_by_digest(&verified_checkpoint.inner().content_digest)
@@ -208,8 +196,8 @@ impl CheckpointGprcService for CheckpointServiceImpl {
                     .ok_or_else(|| {
                         Status::not_found(format!(
                             "Checkpoint contents for digest {} (from checkpoint {}) not found. This may indicate data inconsistency.",
-                            verified_checkpoint.inner().content_digest.to_string(),
-                            digest.to_string()
+                            verified_checkpoint.inner().content_digest,
+                            digest
                         ))
                     })?;
             }
@@ -220,10 +208,9 @@ impl CheckpointGprcService for CheckpointServiceImpl {
             .get_checkpoint_data(verified_checkpoint.clone(), checkpoint_contents)
             .map_err(|e| {
                 eprintln!(
-                    "[gRPC CheckpointService] Error constructing CheckpointData for {}: {:?}",
-                    checkpoint_id_str, e
+                    "[gRPC CheckpointService] Error constructing CheckpointData for {checkpoint_id_str}: {e:?}"
                 );
-                Status::internal(format!("Failed to construct full checkpoint data: {}", e))
+                Status::internal(format!("Failed to construct full checkpoint data: {e}"))
             })?;
 
         let gprc_checkpoint_data = convert_full_checkpoint_data_to_gprc(&core_checkpoint_data)
@@ -254,8 +241,7 @@ impl CheckpointGprcService for CheckpointServiceImpl {
                     .map_err(|e: StorageError| GrpcApiError::SystemError(anyhow::Error::new(e)))?
                     .ok_or_else(|| {
                         Status::not_found(format!(
-                            "Checkpoint summary for sequence number {} not found",
-                            seq_num
+                            "Checkpoint summary for sequence number {seq_num} not found"
                         ))
                     })?;
             }
@@ -266,8 +252,7 @@ impl CheckpointGprcService for CheckpointServiceImpl {
                     .map_err(|e: StorageError| GrpcApiError::SystemError(anyhow::Error::new(e)))?
                     .ok_or_else(|| {
                         Status::not_found(format!(
-                            "Checkpoint summary for digest {} not found",
-                            digest.to_string()
+                            "Checkpoint summary for digest {digest} not found"
                         ))
                     })?;
             }
@@ -372,12 +357,10 @@ impl CheckpointGprcService for CheckpointServiceImpl {
                         Err(e) => {
                             // Log error and potentially continue or return internal error
                             eprintln!(
-                                "[gRPC CheckpointService] Failed to convert checkpoint {}: {:?}",
-                                current_seq, e
+                                "[gRPC CheckpointService] Failed to convert checkpoint {current_seq}: {e:?}"
                             );
                             return Err(Status::internal(format!(
-                                "Conversion error for checkpoint {}: {}",
-                                current_seq, e
+                                "Conversion error for checkpoint {current_seq}: {e}"
                             )));
                         }
                     }
@@ -389,12 +372,10 @@ impl CheckpointGprcService for CheckpointServiceImpl {
                 }
                 Err(storage_err) => {
                     eprintln!(
-                        "[gRPC CheckpointService] Error fetching checkpoint {} from storage: {:?}",
-                        current_seq, storage_err
+                        "[gRPC CheckpointService] Error fetching checkpoint {current_seq} from storage: {storage_err:?}"
                     );
                     return Err(Status::internal(format!(
-                        "Failed to retrieve checkpoint {}: {}",
-                        current_seq, storage_err
+                        "Failed to retrieve checkpoint {current_seq}: {storage_err}"
                     )));
                 }
             }
@@ -550,8 +531,7 @@ impl CheckpointGprcService for CheckpointServiceImpl {
                     }
                     Err(broadcast::error::RecvError::Lagged(n)) => {
                         eprintln!(
-                            "[gRPC Subscribe Task] Lagged by {} messages. Some checkpoints were missed.",
-                            n
+                            "[gRPC Subscribe Task] Lagged by {n} messages. Some checkpoints were missed."
                         );
                         // Potentially send an error to the client or try to
                         // resync? For now, just log.

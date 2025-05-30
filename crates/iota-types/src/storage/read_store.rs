@@ -21,8 +21,7 @@ use crate::{
     messages_checkpoint::{
         CheckpointContents, CheckpointSequenceNumber, FullCheckpointContents, VerifiedCheckpoint,
     },
-    quorum_driver_types::{QuorumDriverError, QuorumDriverResponse},
-    transaction::{SignedTransaction, VerifiedTransaction},
+    transaction::VerifiedTransaction,
 };
 
 pub trait ReadStore: ObjectStore {
@@ -689,19 +688,6 @@ pub trait RestStateReader: ObjectStore + ReadStore + Send + Sync {
     fn get_coin_info(&self, coin_type: &StructTag) -> Result<Option<CoinInfo>>;
 
     fn get_epoch_last_checkpoint(&self, epoch_id: EpochId) -> Result<Option<VerifiedCheckpoint>>;
-
-    fn list_transactions(
-        &self,
-        cursor: Option<TransactionDigest>,
-        limit: u64,
-        direction: ListDirection,
-    ) -> Result<Vec<(TransactionDigest, Arc<VerifiedTransaction>)>>;
-
-    // Added for gRPC transaction execution
-    async fn execute_transaction_for_gprc(
-        &self,
-        transaction: SignedTransaction,
-    ) -> std::result::Result<QuorumDriverResponse, QuorumDriverError>;
 }
 
 pub struct AccountOwnedObjectInfo {

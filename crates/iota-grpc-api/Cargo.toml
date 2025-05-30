@@ -17,15 +17,11 @@ tokio-stream.workspace = true
 thiserror.workspace = true
 bcs.workspace = true
 anyhow.workspace = true
-hex.workspace = true
-serde_json.workspace = true
 roaring.workspace = true
-shared-crypto.workspace = true
-rand.workspace = true
 
 iota-types.workspace = true
 iota-sdk2.workspace = true
-move-core-types.workspace =true
+move-core-types.workspace = true
 iota-protocol-config.workspace = true
 
 [build-dependencies]
@@ -36,3 +32,5 @@ futures.workspace = true
 iota-types.workspace = true
 iota-protocol-config.workspace = true
 fastcrypto.workspace = true
+shared-crypto.workspace = true
+rand.workspace = true

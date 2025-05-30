@@ -30,12 +30,12 @@ use iota_swarm_config::{
     network_config_builder::ConfigBuilder,
 };
 use iota_types::{
-    base_types::{AuthorityName, IotaAddress, ObjectID, TransactionDigest, VersionNumber},
+    base_types::{AuthorityName, IotaAddress, ObjectID, VersionNumber},
     committee::Committee,
     crypto::AuthoritySignature,
     digests::ConsensusCommitDigest,
     effects::TransactionEffects,
-    error::{ExecutionError, IotaError, UserInputError},
+    error::ExecutionError,
     gas_coin::{GasCoin, NANOS_PER_IOTA},
     inner_temporary_store::InnerTemporaryStore,
     iota_system_state::epoch_start_iota_system_state::EpochStartSystemState,
@@ -45,11 +45,10 @@ use iota_types::{
     mock_checkpoint_builder::{MockCheckpointBuilder, ValidatorKeypairProvider},
     object::Object,
     programmable_transaction_builder::ProgrammableTransactionBuilder,
-    quorum_driver_types::{QuorumDriverError, QuorumDriverResponse},
     signature::VerifyParams,
-    storage::{ListDirection, ObjectStore, ReadStore, RestStateReader},
+    storage::{ObjectStore, ReadStore, RestStateReader},
     transaction::{
-        EndOfEpochTransactionKind, GasData, SignedTransaction, Transaction, TransactionData,
+        EndOfEpochTransactionKind, GasData, Transaction, TransactionData,
         TransactionKind, VerifiedTransaction,
     },
 };
@@ -559,17 +558,6 @@ impl<T, V: store::SimulatorStore> ReadStore for Simulacrum<T, V> {
 
 #[async_trait::async_trait]
 impl<T: Send + Sync, V: store::SimulatorStore + Send + Sync> RestStateReader for Simulacrum<T, V> {
-    fn list_transactions(
-        &self,
-        _cursor: Option<TransactionDigest>,
-        _limit: u64,
-        _direction: ListDirection,
-    ) -> iota_types::storage::error::Result<Vec<(TransactionDigest, Arc<VerifiedTransaction>)>>
-    {
-        // Placeholder for now
-        unimplemented!()
-    }
-
     fn get_transaction_checkpoint(
         &self,
         _digest: &iota_types::digests::TransactionDigest,
@@ -638,20 +626,6 @@ impl<T: Send + Sync, V: store::SimulatorStore + Send + Sync> RestStateReader for
         _epoch_id: iota_types::committee::EpochId,
     ) -> iota_types::storage::error::Result<Option<VerifiedCheckpoint>> {
         todo!()
-    }
-
-    async fn execute_transaction_for_gprc(
-        &self,
-        _transaction: SignedTransaction,
-    ) -> std::result::Result<QuorumDriverResponse, QuorumDriverError> {
-        let error_message =
-            "Transaction execution via execute_transaction_for_gprc not supported in Simulacrum."
-                .to_string();
-        Err(QuorumDriverError::QuorumDriverInternal(
-            IotaError::UserInput {
-                error: UserInputError::Unsupported(error_message),
-            },
-        ))
     }
 }
 
