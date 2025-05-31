@@ -847,6 +847,12 @@ async fn test_subscribe_new_checkpoints_receives_items() {
             .add_mock_checkpoint_to_cache(mock_checkpoint);
     }
 
+    // Ensure the mock state reader reports the latest checkpoint for server-driven
+    // catch-up
+    mock_reader_manager
+        .write()
+        .set_latest_sequence_number_for_test(last_seq_to_publish);
+
     let subscribe_request = tonic::Request::new(SubscribeNewCheckpointsRequest {
         start_from_checkpoint_sequence_number: Some(start_streaming_from_seq.to_string()),
         include_full_data: false,

@@ -832,8 +832,7 @@ async fn test_indexer_grpc_streaming_historical_catchup() -> Result<(), anyhow::
     );
 
     let dummy_fullnode_rpc_url = "http://127.0.0.1:12345".to_string();
-    let temp_dir = tempfile::tempdir()?;
-    let data_ingestion_path = Some(temp_dir.path().to_path_buf());
+    let data_ingestion_path = None; // Ensure gRPC streaming is used
 
     let (_pg_store, _indexer_join_handle) = start_test_indexer_impl(
         raw_db_url.clone(),

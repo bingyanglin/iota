@@ -398,28 +398,6 @@ pub async fn start_simulacrum_rest_api_with_read_write_indexer(
     (server_handle, pg_store, pg_handle, rpc_client)
 }
 
-/// Wait for the indexer to catch up to the given checkpoint sequence number for
-/// objects snapshot.
-pub async fn wait_for_objects_snapshot(
-    pg_store: &PgIndexerStore,
-    checkpoint_sequence_number: u64,
-) -> Result<(), IndexerError> {
-    tokio::time::timeout(Duration::from_secs(30), async {
-        while {
-            let cp_opt = pg_store
-                .get_latest_object_snapshot_checkpoint_sequence_number()
-                .await
-                .unwrap();
-            cp_opt.is_none() || (cp_opt.unwrap() < checkpoint_sequence_number)
-        } {
-            tokio::time::sleep(Duration::from_millis(100)).await;
-        }
-    })
-    .await
-    .expect("Timeout waiting for indexer to catchup to checkpoint for objects snapshot");
-    Ok(())
-}
-
 /// Waits for a certain number of checkpoints to be present in the database.
 pub async fn wait_for_checkpoints_in_db(
     pg_store: &PgIndexerStore,

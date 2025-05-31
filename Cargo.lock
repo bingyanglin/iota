@@ -6922,7 +6922,6 @@ dependencies = [
  "rand 0.8.5",
  "roaring",
  "serde",
- "serde_json",
  "shared-crypto",
  "thiserror 1.0.64",
  "tokio",
