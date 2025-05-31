@@ -2056,3 +2056,60 @@ impl iota_types::storage::ObjectStore for IndexerReader {
             .map_err(iota_types::storage::error::Error::custom)
     }
 }
+
+fn get_single_obj_id_from_package_publish(
+    reader: &IndexerReader,
+    package_id: ObjectID,
+    obj_type: String,
+) -> Result<Option<ObjectID>, IndexerError> {
+    let publish_txn_effects_opt = if is_system_package(package_id) {
+        Some(reader.get_transaction_effects_with_sequence_number(0))
+    } else {
+        reader.get_object(&package_id, None)?.map(|o| {
+            let publish_txn_digest = o.previous_transaction;
+            reader.get_transaction_effects_with_digest(publish_txn_digest)
+        })
+    };
+    if let Some(publish_txn_effects) = publish_txn_effects_opt {
+        let created_objs = publish_txn_effects?
+            .created()
+            .iter()
+            .map(|o| o.object_id())
+            .collect::<Vec<_>>();
+        let obj_ids_with_type =
+            reader.filter_object_id_with_type(created_objs, obj_type.clone())?;
+        if obj_ids_with_type.len() == 1 {
+            Ok(Some(obj_ids_with_type[0]))
+        } else if obj_ids_with_type.is_empty() {
+            // The package exists but no such object is created in that transaction. Or
+            // maybe it is wrapped and we don't know yet.
+            Ok(None)
+        } else {
+            // We expect there to be only one object of this type created by the package but
+            // more than one is found.
+            tracing::error!(
+                "There are more than one objects found for type {}",
+                obj_type
+            );
+            Ok(None)
+        }
+    } else {
+        // The coin package does not exist.
+        Ok(None)
+    }
+}
+
+pub async fn stream_checkpoints_via_grpc(
+    grpc_url: &str,
+    start: u64,
+    end: Option<u64>,
+) -> anyhow::Result<()> {
+    use iota_grpc_api::client::GrpcNodeClient;
+    use tokio_stream::StreamExt;
+    let mut client = GrpcNodeClient::connect(grpc_url).await?;
+    let mut stream = client.stream_checkpoints(start, end).await?;
+    while let Some(Ok(_checkpoint)) = stream.next().await {
+        // Process checkpoint here
+    }
+    Ok(())
+}
