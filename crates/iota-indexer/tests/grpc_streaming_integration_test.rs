@@ -53,7 +53,6 @@ use iota_types::{
 };
 use secrecy::Secret;
 use shared_crypto::intent::Intent;
-use tempfile;
 use tokio::{
     sync::{Mutex, Notify, broadcast, mpsc},
     time::timeout,

@@ -2,9 +2,8 @@
 // Modifications Copyright (c) 2024 IOTA Stiftung
 // SPDX-License-Identifier: Apache-2.0
 
-use std::{collections::HashMap, path::PathBuf, pin::Pin, sync::Arc};
+use std::{path::PathBuf, pin::Pin, sync::Arc};
 
-use async_trait::async_trait;
 use futures::Future;
 use iota_metrics::spawn_monitored_task;
 use iota_rest_api::CheckpointData;
@@ -19,7 +18,7 @@ use tracing;
 
 use crate::{
     DataIngestionMetrics, IngestionError, IngestionResult, ReaderOptions, Worker,
-    progress_store::{ExecutorProgress, ProgressStore, ProgressStoreWrapper},
+    progress_store::{ExecutorProgress, ProgressStore, ProgressStoreWrapper, ShimProgressStore},
     reader::CheckpointReader,
     worker_pool::{WorkerPool, WorkerPoolStatus},
 };
@@ -335,38 +334,6 @@ async fn components_graceful_shutdown(
 ///     executor.await.unwrap();
 /// }
 /// ```
-///
-/// Define a simple shim progress store for example usage.
-struct ExampleShimProgressStore {
-    watermarks: HashMap<String, CheckpointSequenceNumber>,
-}
-
-impl ExampleShimProgressStore {
-    fn new() -> Self {
-        Self {
-            watermarks: HashMap::new(),
-        }
-    }
-}
-
-#[async_trait]
-impl ProgressStore for ExampleShimProgressStore {
-    type Error = IngestionError;
-
-    async fn load(&mut self, task_name: String) -> Result<CheckpointSequenceNumber, Self::Error> {
-        Ok(self.watermarks.get(&task_name).copied().unwrap_or_default())
-    }
-
-    async fn save(
-        &mut self,
-        task_name: String,
-        watermark: CheckpointSequenceNumber,
-    ) -> Result<(), Self::Error> {
-        self.watermarks.insert(task_name, watermark);
-        Ok(())
-    }
-}
-
 pub async fn setup_single_workflow<W: Worker + 'static>(
     worker: W,
     remote_store_url: String,
@@ -378,12 +345,7 @@ pub async fn setup_single_workflow<W: Worker + 'static>(
     CancellationToken,
 )> {
     let metrics = DataIngestionMetrics::new(&Registry::new());
-    let mut progress_store = ExampleShimProgressStore::new();
-    // Initialize the progress store with the initial checkpoint number for the
-    // default task.
-    progress_store
-        .save("test_worker".to_string(), initial_checkpoint_number)
-        .await?;
+    let progress_store = ShimProgressStore(initial_checkpoint_number);
     let token = CancellationToken::new();
     let mut executor = IndexerExecutor::new(progress_store, 1, metrics, token.clone());
     let worker_pool = WorkerPool::new(

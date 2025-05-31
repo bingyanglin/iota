@@ -9,8 +9,7 @@ use backoff::backoff::Backoff;
 use iota_grpc_api::{
     conversions::checkpoints::convert_checkpoint_data_gprc_to_core,
     proto::iota::gprc::v1::{
-        Direction, GetCheckpointRequest, ListCheckpointsRequest, StreamedCheckpoint,
-        SubscribeNewCheckpointsRequest,
+        GetCheckpointRequest, StreamedCheckpoint, SubscribeNewCheckpointsRequest,
         checkpoint_gprc_service_client::CheckpointGprcServiceClient, streamed_checkpoint,
     },
 };

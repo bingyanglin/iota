@@ -238,47 +238,31 @@ impl Cluster for LocalNewCluster {
         // This cluster has fullnode handle, safe to unwrap
         let fullnode_url = test_cluster.fullnode_handle.rpc_url.clone();
 
-        let mut handles = Vec::new();
-        match (options.pg_address.clone(), indexer_address) {
-            (Some(pg_address), Some(indexer_addr_socket)) => {
-                // Start in reader mode
-                let (_, handle) = start_test_indexer(
-                    pg_address.clone(),
-                    true, // reset_db
-                    None, // db_init_hook
-                    fullnode_url.clone(), // This is the main rpc_url for the node
-                    IndexerTypeConfig::reader_mode(indexer_addr_socket.to_string()), // Convert SocketAddr to String
-                    Some(data_ingestion_path.clone()),
-                )
-                .await;
-                handles.push(handle);
-            }
-            (Some(pg_address), None) => {
-                // Start in writer mode
-                let writer_config = IndexerTypeConfig::writer_mode(
-                    None,  // snapshot_config
-                    None,  // epochs_to_keep
-                    false, // use_grpc_streaming
-                    None,  // start_ingestion_from_checkpoint_seq_num
-                    None,  // grpc_address
-                );
-                let (_, handle) = start_test_indexer(
-                    pg_address.clone(),
-                    true, // reset the existing db
-                    None, // db_init_hook
-                    fullnode_url.clone(),
-                    writer_config,
-                    Some(data_ingestion_path.clone()),
-                )
-                .await;
-                handles.push(handle);
-            }
-            (None, Some(_)) => {
-                panic!("Cannot start indexer reader without a DB URL");
-            }
-            (None, None) => {
-                // No indexer needed for this fullnode
-            }
+        if let (Some(pg_address), Some(indexer_address)) =
+            (options.pg_address.clone(), indexer_address)
+        {
+            // Start in writer mode
+            start_test_indexer(
+                pg_address.clone(),
+                // reset the existing db
+                true,
+                None,
+                fullnode_url.clone(),
+                IndexerTypeConfig::writer_mode(None, None, false, None, None),
+                Some(data_ingestion_path.clone()),
+            )
+            .await;
+
+            // Start in reader mode
+            start_test_indexer(
+                pg_address,
+                false,
+                None,
+                fullnode_url.clone(),
+                IndexerTypeConfig::reader_mode(indexer_address.to_string()),
+                Some(data_ingestion_path),
+            )
+            .await;
         }
 
         if let Some(graphql_address) = &options.graphql_address {

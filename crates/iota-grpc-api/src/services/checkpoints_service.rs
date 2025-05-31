@@ -12,7 +12,6 @@ use iota_types::{
 use tokio::sync::{broadcast, mpsc};
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::{Request, Response, Status};
-use tracing::error; // Added for logging macros, removed info and warn
 
 use crate::conversions::checkpoints::{
     convert_full_checkpoint_data_to_gprc, convert_verified_checkpoint_to_gprc_summary,
