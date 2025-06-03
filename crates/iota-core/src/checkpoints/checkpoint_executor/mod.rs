@@ -40,6 +40,7 @@ use iota_types::{
     effects::{TransactionEffects, TransactionEffectsAPI},
     error::IotaResult,
     executable_transaction::VerifiedExecutableTransaction,
+    full_checkpoint_content::CheckpointData,
     inner_temporary_store::PackageStoreWithFallback,
     message_envelope::Message,
     messages_checkpoint::{
@@ -154,6 +155,8 @@ pub struct CheckpointExecutor {
     metrics: Arc<CheckpointExecutorMetrics>,
     grpc_buffer: Option<Arc<Mutex<VecDeque<Arc<CertifiedCheckpointSummary>>>>>,
     checkpoint_summary_tx: Option<broadcast::Sender<Arc<CertifiedCheckpointSummary>>>,
+    grpc_data_buffer: Option<Arc<Mutex<VecDeque<Arc<CheckpointData>>>>>,
+    checkpoint_data_tx: Option<broadcast::Sender<Arc<CheckpointData>>>,
 }
 
 impl CheckpointExecutor {
@@ -166,6 +169,8 @@ impl CheckpointExecutor {
         metrics: Arc<CheckpointExecutorMetrics>,
         grpc_buffer: Option<Arc<Mutex<VecDeque<Arc<CertifiedCheckpointSummary>>>>>,
         checkpoint_summary_tx: Option<broadcast::Sender<Arc<CertifiedCheckpointSummary>>>,
+        grpc_data_buffer: Option<Arc<Mutex<VecDeque<Arc<CheckpointData>>>>>,
+        checkpoint_data_tx: Option<broadcast::Sender<Arc<CheckpointData>>>,
     ) -> Self {
         Self {
             mailbox,
@@ -179,6 +184,8 @@ impl CheckpointExecutor {
             metrics,
             grpc_buffer,
             checkpoint_summary_tx,
+            grpc_data_buffer,
+            checkpoint_data_tx,
         }
     }
 
@@ -195,6 +202,8 @@ impl CheckpointExecutor {
             accumulator,
             Default::default(),
             CheckpointExecutorMetrics::new_for_tests(),
+            None,
+            None,
             None,
             None,
         )
@@ -476,6 +485,38 @@ impl CheckpointExecutor {
                     arc_summary.sequence_number, arc_summary.epoch
                 );
                 let _ = tx.send(arc_summary);
+            }
+            // Broadcast full CheckpointData to checkpoint_data_tx and buffer
+            if let (Some(data_buffer), Some(data_tx)) =
+                (&self.grpc_data_buffer, &self.checkpoint_data_tx)
+            {
+                // Use load_checkpoint_data to build CheckpointData
+                let full_data = Arc::new(
+                    crate::checkpoints::checkpoint_executor::data_ingestion_handler::load_checkpoint_data(
+                        checkpoint.clone(),
+                        self.object_cache_reader.as_ref(),
+                        self.transaction_cache_reader.as_ref(),
+                        self.checkpoint_store.clone(),
+                        &all_tx_digests,
+                    ).expect("Failed to load full CheckpointData")
+                );
+                {
+                    let mut buf = data_buffer.lock().await;
+                    buf.push_back(full_data.clone());
+                    if buf.len() > 100 {
+                        buf.pop_front();
+                    }
+                    println!(
+                        "[gRPC][Fullnode] Data buffer updated, new length: {} (seq={})",
+                        buf.len(),
+                        full_data.checkpoint_summary.sequence_number
+                    );
+                }
+                println!(
+                    "[gRPC][Fullnode] Broadcasting full CheckpointData: seq={}",
+                    full_data.checkpoint_summary.sequence_number
+                );
+                let _ = data_tx.send(full_data);
             }
         }
     }
