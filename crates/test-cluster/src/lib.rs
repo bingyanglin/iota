@@ -1077,7 +1077,7 @@ pub struct TestClusterBuilder {
     fullnode_policy_config: Option<PolicyConfig>,
     fullnode_fw_config: Option<RemoteFirewallConfig>,
     fullnode_grpc_api_address: Option<String>,
-
+    validator_grpc_api_address: Option<String>,
     max_submit_position: Option<usize>,
     submit_delay_step_override_millis: Option<u64>,
     validator_state_accumulator_config: StateAccumulatorV1EnabledConfig,
@@ -1107,6 +1107,7 @@ impl TestClusterBuilder {
             fullnode_policy_config: None,
             fullnode_fw_config: None,
             fullnode_grpc_api_address: None,
+            validator_grpc_api_address: None,
             max_submit_position: None,
             submit_delay_step_override_millis: None,
             validator_state_accumulator_config: StateAccumulatorV1EnabledConfig::Global(true),
@@ -1142,6 +1143,11 @@ impl TestClusterBuilder {
 
     pub fn with_fullnode_grpc_api_address(mut self, addr: String) -> Self {
         self.fullnode_grpc_api_address = Some(addr);
+        self
+    }
+
+    pub fn with_validator_grpc_api_address(mut self, addr: String) -> Self {
+        self.validator_grpc_api_address = Some(addr);
         self
     }
 
@@ -1596,6 +1602,13 @@ impl TestClusterBuilder {
             .with_fullnode_policy_config(self.fullnode_policy_config.clone())
             .with_fullnode_fw_config(self.fullnode_fw_config.clone());
 
+        if let Some(addr) = &self.fullnode_grpc_api_address {
+            builder = builder.with_fullnode_grpc_api_address(addr.clone());
+        }
+        if let Some(validator_grpc_api_address) = &self.validator_grpc_api_address {
+            builder = builder.with_validator_grpc_api_address(validator_grpc_api_address.clone());
+        }
+
         if let Some(genesis_config) = self.genesis_config.take() {
             builder = builder.with_genesis_config(genesis_config);
         }
@@ -1637,10 +1650,6 @@ impl TestClusterBuilder {
         if let Some(submit_delay_step_override_millis) = self.submit_delay_step_override_millis {
             builder =
                 builder.with_submit_delay_step_override_millis(submit_delay_step_override_millis);
-        }
-
-        if let Some(addr) = &self.fullnode_grpc_api_address {
-            builder = builder.with_fullnode_grpc_api_address(addr.clone());
         }
 
         let mut swarm = builder.build();
