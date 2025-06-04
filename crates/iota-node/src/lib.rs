@@ -823,12 +823,12 @@ impl IotaNode {
         // --- Create shared checkpoint broadcast channel and buffer for gRPC and
         // checkpoint logic ---
         // TODO: use constant parameter for capacity
-        let (checkpoint_summary_tx, _) = tokio::sync::broadcast::channel(100);
-        let buffer = std::sync::Arc::new(tokio::sync::Mutex::new(
+        let (grpc_checkpoint_summary_tx, _) = tokio::sync::broadcast::channel(100);
+        let grpc_checkpoint_summary_buffer = std::sync::Arc::new(tokio::sync::Mutex::new(
             std::collections::VecDeque::with_capacity(100),
         ));
-        let (checkpoint_data_tx, _) = tokio::sync::broadcast::channel(100);
-        let checkpoint_data_buffer = std::sync::Arc::new(tokio::sync::Mutex::new(
+        let (grpc_checkpoint_data_tx, _) = tokio::sync::broadcast::channel(100);
+        let grpc_checkpoint_data_buffer = std::sync::Arc::new(tokio::sync::Mutex::new(
             std::collections::VecDeque::with_capacity(100),
         ));
         let validator_components = if state.is_validator(&epoch_store) {
@@ -844,8 +844,6 @@ impl IotaNode {
                 connection_monitor_status.clone(),
                 &registry_service,
                 iota_node_metrics.clone(),
-                buffer.clone(),
-                checkpoint_summary_tx.clone(),
             )
             .await?;
             // This is only needed during cold start.
@@ -908,10 +906,10 @@ impl IotaNode {
             // Use the shared broadcast channel and buffer for gRPC checkpoint streaming
             let grpc_service = CheckpointGrpcService::new(
                 rest_read_store,
-                checkpoint_summary_tx.clone(),
-                buffer.clone(),
-                checkpoint_data_tx.clone(),
-                checkpoint_data_buffer.clone(),
+                grpc_checkpoint_summary_tx.clone(),
+                grpc_checkpoint_summary_buffer.clone(),
+                grpc_checkpoint_data_tx.clone(),
+                grpc_checkpoint_data_buffer.clone(),
             );
             tokio::spawn(async move {
                 info!("Starting gRPC server on {addr}");
@@ -930,17 +928,17 @@ impl IotaNode {
         info!("IotaNode started!");
         let node = Arc::new(node);
         let node_copy = node.clone();
-        let buffer = buffer.clone();
-        let checkpoint_summary_tx = checkpoint_summary_tx.clone();
-        let checkpoint_data_buffer = checkpoint_data_buffer.clone();
-        let checkpoint_data_tx = checkpoint_data_tx.clone();
+        let grpc_checkpoint_summary_buffer = grpc_checkpoint_summary_buffer.clone();
+        let grpc_checkpoint_summary_tx = grpc_checkpoint_summary_tx.clone();
+        let grpc_checkpoint_data_buffer = grpc_checkpoint_data_buffer.clone();
+        let grpc_checkpoint_data_tx = grpc_checkpoint_data_tx.clone();
         spawn_monitored_task!(async move {
             let result = Self::monitor_reconfiguration(
                 node_copy,
-                buffer,
-                checkpoint_summary_tx,
-                checkpoint_data_buffer,
-                checkpoint_data_tx,
+                grpc_checkpoint_summary_buffer,
+                grpc_checkpoint_summary_tx,
+                grpc_checkpoint_data_buffer,
+                grpc_checkpoint_data_tx,
             )
             .await;
             if let Err(error) = result {
@@ -1263,10 +1261,6 @@ impl IotaNode {
         connection_monitor_status: Arc<ConnectionMonitorStatus>,
         registry_service: &RegistryService,
         iota_node_metrics: Arc<IotaNodeMetrics>,
-        buffer: Arc<
-            tokio::sync::Mutex<std::collections::VecDeque<Arc<CertifiedCheckpointSummary>>>,
-        >,
-        checkpoint_summary_tx: tokio::sync::broadcast::Sender<Arc<CertifiedCheckpointSummary>>,
     ) -> Result<ValidatorComponents> {
         let mut config_clone = config.clone();
         let consensus_config = config_clone
@@ -1350,8 +1344,6 @@ impl IotaNode {
             iota_node_metrics,
             iota_tx_validator_metrics,
             validator_registry_id,
-            buffer,
-            checkpoint_summary_tx,
         )
         .await
     }
@@ -1376,10 +1368,6 @@ impl IotaNode {
         iota_node_metrics: Arc<IotaNodeMetrics>,
         iota_tx_validator_metrics: Arc<IotaTxValidatorMetrics>,
         validator_registry_id: RegistryID,
-        buffer: Arc<
-            tokio::sync::Mutex<std::collections::VecDeque<Arc<CertifiedCheckpointSummary>>>,
-        >,
-        checkpoint_summary_tx: tokio::sync::broadcast::Sender<Arc<CertifiedCheckpointSummary>>,
     ) -> Result<ValidatorComponents> {
         let checkpoint_service = Self::start_checkpoint_service(
             config,
@@ -1390,8 +1378,6 @@ impl IotaNode {
             state_sync_handle,
             accumulator,
             checkpoint_metrics.clone(),
-            buffer.clone(),
-            checkpoint_summary_tx.clone(),
         );
 
         // create a new map that gets injected into both the consensus handler and the
@@ -1477,10 +1463,6 @@ impl IotaNode {
         state_sync_handle: state_sync::Handle,
         accumulator: Weak<StateAccumulator>,
         checkpoint_metrics: Arc<CheckpointMetrics>,
-        buffer: Arc<
-            tokio::sync::Mutex<std::collections::VecDeque<Arc<CertifiedCheckpointSummary>>>,
-        >,
-        checkpoint_summary_tx: tokio::sync::broadcast::Sender<Arc<CertifiedCheckpointSummary>>,
     ) -> Arc<CheckpointService> {
         let epoch_start_timestamp_ms = epoch_store.epoch_start_state().epoch_start_timestamp_ms();
         let epoch_duration_ms = epoch_store.epoch_start_state().epoch_duration_ms();
@@ -1517,8 +1499,6 @@ impl IotaNode {
             checkpoint_metrics,
             max_tx_per_checkpoint,
             max_checkpoint_size_bytes,
-            buffer,
-            checkpoint_summary_tx,
         )
     }
 
@@ -1638,14 +1618,14 @@ impl IotaNode {
     /// is a validator.
     pub async fn monitor_reconfiguration(
         self: Arc<Self>,
-        buffer: Arc<
+        grpc_checkpoint_summary_buffer: Arc<
             tokio::sync::Mutex<std::collections::VecDeque<Arc<CertifiedCheckpointSummary>>>,
         >,
-        checkpoint_summary_tx: tokio::sync::broadcast::Sender<Arc<CertifiedCheckpointSummary>>,
-        checkpoint_data_buffer: Arc<
+        grpc_checkpoint_summary_tx: tokio::sync::broadcast::Sender<Arc<CertifiedCheckpointSummary>>,
+        grpc_checkpoint_data_buffer: Arc<
             tokio::sync::Mutex<std::collections::VecDeque<Arc<CheckpointData>>>,
         >,
-        checkpoint_data_tx: tokio::sync::broadcast::Sender<Arc<CheckpointData>>,
+        grpc_checkpoint_data_tx: tokio::sync::broadcast::Sender<Arc<CheckpointData>>,
     ) -> Result<()> {
         let checkpoint_executor_metrics =
             CheckpointExecutorMetrics::new(&self.registry_service.default_registry());
@@ -1660,10 +1640,10 @@ impl IotaNode {
                 accumulator.clone(),
                 self.config.checkpoint_executor_config.clone(),
                 checkpoint_executor_metrics.clone(),
-                Some(buffer.clone()),
-                Some(checkpoint_summary_tx.clone()),
-                Some(checkpoint_data_buffer.clone()),
-                Some(checkpoint_data_tx.clone()),
+                Some(grpc_checkpoint_summary_buffer.clone()),
+                Some(grpc_checkpoint_summary_tx.clone()),
+                Some(grpc_checkpoint_data_buffer.clone()),
+                Some(grpc_checkpoint_data_tx.clone()),
             );
 
             let run_with_range = self.config.run_with_range;
@@ -1857,8 +1837,6 @@ impl IotaNode {
                             self.metrics.clone(),
                             iota_tx_validator_metrics,
                             validator_registry_id,
-                            buffer.clone(),
-                            checkpoint_summary_tx.clone(),
                         )
                         .await?,
                     )
@@ -1916,8 +1894,6 @@ impl IotaNode {
                             self.connection_monitor_status.clone(),
                             &self.registry_service,
                             self.metrics.clone(),
-                            buffer.clone(),
-                            checkpoint_summary_tx.clone(),
                         )
                         .await?,
                     )

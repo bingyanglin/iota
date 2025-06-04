@@ -153,10 +153,10 @@ pub struct CheckpointExecutor {
     accumulator: Arc<StateAccumulator>,
     config: CheckpointExecutorConfig,
     metrics: Arc<CheckpointExecutorMetrics>,
-    grpc_buffer: Option<Arc<Mutex<VecDeque<Arc<CertifiedCheckpointSummary>>>>>,
-    checkpoint_summary_tx: Option<broadcast::Sender<Arc<CertifiedCheckpointSummary>>>,
-    grpc_data_buffer: Option<Arc<Mutex<VecDeque<Arc<CheckpointData>>>>>,
-    checkpoint_data_tx: Option<broadcast::Sender<Arc<CheckpointData>>>,
+    grpc_checkpoint_summary_buffer: Option<Arc<Mutex<VecDeque<Arc<CertifiedCheckpointSummary>>>>>,
+    grpc_checkpoint_summary_tx: Option<broadcast::Sender<Arc<CertifiedCheckpointSummary>>>,
+    grpc_checkpoint_data_buffer: Option<Arc<Mutex<VecDeque<Arc<CheckpointData>>>>>,
+    grpc_checkpoint_data_tx: Option<broadcast::Sender<Arc<CheckpointData>>>,
 }
 
 impl CheckpointExecutor {
@@ -167,10 +167,12 @@ impl CheckpointExecutor {
         accumulator: Arc<StateAccumulator>,
         config: CheckpointExecutorConfig,
         metrics: Arc<CheckpointExecutorMetrics>,
-        grpc_buffer: Option<Arc<Mutex<VecDeque<Arc<CertifiedCheckpointSummary>>>>>,
-        checkpoint_summary_tx: Option<broadcast::Sender<Arc<CertifiedCheckpointSummary>>>,
-        grpc_data_buffer: Option<Arc<Mutex<VecDeque<Arc<CheckpointData>>>>>,
-        checkpoint_data_tx: Option<broadcast::Sender<Arc<CheckpointData>>>,
+        grpc_checkpoint_summary_buffer: Option<
+            Arc<Mutex<VecDeque<Arc<CertifiedCheckpointSummary>>>>,
+        >,
+        grpc_checkpoint_summary_tx: Option<broadcast::Sender<Arc<CertifiedCheckpointSummary>>>,
+        grpc_checkpoint_data_buffer: Option<Arc<Mutex<VecDeque<Arc<CheckpointData>>>>>,
+        grpc_checkpoint_data_tx: Option<broadcast::Sender<Arc<CheckpointData>>>,
     ) -> Self {
         Self {
             mailbox,
@@ -182,10 +184,10 @@ impl CheckpointExecutor {
             accumulator,
             config,
             metrics,
-            grpc_buffer,
-            checkpoint_summary_tx,
-            grpc_data_buffer,
-            checkpoint_data_tx,
+            grpc_checkpoint_summary_buffer,
+            grpc_checkpoint_summary_tx,
+            grpc_checkpoint_data_buffer,
+            grpc_checkpoint_data_tx,
         }
     }
 
@@ -465,7 +467,10 @@ impl CheckpointExecutor {
                 .await
                 .expect("Failed to accumulate running root");
             self.bump_highest_executed_checkpoint(checkpoint);
-            if let (Some(buffer), Some(tx)) = (&self.grpc_buffer, &self.checkpoint_summary_tx) {
+            if let (Some(buffer), Some(tx)) = (
+                &self.grpc_checkpoint_summary_buffer,
+                &self.grpc_checkpoint_summary_tx,
+            ) {
                 let summary = CertifiedCheckpointSummary::from(checkpoint.clone());
                 let arc_summary = Arc::new(summary);
                 {
@@ -487,9 +492,10 @@ impl CheckpointExecutor {
                 let _ = tx.send(arc_summary);
             }
             // Broadcast full CheckpointData to checkpoint_data_tx and buffer
-            if let (Some(data_buffer), Some(data_tx)) =
-                (&self.grpc_data_buffer, &self.checkpoint_data_tx)
-            {
+            if let (Some(data_buffer), Some(data_tx)) = (
+                &self.grpc_checkpoint_data_buffer,
+                &self.grpc_checkpoint_data_tx,
+            ) {
                 // Use load_checkpoint_data to build CheckpointData
                 let full_data = Arc::new(
                     crate::checkpoints::checkpoint_executor::data_ingestion_handler::load_checkpoint_data(
