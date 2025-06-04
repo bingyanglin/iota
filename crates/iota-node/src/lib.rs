@@ -824,13 +824,7 @@ impl IotaNode {
         // checkpoint logic ---
         // TODO: use constant parameter for capacity
         let (grpc_checkpoint_summary_tx, _) = tokio::sync::broadcast::channel(100);
-        let grpc_checkpoint_summary_buffer = std::sync::Arc::new(tokio::sync::Mutex::new(
-            std::collections::VecDeque::with_capacity(100),
-        ));
         let (grpc_checkpoint_data_tx, _) = tokio::sync::broadcast::channel(100);
-        let grpc_checkpoint_data_buffer = std::sync::Arc::new(tokio::sync::Mutex::new(
-            std::collections::VecDeque::with_capacity(100),
-        ));
         let validator_components = if state.is_validator(&epoch_store) {
             let components = Self::construct_validator_components(
                 config.clone(),
@@ -907,9 +901,7 @@ impl IotaNode {
             let grpc_service = CheckpointGrpcService::new(
                 rest_read_store,
                 grpc_checkpoint_summary_tx.clone(),
-                grpc_checkpoint_summary_buffer.clone(),
                 grpc_checkpoint_data_tx.clone(),
-                grpc_checkpoint_data_buffer.clone(),
             );
             tokio::spawn(async move {
                 info!("Starting gRPC server on {addr}");
@@ -928,16 +920,12 @@ impl IotaNode {
         info!("IotaNode started!");
         let node = Arc::new(node);
         let node_copy = node.clone();
-        let grpc_checkpoint_summary_buffer = grpc_checkpoint_summary_buffer.clone();
         let grpc_checkpoint_summary_tx = grpc_checkpoint_summary_tx.clone();
-        let grpc_checkpoint_data_buffer = grpc_checkpoint_data_buffer.clone();
         let grpc_checkpoint_data_tx = grpc_checkpoint_data_tx.clone();
         spawn_monitored_task!(async move {
             let result = Self::monitor_reconfiguration(
                 node_copy,
-                grpc_checkpoint_summary_buffer,
                 grpc_checkpoint_summary_tx,
-                grpc_checkpoint_data_buffer,
                 grpc_checkpoint_data_tx,
             )
             .await;
@@ -1618,13 +1606,7 @@ impl IotaNode {
     /// is a validator.
     pub async fn monitor_reconfiguration(
         self: Arc<Self>,
-        grpc_checkpoint_summary_buffer: Arc<
-            tokio::sync::Mutex<std::collections::VecDeque<Arc<CertifiedCheckpointSummary>>>,
-        >,
         grpc_checkpoint_summary_tx: tokio::sync::broadcast::Sender<Arc<CertifiedCheckpointSummary>>,
-        grpc_checkpoint_data_buffer: Arc<
-            tokio::sync::Mutex<std::collections::VecDeque<Arc<CheckpointData>>>,
-        >,
         grpc_checkpoint_data_tx: tokio::sync::broadcast::Sender<Arc<CheckpointData>>,
     ) -> Result<()> {
         let checkpoint_executor_metrics =
@@ -1640,9 +1622,7 @@ impl IotaNode {
                 accumulator.clone(),
                 self.config.checkpoint_executor_config.clone(),
                 checkpoint_executor_metrics.clone(),
-                Some(grpc_checkpoint_summary_buffer.clone()),
                 Some(grpc_checkpoint_summary_tx.clone()),
-                Some(grpc_checkpoint_data_buffer.clone()),
                 Some(grpc_checkpoint_data_tx.clone()),
             );
 
