@@ -6917,6 +6917,7 @@ dependencies = [
  "iota-types",
  "move-core-types",
  "prost",
+ "serde",
  "test-cluster",
  "tokio",
  "tokio-stream",

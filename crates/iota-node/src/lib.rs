@@ -106,11 +106,11 @@ use iota_types::{
     digests::ChainIdentifier,
     error::{IotaError, IotaResult},
     execution_config_utils::to_binary_config,
+    grpc::{CertifiedCheckpointSummary, CheckpointData},
     iota_system_state::{
         IotaSystemState, IotaSystemStateTrait,
         epoch_start_iota_system_state::{EpochStartSystemState, EpochStartSystemStateTrait},
     },
-    messages_checkpoint::CertifiedCheckpointSummary,
     messages_consensus::{AuthorityCapabilitiesV1, ConsensusTransaction, check_total_jwk_size},
     quorum_driver_types::QuorumDriverEffectsQueueResult,
     supported_protocol_versions::SupportedProtocolVersions,
@@ -139,8 +139,6 @@ pub mod metrics;
 
 // Add at the top, after other use statements
 use iota_grpc_api::{CheckpointGrpcService, checkpoint};
-// Add import for CheckpointData
-use iota_types::full_checkpoint_content::CheckpointData;
 
 pub struct ValidatorComponents {
     validator_server_handle: JoinHandle<Result<()>>,
