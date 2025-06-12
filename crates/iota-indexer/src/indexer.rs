@@ -282,18 +282,18 @@ pub async fn run_grpc_checkpoint_ingestion(
     );
 
     while let Some(Ok(cp)) = stream.next().await {
-        println!(
-            "[gRPC][Indexer] Received raw checkpoint, {} bytes (expecting CheckpointData)",
-            cp.data.len()
-        );
+        // println!(
+        //     "[gRPC][Indexer] Received raw checkpoint, {} bytes (expecting
+        // CheckpointData)",     cp.data.len()
+        // );
         let checkpoint_data: CheckpointData = match GrpcNodeClient::deserialize_checkpoint_data(&cp)
         {
             Ok(data) => {
-                println!(
-                    "[gRPC][Indexer] Successfully decoded CheckpointData seq={}, size={} bytes",
-                    data.checkpoint_summary.sequence_number,
-                    cp.data.len()
-                );
+                // println!(
+                //     "[gRPC][Indexer] Successfully decoded CheckpointData seq={}, size={}
+                // bytes",     data.checkpoint_summary.sequence_number,
+                //     cp.data.len()
+                // );
                 data
             }
             Err(e) => {
@@ -301,10 +301,10 @@ pub async fn run_grpc_checkpoint_ingestion(
                 continue;
             }
         };
-        println!(
-            "[gRPC][Indexer] Received checkpoint seq={}",
-            checkpoint_data.checkpoint_summary.sequence_number
-        );
+        // println!(
+        //     "[gRPC][Indexer] Received checkpoint seq={}",
+        //     checkpoint_data.checkpoint_summary.sequence_number
+        // );
         std::sync::Arc::clone(&handler)
             .process_checkpoint(Arc::new(checkpoint_data))
             .await?;
