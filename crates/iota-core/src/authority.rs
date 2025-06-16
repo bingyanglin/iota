@@ -126,7 +126,7 @@ use tokio::{
     sync::{RwLock, mpsc, mpsc::unbounded_channel, oneshot},
     task::JoinHandle,
 };
-use tracing::{Instrument, debug, error, info, instrument, warn};
+use tracing::{Instrument, debug, error, info, instrument, trace, warn};
 use typed_store::TypedStoreError;
 
 use self::{
@@ -1119,7 +1119,7 @@ impl AuthorityState {
                 .execute_certificate_latency_single_writer
                 .start_timer()
         };
-        debug!("execute_certificate");
+        trace!("execute_certificate");
 
         self.metrics.total_cert_attempts.inc();
 
@@ -1163,7 +1163,6 @@ impl AuthorityState {
     ) -> IotaResult<(TransactionEffects, Option<ExecutionError>)> {
         let _scope = monitored_scope("Execution::try_execute_immediately");
         let _metrics_guard = self.metrics.internal_execution_latency.start_timer();
-        debug!("execute_certificate_internal");
 
         let tx_digest = certificate.digest();
 
@@ -1199,6 +1198,9 @@ impl AuthorityState {
         )
         .await
         .tap_err(|e| info!(?tx_digest, "process_certificate failed: {e}"))
+        .tap_ok(
+            |(fx, _)| debug!(?tx_digest, fx_digest=?fx.digest(), "process_certificate succeeded"),
+        )
     }
 
     pub fn read_objects_for_execution(
@@ -2612,7 +2614,6 @@ impl AuthorityState {
             // Emit events
             self.subscription_handler
                 .process_tx(certificate.data().transaction_data(), &effects, &events)
-                .await
                 .tap_ok(|_| {
                     self.metrics
                         .post_processing_total_tx_had_event_processed
@@ -2976,7 +2977,7 @@ impl AuthorityState {
             .enqueue_certificates(certs, epoch_store)
     }
 
-    pub(crate) fn enqueue_with_expected_effects_digest(
+    pub fn enqueue_with_expected_effects_digest(
         &self,
         certs: Vec<(VerifiedExecutableTransaction, TransactionEffectsDigest)>,
         epoch_store: &AuthorityPerEpochStore,
