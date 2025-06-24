@@ -5976,6 +5976,7 @@ dependencies = [
  "fastcrypto",
  "futures",
  "iota-config",
+ "iota-grpc-api",
  "iota-metrics",
  "iota-protocol-config",
  "iota-rest-api",
@@ -5984,6 +5985,7 @@ dependencies = [
  "notify",
  "object_store 0.10.2",
  "prometheus",
+ "prost",
  "rand 0.8.5",
  "serde",
  "serde_json",
@@ -5993,6 +5995,7 @@ dependencies = [
  "tokio",
  "tokio-stream",
  "tokio-util 0.7.12",
+ "tonic 0.13.1",
  "tracing",
  "url",
 ]
