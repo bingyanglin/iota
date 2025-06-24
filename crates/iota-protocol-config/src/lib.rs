@@ -63,9 +63,11 @@ pub const MAX_PROTOCOL_VERSION: u64 = 10;
 //             Switch to distributed vote scoring in consensus for mainnet.
 //             Enable the new consensus commit rule for mainnet.
 //             Enable consensus garbage collection for mainnet with GC depth set
-//             to 60 rounds
+//             to 60 rounds.
 //             Enable batching in synchronizer for testnet
 //             Enable the gas price feedback mechanism in devnet.
+//             Enable Identifier input validation.
+
 #[derive(Copy, Clone, Debug, Hash, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 pub struct ProtocolVersion(u64);
 
@@ -293,6 +295,10 @@ struct FeatureFlags {
     // cancelled due to shared object congestion
     #[serde(skip_serializing_if = "is_false")]
     congestion_control_gas_price_feedback_mechanism: bool,
+
+    // Validate identifier inputs separately
+    #[serde(skip_serializing_if = "is_false")]
+    validate_identifier_inputs: bool,
 }
 
 fn is_true(b: &bool) -> bool {
@@ -1276,6 +1282,10 @@ impl ProtocolConfig {
         self.feature_flags
             .congestion_control_gas_price_feedback_mechanism
     }
+
+    pub fn validate_identifier_inputs(&self) -> bool {
+        self.feature_flags.validate_identifier_inputs
+    }
 }
 
 #[cfg(not(msim))]
@@ -2067,6 +2077,8 @@ impl ProtocolConfig {
                         cfg.feature_flags
                             .congestion_control_gas_price_feedback_mechanism = true;
                     }
+
+                    cfg.feature_flags.validate_identifier_inputs = true;
                 }
                 // Use this template when making changes:
                 //
