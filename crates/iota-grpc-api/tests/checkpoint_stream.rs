@@ -464,17 +464,13 @@ async fn test_future_end_index_only_full() {
     let mut result = Vec::new();
     while let Some(res) = stream.next().await {
         match res {
-            Ok(cp) => {
-                let bcs_data = cp.bcs_data.as_ref().expect("BCS data should be present");
-                let checkpoint_data = match GrpcCheckpointData::from_bcs(&bcs_data.data) {
-                    Ok(versioned) => versioned.into_v1().expect("Expected V1 data"),
-                    Err(_) => {
-                        bcs::from_bytes::<CheckpointData>(&bcs_data.data).expect("bcs decode")
-                    }
-                };
-                result.push(checkpoint_data.checkpoint_summary.sequence_number);
-                break;
-            }
+            Ok(cp) => match iota_grpc_api::client::GrpcNodeClient::deserialize_checkpoint(&cp) {
+                Ok(iota_grpc_api::client::CheckpointContent::Data(checkpoint_data)) => {
+                    result.push(checkpoint_data.checkpoint_summary.sequence_number);
+                    break;
+                }
+                _ => panic!("Expected checkpoint data but got summary or error"),
+            },
             Err(status) if status.code() == tonic::Code::NotFound => break,
             Err(e) => panic!("Unexpected error: {:?}", e),
         }
@@ -555,14 +551,14 @@ async fn test_historical_to_live_gap_fill() {
     let mut received = Vec::new();
     // Collect up to 151 checkpoints
     while let Some(Ok(cp)) = stream.next().await {
-        let bcs_data = cp.bcs_data.as_ref().expect("BCS data should be present");
-        let checkpoint_data = match GrpcCheckpointData::from_bcs(&bcs_data.data) {
-            Ok(versioned) => versioned.into_v1().expect("Expected V1 data"),
-            Err(_) => bcs::from_bytes::<CheckpointData>(&bcs_data.data).expect("bcs decode"),
-        };
-        received.push(checkpoint_data.checkpoint_summary.sequence_number);
-        if checkpoint_data.checkpoint_summary.sequence_number == 150 {
-            break;
+        match iota_grpc_api::client::GrpcNodeClient::deserialize_checkpoint(&cp) {
+            Ok(iota_grpc_api::client::CheckpointContent::Data(checkpoint_data)) => {
+                received.push(checkpoint_data.checkpoint_summary.sequence_number);
+                if checkpoint_data.checkpoint_summary.sequence_number == 150 {
+                    break;
+                }
+            }
+            _ => panic!("Expected checkpoint data but got summary or error"),
         }
     }
     // Assert we got all checkpoints 0..=150
@@ -612,19 +608,19 @@ async fn test_gap_fill_with_slow_client() {
         .into_inner();
     let mut received = Vec::new();
     while let Some(Ok(cp)) = stream.next().await {
-        let bcs_data = cp.bcs_data.as_ref().expect("BCS data should be present");
-        let checkpoint_data = match GrpcCheckpointData::from_bcs(&bcs_data.data) {
-            Ok(versioned) => versioned.into_v1().expect("Expected V1 data"),
-            Err(_) => bcs::from_bytes::<CheckpointData>(&bcs_data.data).expect("bcs decode"),
-        };
-        received.push(checkpoint_data.checkpoint_summary.sequence_number);
-        tokio::time::sleep(Duration::from_millis(500)).await; // slow down the client
-        println!(
-            "[gRPC] Client gets Checkpoint {:?}",
-            checkpoint_data.checkpoint_summary.sequence_number
-        );
-        if checkpoint_data.checkpoint_summary.sequence_number == 20 {
-            break;
+        match iota_grpc_api::client::GrpcNodeClient::deserialize_checkpoint(&cp) {
+            Ok(iota_grpc_api::client::CheckpointContent::Data(checkpoint_data)) => {
+                received.push(checkpoint_data.checkpoint_summary.sequence_number);
+                tokio::time::sleep(Duration::from_millis(500)).await; // slow down the client
+                println!(
+                    "[gRPC] Client gets Checkpoint {:?}",
+                    checkpoint_data.checkpoint_summary.sequence_number
+                );
+                if checkpoint_data.checkpoint_summary.sequence_number == 20 {
+                    break;
+                }
+            }
+            _ => panic!("Expected checkpoint data but got summary or error"),
         }
     }
     assert_eq!(received, (0..=20u64).collect::<Vec<_>>());
