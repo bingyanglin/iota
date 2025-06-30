@@ -459,8 +459,8 @@ impl CheckpointExecutor {
                 all_tx_digests,
             )
             .expect("Failed to load full CheckpointData");
-            let versioned_data = Arc::new(GrpcCheckpointData::from(checkpoint_data));
-            let _ = data_tx.send(versioned_data);
+            let grpc_data = Arc::new(GrpcCheckpointData::from(checkpoint_data));
+            let _ = data_tx.send(grpc_data);
         }
     }
 
