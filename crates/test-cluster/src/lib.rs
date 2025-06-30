@@ -997,7 +997,7 @@ pub struct TestClusterBuilder {
     fullnode_run_with_range: Option<RunWithRange>,
     fullnode_policy_config: Option<PolicyConfig>,
     fullnode_fw_config: Option<RemoteFirewallConfig>,
-    fullnode_grpc_api_address: Option<String>,
+    fullnode_grpc_api_address: Option<SocketAddr>,
     max_submit_position: Option<usize>,
     submit_delay_step_override_millis: Option<u64>,
     validator_state_accumulator_config: StateAccumulatorV1EnabledConfig,
@@ -1061,7 +1061,7 @@ impl TestClusterBuilder {
         self
     }
 
-    pub fn with_fullnode_grpc_api_address(mut self, addr: String) -> Self {
+    pub fn with_fullnode_grpc_api_address(mut self, addr: SocketAddr) -> Self {
         self.fullnode_grpc_api_address = Some(addr);
         self
     }

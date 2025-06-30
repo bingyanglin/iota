@@ -11,8 +11,8 @@ async fn test_grpc_checkpoint_ingestion() {
     let grpc_port = 50062u16;
     let grpc_addr = format!("127.0.0.1:{}", grpc_port);
     let cluster = TestClusterBuilder::new()
-        .with_fullnode_grpc_api_address(grpc_addr.clone())
         .with_num_validators(1)
+        .with_fullnode_grpc_api_address(grpc_addr.parse().expect("Invalid gRPC address"))
         .build()
         .await;
 

@@ -19,7 +19,7 @@ async fn test_grpc_blob_worker_logic() {
     let grpc_addr = format!("127.0.0.1:{}", grpc_port);
     let cluster = TestClusterBuilder::new()
         .with_num_validators(1)
-        .with_fullnode_grpc_api_address(grpc_addr.clone())
+        .with_fullnode_grpc_api_address(grpc_addr.parse().expect("Invalid gRPC address"))
         .build()
         .await;
 
@@ -40,7 +40,9 @@ async fn test_grpc_blob_worker_logic() {
     );
 
     // Connect to the gRPC endpoint and get the first available checkpoint
-    let mut grpc_client = GrpcNodeClient::connect(&grpc_url).await.expect("failed to connect grpc client");
+    let mut grpc_client = GrpcNodeClient::connect(&grpc_url)
+        .await
+        .expect("failed to connect grpc client");
     let mut stream = grpc_client
         .stream_checkpoints(None, Some(4), Some(true))
         .await

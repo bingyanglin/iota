@@ -68,8 +68,8 @@ async fn test_checkpoint_sync_performance_grpc() {
     let grpc_port = 50058u16;
     let grpc_addr = format!("127.0.0.1:{}", grpc_port);
     let cluster = TestClusterBuilder::new()
-        .with_fullnode_grpc_api_address(grpc_addr.clone())
         .with_num_validators(1)
+        .with_fullnode_grpc_api_address(grpc_addr.parse().expect("Invalid gRPC address"))
         .build()
         .await;
 
@@ -123,8 +123,8 @@ async fn test_checkpoint_sync_performance_file() {
     let grpc_port = 50059u16;
     let grpc_addr = format!("127.0.0.1:{}", grpc_port);
     let cluster = TestClusterBuilder::new()
-        .with_fullnode_grpc_api_address(grpc_addr.clone())
         .with_num_validators(1)
+        .with_fullnode_grpc_api_address(grpc_addr.parse().expect("Invalid gRPC address"))
         .build()
         .await;
 

@@ -17,7 +17,7 @@ async fn e2e_stream_checkpoints() {
 
     // Start a test cluster with gRPC enabled and pruning disabled
     let cluster = TestClusterBuilder::new()
-        .with_fullnode_grpc_api_address(grpc_addr.clone())
+        .with_fullnode_grpc_api_address(grpc_addr.parse().expect("Invalid gRPC address"))
         .with_num_validators(1)
         .build()
         .await;
@@ -83,7 +83,7 @@ async fn test_get_epoch_first_checkpoint_sequence_number() {
 
     // Start a test cluster with gRPC enabled and pruning disabled
     let cluster = TestClusterBuilder::new()
-        .with_fullnode_grpc_api_address(grpc_addr.clone())
+        .with_fullnode_grpc_api_address(grpc_addr.parse().expect("Invalid gRPC address"))
         .with_num_validators(1)
         .build()
         .await;
@@ -190,7 +190,7 @@ async fn test_stream_full_checkpoint_data() {
     let grpc_port = 50059u16;
     let grpc_addr = format!("127.0.0.1:{}", grpc_port);
     let cluster = TestClusterBuilder::new()
-        .with_fullnode_grpc_api_address(grpc_addr.clone())
+        .with_fullnode_grpc_api_address(grpc_addr.parse().expect("Invalid gRPC address"))
         .with_num_validators(1)
         .build()
         .await;

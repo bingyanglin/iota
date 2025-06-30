@@ -839,11 +839,10 @@ impl IotaNode {
         // checkpoint logic ---
         // TODO: use constant parameter for capacity
         let (grpc_checkpoint_summary_tx, grpc_checkpoint_data_tx) = if let Some(grpc_api_address) =
-            config.grpc_api_address.clone()
+            config.grpc_api_address
         {
             let (summary_tx, _) = tokio::sync::broadcast::channel(100);
             let (data_tx, _) = tokio::sync::broadcast::channel(100);
-            let addr = grpc_api_address.parse().expect("Invalid gRPC address");
             let rocks = RocksDbStore::new(
                 cache_traits.clone(),
                 committee_store.clone(),
@@ -854,14 +853,14 @@ impl IotaNode {
             let grpc_service =
                 CheckpointGrpcService::new(rest_read_store, summary_tx.clone(), data_tx.clone());
             tokio::spawn(async move {
-                info!("Starting gRPC server on {addr}");
+                info!("Starting gRPC server on {grpc_api_address}");
                 tonic::transport::Server::builder()
                     .add_service(
                         checkpoint::checkpoint_service_server::CheckpointServiceServer::new(
                             grpc_service,
                         ),
                     )
-                    .serve(addr)
+                    .serve(grpc_api_address)
                     .await
                     .expect("gRPC server failed");
             });

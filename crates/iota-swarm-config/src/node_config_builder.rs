@@ -278,7 +278,7 @@ pub struct FullnodeConfigBuilder {
     fw_config: Option<RemoteFirewallConfig>,
     data_ingestion_dir: Option<PathBuf>,
     disable_pruning: bool,
-    grpc_api_address: Option<String>,
+    grpc_api_address: Option<SocketAddr>,
 }
 
 impl FullnodeConfigBuilder {
@@ -399,7 +399,7 @@ impl FullnodeConfigBuilder {
         self
     }
 
-    pub fn with_grpc_api_address(mut self, addr: String) -> Self {
+    pub fn with_grpc_api_address(mut self, addr: SocketAddr) -> Self {
         self.grpc_api_address = Some(addr);
         self
     }
