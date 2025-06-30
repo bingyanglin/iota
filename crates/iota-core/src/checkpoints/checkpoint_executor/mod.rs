@@ -447,8 +447,8 @@ impl CheckpointExecutor {
     ) {
         if let Some(tx) = &self.grpc_checkpoint_summary_tx {
             let summary = CertifiedCheckpointSummary::from(checkpoint.clone());
-            let versioned_summary = Arc::new(GrpcCertifiedCheckpointSummary::from(summary));
-            let _ = tx.send(versioned_summary);
+            let grpc_summary = Arc::new(GrpcCertifiedCheckpointSummary::from(summary));
+            let _ = tx.send(grpc_summary);
         }
         if let Some(data_tx) = &self.grpc_checkpoint_data_tx {
             let checkpoint_data = crate::checkpoints::checkpoint_executor::data_ingestion_handler::load_checkpoint_data(
