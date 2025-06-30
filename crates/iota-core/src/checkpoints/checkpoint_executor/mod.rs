@@ -451,13 +451,14 @@ impl CheckpointExecutor {
             let _ = tx.send(grpc_summary);
         }
         if let Some(data_tx) = &self.grpc_checkpoint_data_tx {
-            let checkpoint_data = crate::checkpoints::checkpoint_executor::data_ingestion_handler::load_checkpoint_data(
+            let checkpoint_data = load_checkpoint_data(
                 checkpoint.clone(),
                 self.object_cache_reader.as_ref(),
                 self.transaction_cache_reader.as_ref(),
                 self.checkpoint_store.clone(),
                 all_tx_digests,
-            ).expect("Failed to load full CheckpointData");
+            )
+            .expect("Failed to load full CheckpointData");
             let versioned_data = Arc::new(GrpcCheckpointData::from(checkpoint_data));
             let _ = data_tx.send(versioned_data);
         }
