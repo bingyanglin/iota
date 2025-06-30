@@ -23,7 +23,7 @@ pub struct GrpcCheckpointReader {
     cancel: CancellationToken,
     watermark_provider: Option<Box<dyn WatermarkProvider + Send + Sync>>,
 }
-
+pub const CHECKPOINT_BUFFER_SIZE: usize = 1000;
 /// Trait for providing the current watermark dynamically.
 #[async_trait::async_trait]
 pub trait WatermarkProvider {
@@ -41,7 +41,7 @@ impl GrpcCheckpointReader {
         mpsc::Receiver<Arc<CheckpointData>>,
         oneshot::Sender<()>,
     ) {
-        let (checkpoint_sender, checkpoint_receiver) = mpsc::channel(1000);
+        let (checkpoint_sender, checkpoint_receiver) = mpsc::channel(CHECKPOINT_BUFFER_SIZE);
         let (exit_sender, exit_receiver) = oneshot::channel();
 
         let reader = Self {
@@ -66,7 +66,7 @@ impl GrpcCheckpointReader {
         mpsc::Receiver<Arc<CheckpointData>>,
         oneshot::Sender<()>,
     ) {
-        let (checkpoint_sender, checkpoint_receiver) = mpsc::channel(1000);
+        let (checkpoint_sender, checkpoint_receiver) = mpsc::channel(CHECKPOINT_BUFFER_SIZE);
         let (exit_sender, exit_receiver) = oneshot::channel();
 
         let reader = Self {
