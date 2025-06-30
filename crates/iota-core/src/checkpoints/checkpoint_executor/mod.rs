@@ -462,6 +462,11 @@ impl CheckpointExecutor {
             let grpc_data = Arc::new(GrpcCheckpointData::from(checkpoint_data));
             let _ = data_tx.send(grpc_data);
         }
+
+        info!(
+            "[gRPC][Fullnode] Full CheckpointData is available: seq={}",
+            checkpoint.sequence_number()
+        );
     }
 
     /// Post processing and plumbing after we executed a checkpoint. This
@@ -500,11 +505,6 @@ impl CheckpointExecutor {
                 .expect("Failed to accumulate running root");
             self.bump_highest_executed_checkpoint(checkpoint);
             self.broadcast_grpc_checkpoint(checkpoint, all_tx_digests);
-
-            info!(
-                "[gRPC][Fullnode] Full CheckpointData is available: seq={}",
-                checkpoint.sequence_number()
-            );
         }
     }
 
@@ -783,11 +783,6 @@ impl CheckpointExecutor {
                     self.bump_highest_executed_checkpoint(checkpoint);
 
                     self.broadcast_grpc_checkpoint(checkpoint, &all_tx_digests);
-
-                    info!(
-                        "[gRPC][Fullnode] Full CheckpointData is available: seq={}",
-                        checkpoint.sequence_number()
-                    );
 
                     return true;
                 }
