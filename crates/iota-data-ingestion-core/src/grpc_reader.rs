@@ -171,6 +171,7 @@ impl GrpcCheckpointReader {
                 IngestionError::Upstream(anyhow::anyhow!("Failed to stream checkpoints: {e}"))
             })?;
 
+        let mut channel_closed = false;
         while let Some(result) = stream.next().await {
             if self.cancel.is_cancelled() {
                 warn!("Cancelled, stopping stream");
@@ -205,9 +206,15 @@ impl GrpcCheckpointReader {
             };
 
             if let Err(_e) = self.checkpoint_sender.send(Arc::new(checkpoint_data)).await {
-                warn!("WorkerPool channel closed");
+                warn!("WorkerPool channel closed, stopping stream");
+                channel_closed = true;
                 break;
             }
+        }
+
+        if channel_closed {
+            info!("Stream stopped due to channel closure (receiver gone)");
+            return Ok(());
         }
 
         warn!("Stream ended - this should only happen on cancellation or error");
