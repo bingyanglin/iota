@@ -23,6 +23,8 @@ use iota_types::{
 };
 use tracing::{debug, info};
 
+type Receiver<T> = tokio::sync::broadcast::Receiver<T>;
+
 impl BcsData {
     fn serialize_from<T>(data: &T) -> Result<Self, bcs::Error>
     where
@@ -143,7 +145,7 @@ impl CheckpointOracle<GrpcCertifiedCheckpointSummary> for Oracle {
 
 fn create_checkpoint_stream<T, F>(
     oracle: F,
-    tx: tokio::sync::broadcast::Sender<Arc<T>>,
+    mut rx: Receiver<Arc<T>>,
     start: Option<u64>,
     end: Option<u64>,
     is_full: bool,
@@ -153,7 +155,6 @@ where
     F: CheckpointOracle<T> + Clone + Send + Sync + 'static,
 {
     async_stream::try_stream! {
-        let mut rx = tx.subscribe();
         // TODO: Modify the latest checkpoint to start from 1.
         // Note that we do not stream the Genesis checkpoint because its size
         // can be very big. The genesis checkpoint should be imported directly.
@@ -241,7 +242,7 @@ impl CheckpointGrpcService {
         let oracle = Oracle { state_reader };
         create_checkpoint_stream(
             oracle,
-            self.grpc_checkpoint_data_tx.clone(),
+            self.grpc_checkpoint_data_tx.subscribe(),
             start,
             end,
             true,
@@ -257,7 +258,7 @@ impl CheckpointGrpcService {
         let oracle = Oracle { state_reader };
         create_checkpoint_stream(
             oracle,
-            self.grpc_checkpoint_summary_tx.clone(),
+            self.grpc_checkpoint_summary_tx.subscribe(),
             start,
             end,
             false,
