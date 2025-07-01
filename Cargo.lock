@@ -5946,7 +5946,6 @@ dependencies = [
  "iota-types",
  "object_store 0.10.2",
  "prometheus",
- "prost",
  "rand 0.8.5",
  "serde",
  "serde_json",

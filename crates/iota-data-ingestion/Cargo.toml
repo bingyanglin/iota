@@ -21,7 +21,6 @@ fastcrypto = { workspace = true, features = ["copy_key"] }
 futures.workspace = true
 object_store.workspace = true
 prometheus.workspace = true
-prost.workspace = true
 rand.workspace = true
 serde.workspace = true
 serde_json.workspace = true
