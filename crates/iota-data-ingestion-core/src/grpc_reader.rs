@@ -95,6 +95,13 @@ impl GrpcCheckpointReader {
             self.starting_checkpoint_number
         );
 
+        const MAX_RETRIES: usize = 10;
+        const INITIAL_BACKOFF_SECS: u64 = 1;
+        const MAX_BACKOFF_SECS: u64 = 60;
+
+        let mut retry_count = 0;
+        let mut backoff_secs = INITIAL_BACKOFF_SECS;
+
         loop {
             // Check for exit signal first
             if let Ok(()) = self.exit_receiver.try_recv() {
@@ -113,8 +120,25 @@ impl GrpcCheckpointReader {
                         info!("Cancelled, stopping reader");
                         break;
                     }
-                    warn!("Stream failed: {}, retrying in 1 second...", e);
-                    tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+
+                    retry_count += 1;
+                    if retry_count > MAX_RETRIES {
+                        return Err(IngestionError::Upstream(anyhow::anyhow!(
+                            "Max retries ({}) exceeded. Last error: {}",
+                            MAX_RETRIES,
+                            e
+                        )));
+                    }
+
+                    warn!(
+                        "Stream failed (attempt {}/{}): {}, retrying in {} seconds...",
+                        retry_count, MAX_RETRIES, e, backoff_secs
+                    );
+
+                    tokio::time::sleep(tokio::time::Duration::from_secs(backoff_secs)).await;
+
+                    // Exponential backoff with cap
+                    backoff_secs = std::cmp::min(backoff_secs * 2, MAX_BACKOFF_SECS);
                 }
             }
         }
