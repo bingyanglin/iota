@@ -10,7 +10,7 @@ use iota_types::messages_checkpoint::CheckpointSequenceNumber;
 use tokio::sync::{mpsc, oneshot};
 use tokio_stream::StreamExt;
 use tokio_util::sync::CancellationToken;
-use tracing::{info, warn};
+use tracing::{info, instrument, warn};
 
 use crate::{IngestionError, IngestionResult};
 
@@ -81,31 +81,39 @@ impl GrpcCheckpointReader {
         (reader, checkpoint_receiver, exit_sender)
     }
 
+    #[instrument(
+        skip(self),
+        fields(
+            grpc_url = %self.grpc_url,
+            starting_checkpoint = %self.starting_checkpoint_number
+        ),
+        name = "grpc_checkpoint_reader"
+    )]
     pub async fn run(mut self) -> IngestionResult<()> {
         info!(
-            "[gRPC] Starting checkpoint reader from watermark {}",
+            "Starting checkpoint reader from watermark {}",
             self.starting_checkpoint_number
         );
 
         loop {
             // Check for exit signal first
             if let Ok(()) = self.exit_receiver.try_recv() {
-                info!("[gRPC] Received exit signal, shutting down reader");
+                info!("Received exit signal, shutting down reader");
                 return Ok(());
             }
 
             // Try streaming
             match self.stream_with_retry().await {
                 Ok(()) => {
-                    info!("[gRPC] Stream completed normally");
+                    info!("Stream completed normally");
                     break;
                 }
                 Err(e) => {
                     if self.cancel.is_cancelled() {
-                        info!("[gRPC] Cancelled, stopping reader");
+                        info!("Cancelled, stopping reader");
                         break;
                     }
-                    warn!("[gRPC] Stream failed: {}, retrying in 1 second...", e);
+                    warn!("Stream failed: {}, retrying in 1 second...", e);
                     tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
                 }
             }
@@ -114,6 +122,7 @@ impl GrpcCheckpointReader {
         Ok(())
     }
 
+    #[instrument(skip(self), name = "stream_with_retry")]
     async fn stream_with_retry(&self) -> IngestionResult<()> {
         let mut client = GrpcNodeClient::connect(&self.grpc_url).await.map_err(|e| {
             IngestionError::Upstream(anyhow::anyhow!("Failed to connect to gRPC: {e}"))
@@ -127,7 +136,7 @@ impl GrpcCheckpointReader {
         };
 
         info!(
-            "[gRPC] Starting stream from watermark {} (WorkerPool mode)",
+            "Starting stream from watermark {} (WorkerPool mode)",
             current_watermark
         );
 
@@ -140,14 +149,14 @@ impl GrpcCheckpointReader {
 
         while let Some(result) = stream.next().await {
             if self.cancel.is_cancelled() {
-                warn!("[gRPC] Cancelled, stopping stream");
+                warn!("Cancelled, stopping stream");
                 break;
             }
 
             let cp = match result {
                 Ok(cp) => cp,
                 Err(e) => {
-                    warn!("[gRPC] Stream error: {e}");
+                    warn!("Stream error: {e}");
                     return Err(IngestionError::Upstream(anyhow::anyhow!(
                         "gRPC stream error: {e}"
                     )));
@@ -158,22 +167,22 @@ impl GrpcCheckpointReader {
             {
                 Ok(iota_grpc_api::client::CheckpointContent::Data(data)) => data,
                 Ok(iota_grpc_api::client::CheckpointContent::Summary(_)) => {
-                    warn!("[gRPC] Expected checkpoint data but received summary, skipping");
+                    warn!("Expected checkpoint data but received summary, skipping");
                     continue;
                 }
                 Err(e) => {
-                    warn!("[gRPC] BCS decode error: {e}");
+                    warn!("BCS decode error: {e}");
                     continue;
                 }
             };
 
             if let Err(_e) = self.checkpoint_sender.send(Arc::new(checkpoint_data)).await {
-                warn!("[gRPC] WorkerPool channel closed");
+                warn!("WorkerPool channel closed");
                 break;
             }
         }
 
-        warn!("[gRPC] Stream ended - this should only happen on cancellation or error");
+        warn!("Stream ended - this should only happen on cancellation or error");
         if !self.cancel.is_cancelled() {
             return Err(IngestionError::Upstream(anyhow::anyhow!(
                 "gRPC stream ended unexpectedly"
