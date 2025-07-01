@@ -191,12 +191,16 @@ impl GrpcCheckpointReader {
             {
                 Ok(iota_grpc_api::client::CheckpointContent::Data(data)) => data,
                 Ok(iota_grpc_api::client::CheckpointContent::Summary(_)) => {
-                    error!("Expected checkpoint data but got summary or error");
-                    break;
+                    error!("Expected checkpoint data but got summary");
+                    return Err(IngestionError::Upstream(anyhow::anyhow!(
+                        "Expected checkpoint data but received summary"
+                    )));
                 }
                 Err(e) => {
                     error!("BCS decode error: {e}");
-                    break;
+                    return Err(IngestionError::Upstream(anyhow::anyhow!(
+                        "BCS decode failed: {e}"
+                    )));
                 }
             };
 
