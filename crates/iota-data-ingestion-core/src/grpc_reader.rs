@@ -10,7 +10,7 @@ use iota_types::messages_checkpoint::CheckpointSequenceNumber;
 use tokio::sync::{mpsc, oneshot};
 use tokio_stream::StreamExt;
 use tokio_util::sync::CancellationToken;
-use tracing::{info, instrument, warn};
+use tracing::{error, info, instrument, warn};
 
 use crate::{IngestionError, IngestionResult};
 
@@ -167,8 +167,8 @@ impl GrpcCheckpointReader {
             {
                 Ok(iota_grpc_api::client::CheckpointContent::Data(data)) => data,
                 Ok(iota_grpc_api::client::CheckpointContent::Summary(_)) => {
-                    warn!("Expected checkpoint data but received summary, skipping");
-                    continue;
+                    error!("Expected checkpoint data but got summary or error");
+                    break;
                 }
                 Err(e) => {
                     warn!("BCS decode error: {e}");
