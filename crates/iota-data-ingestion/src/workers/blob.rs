@@ -29,9 +29,9 @@ const MIN_CHUNK_SIZE_MB: u64 = 5 * 1024 * 1024; // 5 MB
 const MAX_CONCURRENT_PARTS_UPLOAD: usize = 50;
 const MAX_CONCURRENT_DELETE_REQUESTS: usize = 10;
 
-const CHECKPOINT_FILE_SUFFIX: &str = "chk";
-const LIVE_DIR_NAME: &str = "live";
-const INGESTION_DIR_NAME: &str = "ingestion";
+pub(crate) const CHECKPOINT_FILE_SUFFIX: &str = "chk";
+pub(crate) const LIVE_DIR_NAME: &str = "live";
+pub(crate) const INGESTION_DIR_NAME: &str = "ingestion";
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "kebab-case")]

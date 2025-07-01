@@ -17,9 +17,7 @@ use object_store::{DynObjectStore, path::Path};
 use tokio::sync::Mutex;
 use tracing;
 
-const CHECKPOINT_FILE_SUFFIX: &str = "chk";
-const LIVE_DIR_NAME: &str = "live";
-const INGESTION_DIR_NAME: &str = "ingestion";
+use crate::workers::blob::{CHECKPOINT_FILE_SUFFIX, INGESTION_DIR_NAME, LIVE_DIR_NAME};
 
 pub struct GrpcBlobWorker {
     remote_store: Arc<DynObjectStore>,
