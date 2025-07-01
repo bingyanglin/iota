@@ -174,7 +174,7 @@ async fn main() -> Result<()> {
                                     first_checkpoint.index
                                 );
                             } else {
-                                tracing::warn!(
+                                tracing::error!(
                                     "Checkpoint contains summary instead of data, using epoch 0 as fallback"
                                 );
                             }
