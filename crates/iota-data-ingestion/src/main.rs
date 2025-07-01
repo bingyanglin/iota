@@ -162,9 +162,7 @@ async fn main() -> Result<()> {
 
                         // Extract the current epoch from the checkpoint data
                         if let Ok(checkpoint_content) =
-                            iota_grpc_api::client::GrpcNodeClient::deserialize_checkpoint(
-                                &first_checkpoint,
-                            )
+                            GrpcNodeClient::deserialize_checkpoint(&first_checkpoint)
                         {
                             if let iota_grpc_api::client::CheckpointContent::Data(checkpoint_data) =
                                 checkpoint_content
