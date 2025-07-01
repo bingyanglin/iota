@@ -195,8 +195,8 @@ impl GrpcCheckpointReader {
                     break;
                 }
                 Err(e) => {
-                    warn!("BCS decode error: {e}");
-                    continue;
+                    error!("BCS decode error: {e}");
+                    break;
                 }
             };
 
