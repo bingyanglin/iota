@@ -22,7 +22,8 @@ use iota_types::{
         CheckpointData as GrpcCheckpointData,
     },
     messages_checkpoint::{
-        CertifiedCheckpointSummary, CheckpointContents, CheckpointSequenceNumber, CheckpointSummary,
+        CertifiedCheckpointSummary, CheckpointContents, CheckpointSequenceNumber,
+        CheckpointSummary, VerifiedCheckpoint,
     },
     storage::{AccountOwnedObjectInfo, CoinInfo, RestStateReader, error::Result as StorageResult},
 };
@@ -103,18 +104,11 @@ impl iota_types::storage::ReadStore for MockRestStateReader {
     {
         unimplemented!()
     }
-    fn get_latest_checkpoint(
-        &self,
-    ) -> iota_types::storage::error::Result<
-        iota_types::message_envelope::VerifiedEnvelope<
-            iota_types::messages_checkpoint::CheckpointSummary,
-            iota_types::crypto::AuthorityQuorumSignInfo<true>,
-        >,
-    > {
+    fn get_latest_checkpoint(&self) -> iota_types::storage::error::Result<VerifiedCheckpoint> {
         // Return the checkpoint with the highest sequence number
         let guard = self.checkpoints.lock().unwrap();
         if let Some(max_seq) = guard.iter().max().cloned() {
-            Ok(iota_types::message_envelope::VerifiedEnvelope::new_unchecked(mock_cert(max_seq)))
+            Ok(VerifiedCheckpoint::new_unchecked(mock_cert(max_seq)))
         } else {
             // Use the missing error constructor
             Err(iota_types::storage::error::Error::missing(
@@ -124,25 +118,15 @@ impl iota_types::storage::ReadStore for MockRestStateReader {
     }
     fn get_highest_verified_checkpoint(
         &self,
-    ) -> iota_types::storage::error::Result<
-        iota_types::message_envelope::VerifiedEnvelope<
-            iota_types::messages_checkpoint::CheckpointSummary,
-            iota_types::crypto::AuthorityQuorumSignInfo<true>,
-        >,
-    > {
+    ) -> iota_types::storage::error::Result<VerifiedCheckpoint> {
         unimplemented!()
     }
     fn get_highest_synced_checkpoint(
         &self,
-    ) -> iota_types::storage::error::Result<
-        iota_types::message_envelope::VerifiedEnvelope<
-            iota_types::messages_checkpoint::CheckpointSummary,
-            iota_types::crypto::AuthorityQuorumSignInfo<true>,
-        >,
-    > {
+    ) -> iota_types::storage::error::Result<VerifiedCheckpoint> {
         let guard = self.checkpoints.lock().unwrap();
         if let Some(max_seq) = guard.iter().max().cloned() {
-            Ok(iota_types::message_envelope::VerifiedEnvelope::new_unchecked(mock_cert(max_seq)))
+            Ok(VerifiedCheckpoint::new_unchecked(mock_cert(max_seq)))
         } else {
             Err(iota_types::storage::error::Error::custom(
                 "No checkpoints available",
@@ -155,27 +139,13 @@ impl iota_types::storage::ReadStore for MockRestStateReader {
     fn get_checkpoint_by_digest(
         &self,
         _digest: &iota_types::messages_checkpoint::CheckpointDigest,
-    ) -> iota_types::storage::error::Result<
-        Option<
-            iota_types::message_envelope::VerifiedEnvelope<
-                iota_types::messages_checkpoint::CheckpointSummary,
-                iota_types::crypto::AuthorityQuorumSignInfo<true>,
-            >,
-        >,
-    > {
+    ) -> iota_types::storage::error::Result<Option<VerifiedCheckpoint>> {
         unimplemented!()
     }
     fn get_checkpoint_by_sequence_number(
         &self,
         seq: CheckpointSequenceNumber,
-    ) -> iota_types::storage::error::Result<
-        Option<
-            iota_types::message_envelope::VerifiedEnvelope<
-                iota_types::messages_checkpoint::CheckpointSummary,
-                iota_types::crypto::AuthorityQuorumSignInfo<true>,
-            >,
-        >,
-    > {
+    ) -> iota_types::storage::error::Result<Option<VerifiedCheckpoint>> {
         println!(
             "Mock get_checkpoint_by_sequence_number called for seq: {}",
             seq
@@ -185,18 +155,14 @@ impl iota_types::storage::ReadStore for MockRestStateReader {
             // Return the highest checkpoint
             if let Some(max_seq) = guard.iter().max().cloned() {
                 println!("[READER] Returning highest checkpoint {}", max_seq);
-                return Ok(Some(
-                    iota_types::message_envelope::VerifiedEnvelope::new_unchecked(mock_cert(
-                        max_seq,
-                    )),
-                ));
+                return Ok(Some(VerifiedCheckpoint::new_unchecked(mock_cert(max_seq))));
             } else {
                 return Ok(None);
             }
         }
         Ok(guard.get(&seq).map(|_| {
             println!("[READER] Returning checkpoint {}", seq);
-            iota_types::message_envelope::VerifiedEnvelope::new_unchecked(mock_cert(seq))
+            VerifiedCheckpoint::new_unchecked(mock_cert(seq))
         }))
     }
     fn get_checkpoint_contents_by_digest(
