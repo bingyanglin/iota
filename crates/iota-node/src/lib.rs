@@ -75,7 +75,10 @@ use iota_core::{
     transaction_orchestrator::TransactionOrchestrator,
     validator_tx_finalizer::ValidatorTxFinalizer,
 };
-use iota_grpc_api::{CheckpointGrpcService, checkpoint};
+use iota_grpc_api::{
+    CHECKPOINT_BROADCAST_BUFFER_SIZE, CheckpointGrpcService,
+    checkpoint::checkpoint_service_server::CheckpointServiceServer,
+};
 use iota_json_rpc::{
     JsonRpcServerBuilder, coin_api::CoinReadApi, governance_api::GovernanceReadApi,
     indexer_api::IndexerApi, move_utils::MoveUtils, read_api::ReadApi,
@@ -837,12 +840,11 @@ impl IotaNode {
 
         // --- Create shared checkpoint broadcast channel and buffer for gRPC and
         // checkpoint logic ---
-        // TODO: use constant parameter for capacity
         let (grpc_checkpoint_summary_tx, grpc_checkpoint_data_tx) = if let Some(grpc_api_address) =
             config.grpc_api_address
         {
-            let (summary_tx, _) = tokio::sync::broadcast::channel(100);
-            let (data_tx, _) = tokio::sync::broadcast::channel(100);
+            let (summary_tx, _) = tokio::sync::broadcast::channel(CHECKPOINT_BROADCAST_BUFFER_SIZE);
+            let (data_tx, _) = tokio::sync::broadcast::channel(CHECKPOINT_BROADCAST_BUFFER_SIZE);
             let rocks = RocksDbStore::new(
                 cache_traits.clone(),
                 committee_store.clone(),
@@ -855,11 +857,7 @@ impl IotaNode {
             tokio::spawn(async move {
                 info!("Starting gRPC server on {grpc_api_address}");
                 tonic::transport::Server::builder()
-                    .add_service(
-                        checkpoint::checkpoint_service_server::CheckpointServiceServer::new(
-                            grpc_service,
-                        ),
-                    )
+                    .add_service(CheckpointServiceServer::new(grpc_service))
                     .serve(grpc_api_address)
                     .await
                     .expect("gRPC server failed");

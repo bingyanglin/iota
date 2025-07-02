@@ -5,6 +5,10 @@ use std::{pin::Pin, sync::Arc};
 
 use serde::{Deserialize, Serialize};
 use tonic::{Request, Response, Status};
+
+/// Buffer size for broadcast channels used for checkpoint streaming.
+pub const CHECKPOINT_BROADCAST_BUFFER_SIZE: usize = 100;
+
 pub mod checkpoint {
     tonic::include_proto!("iota.grpc");
 }
