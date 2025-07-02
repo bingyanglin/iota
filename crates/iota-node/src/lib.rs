@@ -254,6 +254,11 @@ pub struct IotaNode {
     // Channel to allow signaling upstream to shutdown iota-node
     shutdown_channel_tx: broadcast::Sender<Option<RunWithRange>>,
 
+    /// Broadcast channels for gRPC checkpoint streaming
+    grpc_checkpoint_summary_tx:
+        Option<tokio::sync::broadcast::Sender<Arc<CertifiedCheckpointSummary>>>,
+    grpc_checkpoint_data_tx: Option<tokio::sync::broadcast::Sender<Arc<CheckpointData>>>,
+
     /// AuthorityAggregator of the network, created at start and beginning of
     /// each epoch. Use ArcSwap so that we could mutate it without taking
     /// mut reference.
@@ -925,21 +930,17 @@ impl IotaNode {
             _state_snapshot_uploader_handle: state_snapshot_handle,
             shutdown_channel_tx: shutdown_channel,
 
+            grpc_checkpoint_summary_tx,
+            grpc_checkpoint_data_tx,
+
             auth_agg,
         };
 
         info!("IotaNode started!");
         let node = Arc::new(node);
         let node_copy = node.clone();
-        let grpc_checkpoint_summary_tx_clone = grpc_checkpoint_summary_tx.clone();
-        let grpc_checkpoint_data_tx_clone = grpc_checkpoint_data_tx.clone();
         spawn_monitored_task!(async move {
-            let result = Self::monitor_reconfiguration(
-                node_copy,
-                grpc_checkpoint_summary_tx_clone,
-                grpc_checkpoint_data_tx_clone,
-            )
-            .await;
+            let result = Self::monitor_reconfiguration(node_copy).await;
             if let Err(error) = result {
                 warn!("Reconfiguration finished with error {:?}", error);
             }
@@ -1729,13 +1730,7 @@ impl IotaNode {
     /// entire system. This function also handles role changes for the node when
     /// epoch changes and advertises capabilities to the committee if the node
     /// is a validator.
-    pub async fn monitor_reconfiguration(
-        self: Arc<Self>,
-        grpc_checkpoint_summary_tx: Option<
-            tokio::sync::broadcast::Sender<Arc<CertifiedCheckpointSummary>>,
-        >,
-        grpc_checkpoint_data_tx: Option<tokio::sync::broadcast::Sender<Arc<CheckpointData>>>,
-    ) -> Result<()> {
+    pub async fn monitor_reconfiguration(self: Arc<Self>) -> Result<()> {
         let checkpoint_executor_metrics =
             CheckpointExecutorMetrics::new(&self.registry_service.default_registry());
 
@@ -1749,8 +1744,8 @@ impl IotaNode {
                 accumulator.clone(),
                 self.config.checkpoint_executor_config.clone(),
                 checkpoint_executor_metrics.clone(),
-                grpc_checkpoint_summary_tx.clone(),
-                grpc_checkpoint_data_tx.clone(),
+                self.grpc_checkpoint_summary_tx.clone(),
+                self.grpc_checkpoint_data_tx.clone(),
             );
 
             let run_with_range = self.config.run_with_range;
