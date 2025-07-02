@@ -298,136 +298,39 @@ impl CheckpointService for CheckpointGrpcService {
             epoch
         );
 
-        let latest_seq = *self
-            .state_reader
-            .get_latest_checkpoint()
-            .unwrap()
-            .sequence_number();
-
-        if let Ok(Some(latest_summary)) = self
-            .state_reader
-            .get_checkpoint_by_sequence_number(latest_seq)
-        {
-            if epoch > latest_summary.epoch {
-                info!(
-                    "Requested epoch {} > latest epoch {}",
-                    epoch, latest_summary.epoch
-                );
-                return Ok(Response::new(
-                    checkpoint::CheckpointSequenceNumberResponse { sequence_number: 0 },
-                ));
+        let sequence_number = if epoch == 0 {
+            // Genesis epoch starts at checkpoint 0
+            0
+        } else {
+            // Get the last checkpoint of the previous epoch
+            match self.state_reader.get_epoch_last_checkpoint(epoch - 1) {
+                Ok(Some(last_checkpoint)) => {
+                    // First checkpoint of current epoch is the next one
+                    *last_checkpoint.sequence_number() + 1
+                }
+                Ok(None) => {
+                    return Err(Status::not_found(format!(
+                        "No checkpoints found for previous epoch {}",
+                        epoch - 1
+                    )));
+                }
+                Err(e) => {
+                    return Err(Status::internal(format!(
+                        "Failed to get last checkpoint for epoch {}: {}",
+                        epoch - 1,
+                        e
+                    )));
+                }
             }
-
-            if latest_summary.epoch == epoch {
-                return Ok(Response::new(
-                    checkpoint::CheckpointSequenceNumberResponse {
-                        sequence_number: self.find_epoch_start_backwards(epoch, latest_seq).await,
-                    },
-                ));
-            }
-        }
-
-        let found_seq = self.binary_search_epoch_start(epoch, latest_seq).await;
+        };
 
         info!(
-            "Found first checkpoint for epoch {}: seq={}",
-            epoch, found_seq
+            "First checkpoint for epoch {}: seq={}",
+            epoch, sequence_number
         );
 
         Ok(Response::new(
-            checkpoint::CheckpointSequenceNumberResponse {
-                sequence_number: found_seq,
-            },
+            checkpoint::CheckpointSequenceNumberResponse { sequence_number },
         ))
-    }
-}
-
-impl CheckpointGrpcService {
-    async fn binary_search_epoch_start(&self, target_epoch: u64, latest_seq: u64) -> u64 {
-        let mut left = 0u64;
-        let mut right = latest_seq;
-        let epoch_start = 0u64;
-
-        while left <= right {
-            let mid = left + (right - left) / 2;
-
-            match self.state_reader.get_checkpoint_by_sequence_number(mid) {
-                Ok(Some(summary)) => {
-                    if summary.epoch == target_epoch {
-                        return self.find_epoch_start_backwards(target_epoch, mid).await;
-                    } else if summary.epoch < target_epoch {
-                        left = mid + 1;
-                    } else {
-                        if mid == 0 {
-                            break;
-                        }
-                        right = mid - 1;
-                    }
-                }
-                _ => {
-                    if mid == 0 {
-                        break;
-                    }
-                    right = mid - 1;
-                }
-            }
-        }
-
-        epoch_start
-    }
-
-    async fn find_epoch_start_backwards(&self, target_epoch: u64, start_seq: u64) -> u64 {
-        debug!(
-            "Finding epoch {} start, searching backwards from seq {}",
-            target_epoch, start_seq
-        );
-
-        let mut current_seq = start_seq;
-        let mut first_seq = start_seq;
-
-        loop {
-            match self
-                .state_reader
-                .get_checkpoint_by_sequence_number(current_seq)
-            {
-                Ok(Some(summary)) => {
-                    debug!(
-                        "Checkpoint {} has epoch {}, target epoch {}",
-                        current_seq, summary.epoch, target_epoch
-                    );
-
-                    if summary.epoch == target_epoch {
-                        first_seq = current_seq;
-                        if current_seq == 0 {
-                            debug!(
-                                "Reached checkpoint 0, stopping search. First seq for epoch {}: {}",
-                                target_epoch, first_seq
-                            );
-                            break;
-                        }
-                        current_seq = current_seq - 1;
-                    } else {
-                        debug!(
-                            "Found different epoch {} at seq {}, stopping search. First seq for epoch {}: {}",
-                            summary.epoch, current_seq, target_epoch, first_seq
-                        );
-                        break;
-                    }
-                }
-                _ => {
-                    debug!("No checkpoint found at seq {}", current_seq);
-                    if current_seq == 0 {
-                        break;
-                    }
-                    current_seq = current_seq - 1;
-                }
-            }
-        }
-
-        debug!(
-            "Final result: first checkpoint of epoch {} is {}",
-            target_epoch, first_seq
-        );
-        first_seq
     }
 }
