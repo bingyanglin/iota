@@ -1344,7 +1344,7 @@ impl TestClusterBuilder {
             .with_fullnode_fw_config(self.fullnode_fw_config.clone());
 
         if let Some(addr) = &self.fullnode_grpc_api_address {
-            builder = builder.with_fullnode_grpc_api_address(addr.clone());
+            builder = builder.with_fullnode_grpc_api_address(*addr);
         }
 
         if let Some(genesis_config) = self.genesis_config.take() {
@@ -1394,7 +1394,7 @@ impl TestClusterBuilder {
             builder = builder.with_disable_fullnode_pruning();
         }
         if let Some(addr) = &self.fullnode_grpc_api_address {
-            builder = builder.with_fullnode_grpc_api_address(addr.clone());
+            builder = builder.with_fullnode_grpc_api_address(*addr);
         }
 
         let mut swarm = builder.build();

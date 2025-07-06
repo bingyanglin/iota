@@ -121,7 +121,7 @@ impl Indexer {
                 .sources
                 .remote_store_url
                 .as_ref()
-                .unwrap_or(&config.sources.rpc_client_url.as_ref().unwrap());
+                .unwrap_or(config.sources.rpc_client_url.as_ref().unwrap());
             info!("Using REST checkpoint ingestion from {}", source_url);
             DataSource::remote(source_url.clone())
         };

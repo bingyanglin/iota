@@ -2,5 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 fn main() {
-    tonic_build::compile_protos("proto/checkpoint.proto").unwrap();
+    tonic_build::configure()
+        .protoc_arg("--experimental_allow_proto3_optional")
+        .compile_protos(&["proto/checkpoint.proto"], &["proto"])
+        .unwrap();
 }

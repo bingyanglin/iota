@@ -45,8 +45,11 @@ iota-types.workspace = true
 telemetry-subscribers.workspace = true
 
 [dev-dependencies]
+# external dependencies
 rand.workspace = true
 tempfile.workspace = true
+
+# internal dependencies
 test-cluster.workspace = true
 
 [build-dependencies]

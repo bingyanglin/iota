@@ -13,7 +13,7 @@ use tonic::Request;
 async fn e2e_stream_checkpoints() {
     // Pick a port for gRPC
     let grpc_port = 50055u16;
-    let grpc_addr = format!("127.0.0.1:{}", grpc_port);
+    let grpc_addr = format!("127.0.0.1:{grpc_port}");
 
     // Start a test cluster with gRPC enabled and pruning disabled
     let cluster = TestClusterBuilder::new()
@@ -26,8 +26,8 @@ async fn e2e_stream_checkpoints() {
     println!("Waiting for checkpoint 2");
     cluster.wait_for_checkpoint(2, None).await;
 
-    println!("Connecting to gRPC at {}", grpc_addr);
-    let mut client = CheckpointServiceClient::connect(format!("http://{}", grpc_addr))
+    println!("Connecting to gRPC at {grpc_addr}");
+    let mut client = CheckpointServiceClient::connect(format!("http://{grpc_addr}"))
         .await
         .expect("connect gRPC");
     println!("Connected to gRPC!");
@@ -54,7 +54,7 @@ async fn e2e_stream_checkpoints() {
     while let Some(res) = stream.next().await {
         match res {
             Ok(cp) => {
-                println!("[gRPC] Received checkpoint: {:?}", cp);
+                println!("[gRPC] Received checkpoint: {cp:?}");
                 indices.push(cp.index);
                 count += 1;
                 if count >= 2 {
@@ -62,7 +62,7 @@ async fn e2e_stream_checkpoints() {
                 }
             }
             Err(e) => {
-                println!("[gRPC] Error streaming checkpoint: {:?}", e);
+                println!("[gRPC] Error streaming checkpoint: {e:?}");
                 break;
             }
         }
@@ -79,7 +79,7 @@ async fn e2e_stream_checkpoints() {
 async fn test_get_epoch_first_checkpoint_sequence_number() {
     // Pick a port for gRPC
     let grpc_port = 50058u16;
-    let grpc_addr = format!("127.0.0.1:{}", grpc_port);
+    let grpc_addr = format!("127.0.0.1:{grpc_port}");
 
     // Start a test cluster with gRPC enabled and pruning disabled
     let cluster = TestClusterBuilder::new()
@@ -102,7 +102,7 @@ async fn test_get_epoch_first_checkpoint_sequence_number() {
         .fullnode_handle
         .iota_node
         .with(|node| node.state().epoch_store_for_testing().epoch());
-    println!("Current epoch after force_new_epoch: {}", current_epoch);
+    println!("Current epoch after force_new_epoch: {current_epoch}");
 
     // Wait for 3 new checkpoints in the new epoch
     cluster.wait_for_checkpoint(3, None).await;
@@ -112,10 +112,10 @@ async fn test_get_epoch_first_checkpoint_sequence_number() {
         .fullnode_handle
         .iota_node
         .with(|node| node.state().epoch_store_for_testing().epoch());
-    println!("Current epoch after force_new_epoch: {}", current_epoch);
+    println!("Current epoch after force_new_epoch: {current_epoch}");
 
     // Connect to the gRPC endpoint
-    let mut client = GrpcNodeClient::connect(&format!("http://{}", grpc_addr))
+    let mut client = GrpcNodeClient::connect(&format!("http://{grpc_addr}"))
         .await
         .expect("connect gRPC");
 
@@ -158,7 +158,7 @@ async fn test_get_epoch_first_checkpoint_sequence_number() {
                 }
             },
             Err(e) => {
-                println!("[gRPC] Stream error: {:?}", e);
+                println!("[gRPC] Stream error: {e:?}");
                 break;
             }
         }
@@ -169,7 +169,7 @@ async fn test_get_epoch_first_checkpoint_sequence_number() {
         .get_epoch_first_checkpoint_sequence_number(0)
         .await
         .expect("gRPC call");
-    println!("[gRPC] First checkpoint of epoch 0: {}", first_0);
+    println!("[gRPC] First checkpoint of epoch 0: {first_0}");
     assert_eq!(first_0, 0, "First checkpoint of epoch 0 should be 0");
 
     // Query for the first checkpoint of epoch 1 (should be >= 2)
@@ -177,25 +177,24 @@ async fn test_get_epoch_first_checkpoint_sequence_number() {
         .get_epoch_first_checkpoint_sequence_number(1)
         .await
         .expect("gRPC call");
-    println!("[gRPC] First checkpoint of epoch 1: {}", first_1);
+    println!("[gRPC] First checkpoint of epoch 1: {first_1}");
     assert!(
         first_1 >= 2,
-        "First checkpoint of epoch 1 should be >= 2, got {}",
-        first_1
+        "First checkpoint of epoch 1 should be >= 2, got {first_1}"
     );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_stream_full_checkpoint_data() {
     let grpc_port = 50059u16;
-    let grpc_addr = format!("127.0.0.1:{}", grpc_port);
+    let grpc_addr = format!("127.0.0.1:{grpc_port}");
     let cluster = TestClusterBuilder::new()
         .with_fullnode_grpc_api_address(grpc_addr.parse().expect("Invalid gRPC address"))
         .with_num_validators(1)
         .build()
         .await;
     cluster.wait_for_checkpoint(2, None).await;
-    let mut client = GrpcNodeClient::connect(&format!("http://{}", grpc_addr))
+    let mut client = GrpcNodeClient::connect(&format!("http://{grpc_addr}"))
         .await
         .unwrap();
     let mut stream = client

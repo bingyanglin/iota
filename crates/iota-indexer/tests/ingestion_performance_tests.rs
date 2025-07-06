@@ -52,10 +52,7 @@ async fn test_checkpoint_sync_performance_rest() {
     .await
     .expect("Indexer did not process checkpoints in time");
     let elapsed = t0.elapsed();
-    println!(
-        "[REST] Synced checkpoints {}-{} in {:?}",
-        START_CP, MAX_CP, elapsed
-    );
+    println!("[REST] Synced checkpoints {START_CP}-{MAX_CP} in {elapsed:?}");
 
     // Clean up
     handle.abort();
@@ -66,7 +63,7 @@ async fn test_checkpoint_sync_performance_rest() {
 async fn test_checkpoint_sync_performance_grpc() {
     // Start a test cluster with gRPC enabled
     let grpc_port = 50058u16;
-    let grpc_addr = format!("127.0.0.1:{}", grpc_port);
+    let grpc_addr = format!("127.0.0.1:{grpc_port}");
     let cluster = TestClusterBuilder::new()
         .with_num_validators(1)
         .with_fullnode_grpc_api_address(grpc_addr.parse().expect("Invalid gRPC address"))
@@ -83,7 +80,7 @@ async fn test_checkpoint_sync_performance_grpc() {
         db_url.clone(),
         true,
         None,
-        format!("http://{}", grpc_addr),
+        format!("http://{grpc_addr}"),
         None,
         cancel.clone(),
     )
@@ -104,10 +101,7 @@ async fn test_checkpoint_sync_performance_grpc() {
     .await
     .expect("Indexer did not process checkpoints in time");
     let elapsed = t0.elapsed();
-    println!(
-        "[gRPC] Synced checkpoints {}-{} in {:?}",
-        START_CP, MAX_CP, elapsed
-    );
+    println!("[gRPC] Synced checkpoints {START_CP}-{MAX_CP} in {elapsed:?}");
 
     // Clean up
     cancel.cancel();
@@ -121,7 +115,7 @@ async fn test_checkpoint_sync_performance_file() {
 
     // Start a test cluster with gRPC enabled (needed for checkpoint export)
     let grpc_port = 50059u16;
-    let grpc_addr = format!("127.0.0.1:{}", grpc_port);
+    let grpc_addr = format!("127.0.0.1:{grpc_port}");
     let cluster = TestClusterBuilder::new()
         .with_num_validators(1)
         .with_fullnode_grpc_api_address(grpc_addr.parse().expect("Invalid gRPC address"))
@@ -143,7 +137,7 @@ async fn test_checkpoint_sync_performance_file() {
         use iota_types::full_checkpoint_content::CheckpointData;
 
         // Use the configured gRPC address
-        let grpc_url = format!("http://{}", grpc_addr);
+        let grpc_url = format!("http://{grpc_addr}");
         let mut grpc_client = GrpcNodeClient::connect(&grpc_url)
             .await
             .expect("connect gRPC");
@@ -204,10 +198,7 @@ async fn test_checkpoint_sync_performance_file() {
     .await
     .expect("Indexer did not process checkpoints in time");
     let elapsed = t0.elapsed();
-    println!(
-        "[File] Synced checkpoints {}-{} in {:?}",
-        START_CP, MAX_CP, elapsed
-    );
+    println!("[File] Synced checkpoints {START_CP}-{MAX_CP} in {elapsed:?}");
 
     // Clean up
     handle.abort();

@@ -16,7 +16,6 @@ pub mod checkpoint {
 use checkpoint::{BcsData, checkpoint_service_server::CheckpointService};
 use iota_types::storage::RestStateReader;
 pub mod client;
-use bcs;
 use iota_types::{
     full_checkpoint_content::CheckpointData,
     grpc::{

@@ -74,7 +74,7 @@ fn mock_cert_data(sequence_number: u64) -> (CertifiedCheckpointSummary, Checkpoi
     let cert = mock_cert(sequence_number);
     let data = CheckpointData {
         checkpoint_summary: cert.clone(),
-        checkpoint_contents: MOCK_CHECKPOINT_CONTENTS.clone().into(),
+        checkpoint_contents: MOCK_CHECKPOINT_CONTENTS.clone(),
         transactions: vec![],
     };
     (cert, data)
@@ -146,22 +146,19 @@ impl iota_types::storage::ReadStore for MockRestStateReader {
         &self,
         seq: CheckpointSequenceNumber,
     ) -> iota_types::storage::error::Result<Option<VerifiedCheckpoint>> {
-        println!(
-            "Mock get_checkpoint_by_sequence_number called for seq: {}",
-            seq
-        );
+        println!("Mock get_checkpoint_by_sequence_number called for seq: {seq}");
         let guard = self.checkpoints.lock().unwrap();
         if seq == u64::MAX {
             // Return the highest checkpoint
             if let Some(max_seq) = guard.iter().max().cloned() {
-                println!("[READER] Returning highest checkpoint {}", max_seq);
+                println!("[READER] Returning highest checkpoint {max_seq}");
                 return Ok(Some(VerifiedCheckpoint::new_unchecked(mock_cert(max_seq))));
             } else {
                 return Ok(None);
             }
         }
         Ok(guard.get(&seq).map(|_| {
-            println!("[READER] Returning checkpoint {}", seq);
+            println!("[READER] Returning checkpoint {seq}");
             VerifiedCheckpoint::new_unchecked(mock_cert(seq))
         }))
     }
@@ -332,10 +329,10 @@ async fn test_start_index_only() {
                 result.push(cp.index)
             }
             Err(status) if status.code() == tonic::Code::NotFound => break,
-            Err(e) => panic!("Unexpected error: {:?}", e),
+            Err(e) => panic!("Unexpected error: {e:?}"),
         }
     }
-    println!("Result: {:?}", result);
+    println!("Result: {result:?}");
     assert_eq!(result, (5..=30).collect::<Vec<_>>());
 }
 
@@ -370,10 +367,10 @@ async fn test_start_and_end_index() {
                 result.push(cp.index)
             }
             Err(status) if status.code() == tonic::Code::NotFound => break,
-            Err(e) => panic!("Unexpected error: {:?}", e),
+            Err(e) => panic!("Unexpected error: {e:?}"),
         }
     }
-    println!("Result: {:?}", result);
+    println!("Result: {result:?}");
     assert_eq!(result, (3..=7).collect::<Vec<_>>());
 }
 
@@ -402,10 +399,10 @@ async fn test_end_index_only() {
         match res {
             Ok(cp) => result.push(cp.index),
             Err(status) if status.code() == tonic::Code::NotFound => break,
-            Err(e) => panic!("Unexpected error: {:?}", e),
+            Err(e) => panic!("Unexpected error: {e:?}"),
         }
     }
-    println!("Result: {:?}", result);
+    println!("Result: {result:?}");
     assert_eq!(result, vec![4]);
 }
 
@@ -430,20 +427,21 @@ async fn test_future_end_index_only_full() {
         .into_inner();
     println!("Collecting results for test_end_index_only_full");
     let mut result = Vec::new();
-    while let Some(res) = stream.next().await {
+    if let Some(res) = stream.next().await {
         match res {
             Ok(cp) => match iota_grpc_api::client::GrpcNodeClient::deserialize_checkpoint(&cp) {
                 Ok(iota_grpc_api::client::CheckpointContent::Data(checkpoint_data)) => {
                     result.push(checkpoint_data.checkpoint_summary.sequence_number);
-                    break;
                 }
                 _ => panic!("Expected checkpoint data but got summary or error"),
             },
-            Err(status) if status.code() == tonic::Code::NotFound => break,
-            Err(e) => panic!("Unexpected error: {:?}", e),
+            Err(status) if status.code() == tonic::Code::NotFound => {
+                // Handle not found case
+            }
+            Err(e) => panic!("Unexpected error: {e:?}"),
         }
     }
-    println!("Result: {:?}", result);
+    println!("Result: {result:?}");
     assert_eq!(result, vec![100]);
 }
 
@@ -478,11 +476,11 @@ async fn test_both_indices_omitted() {
             match res {
                 Ok(cp) => result.push(cp.index),
                 Err(status) if status.code() == tonic::Code::NotFound => break,
-                Err(e) => panic!("Unexpected error: {:?}", e),
+                Err(e) => panic!("Unexpected error: {e:?}"),
             }
         }
     }
-    println!("Result: {:?}", result);
+    println!("Result: {result:?}");
     // The first 11 should be 0..=10 (buffered), then live ones (11, 12, ...)
     assert_eq!(&result[..], &(10..=24).collect::<Vec<_>>()[..]);
 }
@@ -554,7 +552,7 @@ async fn test_gap_fill_with_slow_client() {
             for i in 11..=200u64 {
                 let (cert, data) = mock_cert_data(i);
                 checkpoints.lock().unwrap().insert(i);
-                println!("[gRPC] Producer inserted checkpoint {}", i);
+                println!("[gRPC] Producer inserted checkpoint {i}");
                 let _ = grpc_checkpoint_summary_tx
                     .send(Arc::new(GrpcCertifiedCheckpointSummary::from(cert)));
                 let _ = grpc_checkpoint_data_tx.send(Arc::new(GrpcCheckpointData::from(data)));

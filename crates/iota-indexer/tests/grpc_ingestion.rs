@@ -9,7 +9,7 @@ use tokio_util::sync::CancellationToken;
 async fn test_grpc_checkpoint_ingestion() {
     // Start a test cluster with gRPC enabled
     let grpc_port = 50062u16;
-    let grpc_addr = format!("127.0.0.1:{}", grpc_port);
+    let grpc_addr = format!("127.0.0.1:{grpc_port}");
     let cluster = TestClusterBuilder::new()
         .with_num_validators(1)
         .with_fullnode_grpc_api_address(grpc_addr.parse().expect("Invalid gRPC address"))
@@ -26,7 +26,7 @@ async fn test_grpc_checkpoint_ingestion() {
         db_url.clone(),
         true,
         None,
-        format!("http://{}", grpc_addr),
+        format!("http://{grpc_addr}"),
         None,
         cancel.clone(),
     )
@@ -36,7 +36,7 @@ async fn test_grpc_checkpoint_ingestion() {
     tokio::time::timeout(std::time::Duration::from_secs(3), async {
         loop {
             if let Ok((min_cp, max_cp)) = store.get_available_checkpoint_range().await {
-                if min_cp <= 0 && max_cp >= 3 {
+                if min_cp == 0 && max_cp >= 3 {
                     break;
                 }
             }
@@ -53,7 +53,7 @@ async fn test_grpc_checkpoint_ingestion() {
             let latest_cp = store.get_latest_checkpoint_sequence_number().await.unwrap();
             if let Some(seq) = latest_cp {
                 count += 1;
-                println!("[gRPC][Indexer] Latest checkpoint: {}", seq);
+                println!("[gRPC][Indexer] Latest checkpoint: {seq}");
                 if count > 6 {
                     break;
                 }

@@ -15,13 +15,16 @@ use iota_types::{
 };
 use object_store::{DynObjectStore, path::Path};
 use tokio::sync::Mutex;
-use tracing;
 
 use crate::workers::blob::{CHECKPOINT_FILE_SUFFIX, INGESTION_DIR_NAME, LIVE_DIR_NAME};
 
 pub struct GrpcBlobWorker {
     remote_store: Arc<DynObjectStore>,
     grpc_url: String,
+    // TODO: Note that this is for future extension that we need to defined a reasonable chunk
+    // size, as BlobTaskConfig and BlobWorker. Now we don't have this size limitation for ease of
+    // our testing and try run.
+    #[allow(dead_code)]
     checkpoint_chunk_size_mb: u64,
     current_epoch: Arc<Mutex<u64>>,
 }

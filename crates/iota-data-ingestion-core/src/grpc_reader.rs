@@ -3,7 +3,6 @@
 
 use std::sync::Arc;
 
-use anyhow;
 use iota_grpc_api::client::GrpcNodeClient;
 use iota_rest_api::CheckpointData;
 use iota_types::messages_checkpoint::CheckpointSequenceNumber;

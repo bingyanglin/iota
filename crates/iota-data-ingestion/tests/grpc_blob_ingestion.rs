@@ -16,7 +16,7 @@ use tokio_stream::StreamExt;
 async fn test_grpc_blob_worker_logic() {
     // Start a test cluster with gRPC enabled
     let grpc_port = 50063u16;
-    let grpc_addr = format!("127.0.0.1:{}", grpc_port);
+    let grpc_addr = format!("127.0.0.1:{grpc_port}");
     let cluster = TestClusterBuilder::new()
         .with_num_validators(1)
         .with_fullnode_grpc_api_address(grpc_addr.parse().expect("Invalid gRPC address"))
@@ -29,7 +29,7 @@ async fn test_grpc_blob_worker_logic() {
     // Simulate a stale local watermark (behind the node's first available
     // checkpoint)
     let stale_epoch = 0u64; // Start with epoch 0, but node may be at a later epoch
-    let grpc_url = format!("http://{}", grpc_addr);
+    let grpc_url = format!("http://{grpc_addr}");
     let remote_store: std::sync::Arc<object_store::DynObjectStore> =
         std::sync::Arc::new(InMemory::new());
     let worker = GrpcBlobWorker::new(
@@ -47,7 +47,7 @@ async fn test_grpc_blob_worker_logic() {
         .stream_checkpoints(None, Some(4), Some(true))
         .await
         .expect("failed to stream checkpoints");
-    while let Some(Ok(checkpoint)) = stream.next().await {
+    if let Some(Ok(checkpoint)) = stream.next().await {
         let checkpoint_data: CheckpointData =
             match GrpcNodeClient::deserialize_checkpoint(&checkpoint)
                 .expect("failed to deserialize checkpoint")
@@ -66,14 +66,12 @@ async fn test_grpc_blob_worker_logic() {
         // Assert the checkpoint index is 4 before processing
         assert_eq!(checkpoint.index, 4, "Should have streamed checkpoint 4");
 
-        println!("Checkpoint data: {:?}", checkpoint_data);
+        println!("Checkpoint data: {checkpoint_data:?}");
 
         let checkpoint_data_arc = std::sync::Arc::new(checkpoint_data.clone());
         worker
             .process_checkpoint(checkpoint_data_arc)
             .await
             .expect("worker should process checkpoint without error");
-
-        break;
     }
 }

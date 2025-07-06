@@ -6392,7 +6392,6 @@ dependencies = [
  "async-stream",
  "bcs",
  "futures",
- "iota-rest-api",
  "iota-types",
  "move-core-types",
  "prost",
@@ -6490,7 +6489,6 @@ dependencies = [
  "tokio-stream",
  "tokio-util 0.7.12",
  "tonic 0.13.1",
- "tonic-build",
  "tracing",
  "url",
 ]

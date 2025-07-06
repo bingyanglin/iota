@@ -422,8 +422,7 @@ impl<R: rand::RngCore + rand::CryptoRng> SwarmBuilder<R> {
 
         // Add gRPC address/port wiring
         if let Some(grpc_addr) = &self.fullnode_grpc_api_address {
-            fullnode_config_builder =
-                fullnode_config_builder.with_grpc_api_address(grpc_addr.clone());
+            fullnode_config_builder = fullnode_config_builder.with_grpc_api_address(*grpc_addr);
         }
 
         if self.fullnode_count > 0 {
