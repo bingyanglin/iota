@@ -16,7 +16,6 @@ pub enum CheckpointData {
 }
 
 /// Forward-compatible versioned checkpoint summary for gRPC streaming.
-/// Designed to support future core type evolution.
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub enum CertifiedCheckpointSummary {
     V1(crate::messages_checkpoint::CertifiedCheckpointSummary),
