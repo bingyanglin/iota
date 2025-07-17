@@ -801,8 +801,7 @@ impl TestCluster {
         checkpoint_sequence_number: u64,
         timeout: Option<Duration>,
     ) {
-        // This is only used for gRPC profiling tests
-        let timeout = timeout.unwrap_or(Duration::from_secs(3600));
+        let timeout = timeout.unwrap_or(Duration::from_secs(60));
         tokio::time::timeout(timeout, async {
             loop {
                 let fullnode_checkpoint = self
