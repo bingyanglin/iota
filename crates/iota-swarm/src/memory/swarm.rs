@@ -17,6 +17,7 @@ use iota_config::{
     IOTA_GENESIS_FILENAME, NodeConfig,
     node::{AuthorityOverloadConfig, DBCheckpointConfig, RunWithRange},
 };
+use iota_grpc_api;
 use iota_macros::nondeterministic;
 use iota_node::IotaNodeHandle;
 use iota_protocol_config::ProtocolVersion;
@@ -67,7 +68,7 @@ pub struct SwarmBuilder<R = OsRng> {
     submit_delay_step_override_millis: Option<u64>,
     state_accumulator_config: StateAccumulatorV1EnabledConfig,
     disable_fullnode_pruning: bool,
-    fullnode_grpc_api_address: Option<SocketAddr>,
+    fullnode_grpc_api_config: Option<iota_grpc_api::Config>,
 }
 
 impl SwarmBuilder {
@@ -97,7 +98,7 @@ impl SwarmBuilder {
             submit_delay_step_override_millis: None,
             state_accumulator_config: StateAccumulatorV1EnabledConfig::Global(true),
             disable_fullnode_pruning: false,
-            fullnode_grpc_api_address: None,
+            fullnode_grpc_api_config: None,
         }
     }
 }
@@ -129,7 +130,7 @@ impl<R> SwarmBuilder<R> {
             submit_delay_step_override_millis: self.submit_delay_step_override_millis,
             state_accumulator_config: self.state_accumulator_config,
             disable_fullnode_pruning: self.disable_fullnode_pruning,
-            fullnode_grpc_api_address: self.fullnode_grpc_api_address,
+            fullnode_grpc_api_config: self.fullnode_grpc_api_config,
         }
     }
 
@@ -289,8 +290,16 @@ impl<R> SwarmBuilder<R> {
         self
     }
 
+    pub fn with_fullnode_grpc_api_config(mut self, config: iota_grpc_api::Config) -> Self {
+        self.fullnode_grpc_api_config = Some(config);
+        self
+    }
+
     pub fn with_fullnode_grpc_api_address(mut self, addr: SocketAddr) -> Self {
-        self.fullnode_grpc_api_address = Some(addr);
+        self.fullnode_grpc_api_config = Some(iota_grpc_api::Config {
+            address: addr,
+            ..Default::default()
+        });
         self
     }
 
@@ -421,9 +430,9 @@ impl<R: rand::RngCore + rand::CryptoRng> SwarmBuilder<R> {
         }
 
         // Add gRPC address/port wiring
-        if let Some(grpc_addr) = &self.fullnode_grpc_api_address {
+        if let Some(grpc_config) = &self.fullnode_grpc_api_config {
             fullnode_config_builder = fullnode_config_builder
-                .with_grpc_api_address(*grpc_addr)
+                .with_grpc_api_address(grpc_config.address)
                 .with_enable_grpc_api(true);
         }
 

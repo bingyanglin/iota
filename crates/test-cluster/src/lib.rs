@@ -22,6 +22,7 @@ use iota_core::{
     authority_aggregator::AuthorityAggregator, authority_client::NetworkAuthorityClient,
 };
 use iota_genesis_builder::SnapshotSource;
+use iota_grpc_api;
 use iota_json_rpc_api::{IndexerApiClient, TransactionBuilderClient, WriteApiClient};
 use iota_json_rpc_types::{
     IotaExecutionStatus, IotaObjectDataOptions, IotaObjectResponse, IotaObjectResponseQuery,
@@ -996,7 +997,7 @@ pub struct TestClusterBuilder {
     fullnode_run_with_range: Option<RunWithRange>,
     fullnode_policy_config: Option<PolicyConfig>,
     fullnode_fw_config: Option<RemoteFirewallConfig>,
-    fullnode_grpc_api_address: Option<SocketAddr>,
+    fullnode_grpc_api_config: Option<iota_grpc_api::Config>,
     max_submit_position: Option<usize>,
     submit_delay_step_override_millis: Option<u64>,
     validator_state_accumulator_config: StateAccumulatorV1EnabledConfig,
@@ -1026,7 +1027,7 @@ impl TestClusterBuilder {
             fullnode_run_with_range: None,
             fullnode_policy_config: None,
             fullnode_fw_config: None,
-            fullnode_grpc_api_address: None,
+            fullnode_grpc_api_config: None,
             max_submit_position: None,
             submit_delay_step_override_millis: None,
             validator_state_accumulator_config: StateAccumulatorV1EnabledConfig::Global(true),
@@ -1061,7 +1062,10 @@ impl TestClusterBuilder {
     }
 
     pub fn with_fullnode_grpc_api_address(mut self, addr: SocketAddr) -> Self {
-        self.fullnode_grpc_api_address = Some(addr);
+        self.fullnode_grpc_api_config = Some(iota_grpc_api::Config {
+            address: addr,
+            ..Default::default()
+        });
         self
     }
 
@@ -1342,8 +1346,8 @@ impl TestClusterBuilder {
             .with_fullnode_policy_config(self.fullnode_policy_config.clone())
             .with_fullnode_fw_config(self.fullnode_fw_config.clone());
 
-        if let Some(addr) = &self.fullnode_grpc_api_address {
-            builder = builder.with_fullnode_grpc_api_address(*addr);
+        if let Some(config) = &self.fullnode_grpc_api_config {
+            builder = builder.with_fullnode_grpc_api_config(config.clone());
         }
 
         if let Some(genesis_config) = self.genesis_config.take() {
@@ -1392,8 +1396,8 @@ impl TestClusterBuilder {
         if self.disable_fullnode_pruning {
             builder = builder.with_disable_fullnode_pruning();
         }
-        if let Some(addr) = &self.fullnode_grpc_api_address {
-            builder = builder.with_fullnode_grpc_api_address(*addr);
+        if let Some(config) = &self.fullnode_grpc_api_config {
+            builder = builder.with_fullnode_grpc_api_config(config.clone());
         }
 
         let mut swarm = builder.build();
