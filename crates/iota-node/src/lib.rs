@@ -254,9 +254,8 @@ pub struct IotaNode {
     shutdown_channel_tx: broadcast::Sender<Option<RunWithRange>>,
 
     /// Broadcast channels for gRPC checkpoint streaming
-    grpc_checkpoint_summary_tx:
-        Option<tokio::sync::broadcast::Sender<Arc<CertifiedCheckpointSummary>>>,
-    grpc_checkpoint_data_tx: Option<tokio::sync::broadcast::Sender<Arc<CheckpointData>>>,
+    grpc_checkpoint_summary_tx: Option<broadcast::Sender<Arc<CertifiedCheckpointSummary>>>,
+    grpc_checkpoint_data_tx: Option<broadcast::Sender<Arc<CheckpointData>>>,
 
     /// AuthorityAggregator of the network, created at start and beginning of
     /// each epoch. Use ArcSwap so that we could mutate it without taking
@@ -848,9 +847,8 @@ impl IotaNode {
             if let Some(grpc_config) = &config.grpc_api_config {
                 let grpc_api_address = grpc_config.address;
                 let (summary_tx, _) =
-                    tokio::sync::broadcast::channel(grpc_config.checkpoint_broadcast_buffer_size);
-                let (data_tx, _) =
-                    tokio::sync::broadcast::channel(grpc_config.checkpoint_broadcast_buffer_size);
+                    broadcast::channel(grpc_config.checkpoint_broadcast_buffer_size);
+                let (data_tx, _) = broadcast::channel(grpc_config.checkpoint_broadcast_buffer_size);
                 let rocks = RocksDbStore::new(
                     cache_traits.clone(),
                     committee_store.clone(),
