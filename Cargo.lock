@@ -6472,7 +6472,6 @@ dependencies = [
  "move-bytecode-utils",
  "move-core-types",
  "prometheus",
- "prost",
  "rayon",
  "regex",
  "secrecy",
