@@ -261,8 +261,14 @@ pub struct NodeConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub iota_names_config: Option<IotaNamesConfig>,
 
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub grpc_api_address: Option<SocketAddr>,
+    /// Flag to enable the gRPC API.
+    #[serde(default = "bool_false")]
+    pub enable_grpc_api: bool,
+    #[serde(
+        default = "default_grpc_api_config",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub grpc_api_config: Option<iota_grpc_api::Config>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -396,6 +402,10 @@ pub fn default_json_rpc_address() -> SocketAddr {
     SocketAddr::new(IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)), 9000)
 }
 
+pub fn default_grpc_api_config() -> Option<iota_grpc_api::Config> {
+    None
+}
+
 pub fn default_concurrency_limit() -> Option<usize> {
     Some(DEFAULT_GRPC_CONCURRENCY_LIMIT)
 }
@@ -406,6 +416,10 @@ pub fn default_end_of_epoch_broadcast_channel_capacity() -> usize {
 
 pub fn bool_true() -> bool {
     true
+}
+
+pub fn bool_false() -> bool {
+    false
 }
 
 fn is_true(value: &bool) -> bool {

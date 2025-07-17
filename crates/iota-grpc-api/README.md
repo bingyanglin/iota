@@ -128,7 +128,7 @@ flowchart LR
 | **Data Transfer**    | Polling (pull)                          | Streaming (push)                                    |
 | **Protocol**         | HTTP/1.1 or HTTP/2, JSON/BCS            | HTTP/2, Protocol Buffers (protobuf)                 |
 | **Efficiency**       | Higher latency (polling interval)       | Lower latency (real-time streaming)                 |
-| **Setup**            | `enable_rest_api = true` in node config | `grpc_api_address` set in node config               |
+| **Setup**            | `enable_rest_api = true` in node config | `enable_grpc_api = true` and `grpc_api_config` set in node config               |
 | **Integration Test** | Yes (REST tests)                        | Yes (`grpc_ingestion.rs`, `grpc_blob_ingestion.rs`) |
 
 ## In summary
@@ -141,11 +141,21 @@ flowchart LR
 
 ## Usage
 
-The `iota-grpc-api` crate defines the gRPC service and its messages. The `iota-node` crate integrates and starts this gRPC server if a `grpc_api_address` is configured.
+The `iota-grpc-api` crate defines the gRPC service and its messages. The `iota-node` crate integrates and starts this gRPC server if `enable_grpc_api` is set to `true` and `grpc_api_config` is configured.
 
 A shared gRPC client (`GrpcNodeClient`) is provided by this crate and should be used by downstream consumers (e.g., `iota-indexer`, `iota-data-ingestion`) to connect and stream checkpoints. This ensures all consumers use the same, up-to-date protocol and data model.
 
-**Example:**
+**Configuration Example:**
+
+```toml
+# In your node config file (e.g., fullnode.yaml)
+enable_grpc_api: true
+grpc_api_config:
+  address: "0.0.0.0:50051"
+  checkpoint_broadcast_buffer_size: 100
+```
+
+**Client Example:**
 
 ```rust
 use iota_grpc_api::client::GrpcNodeClient;

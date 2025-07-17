@@ -76,8 +76,7 @@ use iota_core::{
     validator_tx_finalizer::ValidatorTxFinalizer,
 };
 use iota_grpc_api::{
-    CHECKPOINT_BROADCAST_BUFFER_SIZE, CheckpointGrpcService,
-    checkpoint::checkpoint_service_server::CheckpointServiceServer,
+    CheckpointGrpcService, checkpoint::checkpoint_service_server::CheckpointServiceServer,
 };
 use iota_json_rpc::{
     JsonRpcServerBuilder, coin_api::CoinReadApi, governance_api::GovernanceReadApi,
@@ -845,29 +844,37 @@ impl IotaNode {
 
         // --- Create shared checkpoint broadcast channel and buffer for gRPC and
         // checkpoint logic ---
-        let (grpc_checkpoint_summary_tx, grpc_checkpoint_data_tx) = if let Some(grpc_api_address) =
-            config.grpc_api_address
-        {
-            let (summary_tx, _) = tokio::sync::broadcast::channel(CHECKPOINT_BROADCAST_BUFFER_SIZE);
-            let (data_tx, _) = tokio::sync::broadcast::channel(CHECKPOINT_BROADCAST_BUFFER_SIZE);
-            let rocks = RocksDbStore::new(
-                cache_traits.clone(),
-                committee_store.clone(),
-                checkpoint_store.clone(),
-            );
-            let rest_read_store = std::sync::Arc::new(RestReadStore::new(state.clone(), rocks));
-            // Use the shared broadcast channel and buffer for gRPC checkpoint streaming
-            let grpc_service =
-                CheckpointGrpcService::new(rest_read_store, summary_tx.clone(), data_tx.clone());
-            tokio::spawn(async move {
-                info!("Starting gRPC server on {grpc_api_address}");
-                tonic::transport::Server::builder()
-                    .add_service(CheckpointServiceServer::new(grpc_service))
-                    .serve(grpc_api_address)
-                    .await
-                    .expect("gRPC server failed");
-            });
-            (Some(summary_tx), Some(data_tx))
+        let (grpc_checkpoint_summary_tx, grpc_checkpoint_data_tx) = if config.enable_grpc_api {
+            if let Some(grpc_config) = &config.grpc_api_config {
+                let grpc_api_address = grpc_config.address;
+                let (summary_tx, _) =
+                    tokio::sync::broadcast::channel(grpc_config.checkpoint_broadcast_buffer_size);
+                let (data_tx, _) =
+                    tokio::sync::broadcast::channel(grpc_config.checkpoint_broadcast_buffer_size);
+                let rocks = RocksDbStore::new(
+                    cache_traits.clone(),
+                    committee_store.clone(),
+                    checkpoint_store.clone(),
+                );
+                let rest_read_store = std::sync::Arc::new(RestReadStore::new(state.clone(), rocks));
+                // Use the shared broadcast channel and buffer for gRPC checkpoint streaming
+                let grpc_service = CheckpointGrpcService::new(
+                    rest_read_store,
+                    summary_tx.clone(),
+                    data_tx.clone(),
+                );
+                tokio::spawn(async move {
+                    info!("Starting gRPC server on {grpc_api_address}");
+                    tonic::transport::Server::builder()
+                        .add_service(CheckpointServiceServer::new(grpc_service))
+                        .serve(grpc_api_address)
+                        .await
+                        .expect("gRPC server failed");
+                });
+                (Some(summary_tx), Some(data_tx))
+            } else {
+                panic!("gRPC API is enabled but no configuration provided");
+            }
         } else {
             (None, None)
         };

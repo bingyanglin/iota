@@ -231,7 +231,8 @@ impl ValidatorConfigBuilder {
             verifier_signing_config: VerifierSigningConfig::default(),
             enable_db_write_stall: None,
             iota_names_config: None,
-            grpc_api_address: None,
+            enable_grpc_api: false,
+            grpc_api_config: None,
         }
     }
 
@@ -278,6 +279,7 @@ pub struct FullnodeConfigBuilder {
     fw_config: Option<RemoteFirewallConfig>,
     data_ingestion_dir: Option<PathBuf>,
     disable_pruning: bool,
+    enable_grpc_api: bool,
     grpc_api_address: Option<SocketAddr>,
 }
 
@@ -401,6 +403,11 @@ impl FullnodeConfigBuilder {
 
     pub fn with_grpc_api_address(mut self, addr: SocketAddr) -> Self {
         self.grpc_api_address = Some(addr);
+        self
+    }
+
+    pub fn with_enable_grpc_api(mut self, enable: bool) -> Self {
+        self.enable_grpc_api = enable;
         self
     }
 
@@ -549,7 +556,11 @@ impl FullnodeConfigBuilder {
             verifier_signing_config: VerifierSigningConfig::default(),
             enable_db_write_stall: None,
             iota_names_config: None,
-            grpc_api_address: self.grpc_api_address,
+            enable_grpc_api: self.enable_grpc_api,
+            grpc_api_config: self.grpc_api_address.map(|addr| iota_grpc_api::Config {
+                address: addr,
+                ..Default::default()
+            }),
         }
     }
 

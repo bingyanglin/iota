@@ -9,7 +9,7 @@ use std::{
 };
 
 use iota_grpc_api::{
-    CHECKPOINT_BROADCAST_BUFFER_SIZE, CheckpointGrpcService,
+    CheckpointGrpcService,
     checkpoint::{CheckpointStreamRequest, checkpoint_service_server::CheckpointService},
 };
 use iota_types::{
@@ -272,10 +272,11 @@ impl RestStateReader for MockRestStateReader {
 
 async fn test_service() -> CheckpointGrpcService {
     let mock = Arc::new(MockRestStateReader::new_from_iter(0..=10));
+    let config = iota_grpc_api::Config::default();
     let (grpc_checkpoint_summary_tx, _) =
-        tokio::sync::broadcast::channel(CHECKPOINT_BROADCAST_BUFFER_SIZE);
+        tokio::sync::broadcast::channel(config.checkpoint_broadcast_buffer_size);
     let (grpc_checkpoint_data_tx, _) =
-        tokio::sync::broadcast::channel(CHECKPOINT_BROADCAST_BUFFER_SIZE);
+        tokio::sync::broadcast::channel(config.checkpoint_broadcast_buffer_size);
     CheckpointGrpcService::new(mock, grpc_checkpoint_summary_tx, grpc_checkpoint_data_tx)
 }
 
