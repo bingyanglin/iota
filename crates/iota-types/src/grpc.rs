@@ -4,7 +4,7 @@
 //! gRPC-specific versioned types for forward compatibility.
 //!
 //! These types provide versioning for gRPC streaming while positioning
-//! for future core type evolution. When core checkpoint types themselves
+//! for future core type evolution. When core types themselves
 //! need versioning, these wrappers will evolve naturally.
 
 use serde::{Deserialize, Serialize};
