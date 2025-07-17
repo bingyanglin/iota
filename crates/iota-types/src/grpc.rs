@@ -10,7 +10,6 @@
 use serde::{Deserialize, Serialize};
 
 /// Forward-compatible versioned checkpoint data for gRPC streaming.
-/// Designed to support future core type evolution.
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub enum CheckpointData {
     V1(crate::full_checkpoint_content::CheckpointData),
