@@ -22,7 +22,6 @@ use iota_core::{
     authority_aggregator::AuthorityAggregator, authority_client::NetworkAuthorityClient,
 };
 use iota_genesis_builder::SnapshotSource;
-use iota_grpc_api;
 use iota_json_rpc_api::{IndexerApiClient, TransactionBuilderClient, WriteApiClient};
 use iota_json_rpc_types::{
     IotaExecutionStatus, IotaObjectDataOptions, IotaObjectResponse, IotaObjectResponseQuery,
