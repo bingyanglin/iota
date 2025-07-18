@@ -103,9 +103,6 @@ pub struct JsonRpcConfig {
 
     #[clap(long)]
     pub rpc_client_url: String,
-
-    #[clap(long)]
-    pub grpc_client_url: Option<String>,
 }
 
 #[derive(Args, Debug, Default, Clone)]
@@ -444,7 +441,6 @@ pub mod deprecated {
                         old_conf.rpc_server_port,
                     ),
                     rpc_client_url: old_conf.rpc_client_url,
-                    grpc_client_url: old_conf.grpc_client_url,
                 })
             } else if old_conf.fullnode_sync_worker {
                 Command::Indexer {

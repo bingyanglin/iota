@@ -142,7 +142,6 @@ pub async fn start_test_indexer_impl(
                 iota_names_options: IotaNamesOptions::default(),
                 rpc_address: reader_mode_rpc_url.parse().unwrap(),
                 rpc_client_url: rpc_url,
-                grpc_client_url: None,
             };
             let pool = store.blocking_cp();
             tokio::spawn(async move { Indexer::start_reader(&config, &registry, pool).await })
