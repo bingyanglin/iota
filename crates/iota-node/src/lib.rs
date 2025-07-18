@@ -802,7 +802,7 @@ impl IotaNode {
 
         let http_server = build_http_server(
             state.clone(),
-            state_sync_store,
+            state_sync_store.clone(),
             &transaction_orchestrator.clone(),
             &config,
             &prometheus_registry,
@@ -849,12 +849,10 @@ impl IotaNode {
                 let (summary_tx, _) =
                     broadcast::channel(grpc_config.checkpoint_broadcast_buffer_size);
                 let (data_tx, _) = broadcast::channel(grpc_config.checkpoint_broadcast_buffer_size);
-                let rocks = RocksDbStore::new(
-                    cache_traits.clone(),
-                    committee_store.clone(),
-                    checkpoint_store.clone(),
-                );
-                let rest_read_store = std::sync::Arc::new(RestReadStore::new(state.clone(), rocks));
+                let rest_read_store = std::sync::Arc::new(RestReadStore::new(
+                    state.clone(),
+                    state_sync_store.clone(),
+                ));
                 // Use the shared broadcast channel and buffer for gRPC checkpoint streaming
                 let grpc_service = CheckpointGrpcService::new(
                     rest_read_store,
