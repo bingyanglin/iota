@@ -160,7 +160,7 @@ async fn test_checkpoint_sync_performance_file() {
             let blob = Blob::encode(&checkpoint_data, BlobEncoding::Bcs)
                 .expect("encode checkpoint as blob");
 
-            let file_path = checkpoint_dir.join(format!("{}.chk", cp.index));
+            let file_path = checkpoint_dir.join(format!("{}.chk", cp.sequence_number));
             std::fs::write(file_path, blob.to_bytes()).expect("write checkpoint file");
         }
         println!(

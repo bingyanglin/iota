@@ -113,7 +113,7 @@ where
     fn create_checkpoint_response(&self, item: &Arc<T>, is_full: bool) -> CheckpointStreamResult {
         BcsData::serialize_from(item)
             .map(|data| checkpoint::Checkpoint {
-                index: self.get_index(item),
+                sequence_number: self.get_index(item),
                 bcs_data: Some(data),
                 is_full,
             })
@@ -307,8 +307,8 @@ impl CheckpointService for CheckpointGrpcService {
         request: Request<checkpoint::CheckpointStreamRequest>,
     ) -> Result<Response<Self::StreamCheckpointsStream>, Status> {
         let req = request.into_inner();
-        let start = req.start_index;
-        let end = req.end_index;
+        let start = req.start_sequence_number;
+        let end = req.end_sequence_number;
         let full = req.full;
 
         let stream: Self::StreamCheckpointsStream = if full.unwrap_or(false) {

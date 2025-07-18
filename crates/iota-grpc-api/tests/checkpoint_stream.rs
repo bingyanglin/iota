@@ -300,7 +300,7 @@ fn spawn_checkpoint_sender(
 }
 
 #[tokio::test]
-async fn test_start_index_only() {
+async fn test_start_sequence_number_only() {
     let svc = test_service().await;
 
     spawn_checkpoint_sender(
@@ -309,8 +309,8 @@ async fn test_start_index_only() {
         11,
     );
     let req = CheckpointStreamRequest {
-        start_index: Some(5),
-        end_index: None,
+        start_sequence_number: Some(5),
+        end_sequence_number: None,
         full: Some(true),
     };
     let mut stream = svc
@@ -318,16 +318,16 @@ async fn test_start_index_only() {
         .await
         .unwrap()
         .into_inner();
-    println!("Collecting results for test_start_index_only");
+    println!("Collecting results for test_start_sequence_number_only");
     let mut result = Vec::new();
     while let Some(res) = stream.next().await {
         match res {
             Ok(cp) => {
                 // Only collect the expected range
-                if cp.index > 30 {
+                if cp.sequence_number > 30 {
                     break;
                 }
-                result.push(cp.index)
+                result.push(cp.sequence_number)
             }
             Err(status) if status.code() == tonic::Code::NotFound => break,
             Err(e) => panic!("Unexpected error: {e:?}"),
@@ -338,7 +338,7 @@ async fn test_start_index_only() {
 }
 
 #[tokio::test]
-async fn test_start_and_end_index() {
+async fn test_start_and_end_sequence_number() {
     let svc = test_service().await;
 
     spawn_checkpoint_sender(
@@ -347,8 +347,8 @@ async fn test_start_and_end_index() {
         100,
     );
     let req = CheckpointStreamRequest {
-        start_index: Some(3),
-        end_index: Some(7),
+        start_sequence_number: Some(3),
+        end_sequence_number: Some(7),
         full: Some(false),
     };
     let mut stream = svc
@@ -356,16 +356,16 @@ async fn test_start_and_end_index() {
         .await
         .unwrap()
         .into_inner();
-    println!("Collecting results for test_start_and_end_index");
+    println!("Collecting results for test_start_and_end_sequence_number");
     let mut result = Vec::new();
     while let Some(res) = stream.next().await {
         match res {
             Ok(cp) => {
                 // Only collect the expected range
-                if cp.index > 7 {
+                if cp.sequence_number > 7 {
                     break;
                 }
-                result.push(cp.index)
+                result.push(cp.sequence_number)
             }
             Err(status) if status.code() == tonic::Code::NotFound => break,
             Err(e) => panic!("Unexpected error: {e:?}"),
@@ -376,7 +376,7 @@ async fn test_start_and_end_index() {
 }
 
 #[tokio::test]
-async fn test_end_index_only() {
+async fn test_end_sequence_number_only() {
     let svc = test_service().await;
 
     spawn_checkpoint_sender(
@@ -385,8 +385,8 @@ async fn test_end_index_only() {
         100,
     );
     let req = CheckpointStreamRequest {
-        start_index: None,
-        end_index: Some(4),
+        start_sequence_number: None,
+        end_sequence_number: Some(4),
         full: Some(false),
     };
     let mut stream = svc
@@ -394,11 +394,11 @@ async fn test_end_index_only() {
         .await
         .unwrap()
         .into_inner();
-    println!("Collecting results for test_end_index_only");
+    println!("Collecting results for test_end_sequence_number_only");
     let mut result = Vec::new();
     while let Some(res) = stream.next().await {
         match res {
-            Ok(cp) => result.push(cp.index),
+            Ok(cp) => result.push(cp.sequence_number),
             Err(status) if status.code() == tonic::Code::NotFound => break,
             Err(e) => panic!("Unexpected error: {e:?}"),
         }
@@ -408,7 +408,7 @@ async fn test_end_index_only() {
 }
 
 #[tokio::test]
-async fn test_future_end_index_only_full() {
+async fn test_future_end_sequence_number_only_full() {
     let svc = test_service().await;
     spawn_checkpoint_sender(
         svc.grpc_checkpoint_summary_tx.clone(),
@@ -417,8 +417,8 @@ async fn test_future_end_index_only_full() {
     );
 
     let req = CheckpointStreamRequest {
-        start_index: None,
-        end_index: Some(100),
+        start_sequence_number: None,
+        end_sequence_number: Some(100),
         full: Some(true),
     };
     let mut stream = svc
@@ -426,7 +426,7 @@ async fn test_future_end_index_only_full() {
         .await
         .unwrap()
         .into_inner();
-    println!("Collecting results for test_end_index_only_full");
+    println!("Collecting results for test_future_end_sequence_number_only_full");
     let mut result = Vec::new();
     if let Some(res) = stream.next().await {
         match res {
@@ -450,8 +450,8 @@ async fn test_future_end_index_only_full() {
 async fn test_both_indices_omitted() {
     let svc = test_service().await;
     let req = CheckpointStreamRequest {
-        start_index: None,
-        end_index: None,
+        start_sequence_number: None,
+        end_sequence_number: None,
         full: Some(false),
     };
 
@@ -475,7 +475,7 @@ async fn test_both_indices_omitted() {
     for _ in 0..15 {
         if let Some(res) = stream.next().await {
             match res {
-                Ok(cp) => result.push(cp.index),
+                Ok(cp) => result.push(cp.sequence_number),
                 Err(status) if status.code() == tonic::Code::NotFound => break,
                 Err(e) => panic!("Unexpected error: {e:?}"),
             }
@@ -506,8 +506,8 @@ async fn test_historical_to_live_gap_fill() {
 
     // Client requests from 0 (historical)
     let req = CheckpointStreamRequest {
-        start_index: Some(0),
-        end_index: None,
+        start_sequence_number: Some(0),
+        end_sequence_number: None,
         full: Some(true),
     };
     let mut stream = svc
@@ -564,8 +564,8 @@ async fn test_gap_fill_with_slow_client() {
 
     // Client: slow consumer
     let req = CheckpointStreamRequest {
-        start_index: Some(0),
-        end_index: None,
+        start_sequence_number: Some(0),
+        end_sequence_number: None,
         full: Some(true),
     };
     let mut stream = svc

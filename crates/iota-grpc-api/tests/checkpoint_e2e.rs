@@ -35,8 +35,8 @@ async fn e2e_stream_checkpoints() {
     // Request all checkpoints
     println!("Sending gRPC stream request");
     let request = Request::new(CheckpointStreamRequest {
-        start_index: None,
-        end_index: None,
+        start_sequence_number: None,
+        end_sequence_number: None,
         full: None,
     });
     let mut stream = client
@@ -55,7 +55,7 @@ async fn e2e_stream_checkpoints() {
         match res {
             Ok(cp) => {
                 println!("[gRPC] Received checkpoint: {cp:?}");
-                indices.push(cp.index);
+                indices.push(cp.sequence_number);
                 count += 1;
                 if count >= 2 {
                     break;
@@ -132,24 +132,27 @@ async fn test_get_epoch_first_checkpoint_sequence_number() {
             Ok(cp) => match GrpcNodeClient::deserialize_checkpoint(&cp) {
                 Ok(iota_grpc_api::client::CheckpointContent::Summary(summary)) => {
                     let epoch = summary.data().epoch;
-                    println!("Checkpoint index: {}, epoch: {}", cp.index, epoch);
-                    all_indices.push(cp.index);
+                    println!(
+                        "Checkpoint sequence_number: {}, epoch: {}",
+                        cp.sequence_number, epoch
+                    );
+                    all_indices.push(cp.sequence_number);
                     all_epochs.push(epoch);
-                    if cp.index > 50 {
+                    if cp.sequence_number > 50 {
                         break;
                     }
                 }
                 Ok(iota_grpc_api::client::CheckpointContent::Data(_)) => {
                     println!(
-                        "[gRPC] Expected checkpoint summary but received data at index {}",
-                        cp.index
+                        "[gRPC] Expected checkpoint summary but received data at sequence_number {}",
+                        cp.sequence_number
                     );
                     break;
                 }
                 Err(e) => {
                     println!(
-                        "[gRPC] Failed to deserialize checkpoint at index {}: {:?}",
-                        cp.index, e
+                        "[gRPC] Failed to deserialize checkpoint at sequence_number {}: {:?}",
+                        cp.sequence_number, e
                     );
                     if let Some(bcs_data) = &cp.bcs_data {
                         println!("[gRPC] Raw checkpoint data: {:?}", bcs_data.data);

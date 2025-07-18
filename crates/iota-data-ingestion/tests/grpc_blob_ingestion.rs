@@ -10,8 +10,9 @@ use test_cluster::TestClusterBuilder;
 use tokio_stream::StreamExt;
 
 /// Integration test: Streams the full CheckpointData for a single checkpoint
-/// (using full=true, start_index=None, end_index=Some(idx)), decodes it, and
-/// passes it to the GrpcBlobWorker to verify ingestion logic.
+/// (using full=true, start_sequence_number=None,
+/// end_sequence_number=Some(idx)), decodes it, and passes it to the
+/// GrpcBlobWorker to verify ingestion logic.
 #[tokio::test]
 async fn test_grpc_blob_worker_logic() {
     // Start a test cluster with gRPC enabled
@@ -60,11 +61,14 @@ async fn test_grpc_blob_worker_logic() {
 
         println!(
             "Streamed full CheckpointData for checkpoint {}",
-            checkpoint.index
+            checkpoint.sequence_number
         );
 
-        // Assert the checkpoint index is 4 before processing
-        assert_eq!(checkpoint.index, 4, "Should have streamed checkpoint 4");
+        // Assert the checkpoint sequence number is 4 before processing
+        assert_eq!(
+            checkpoint.sequence_number, 4,
+            "Should have streamed checkpoint 4"
+        );
 
         println!("Checkpoint data: {checkpoint_data:?}");
 

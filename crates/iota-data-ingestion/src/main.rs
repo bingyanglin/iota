@@ -148,13 +148,13 @@ async fn main() -> Result<()> {
                         .await?;
                     let mut current_epoch = 0u64;
                     if let Some(Ok(first_checkpoint)) = stream.next().await {
-                        if first_checkpoint.index > watermark {
+                        if first_checkpoint.sequence_number > watermark {
                             tracing::warn!(
                                 "Watermark {} is behind node's first available checkpoint {}. Resetting.",
                                 watermark,
-                                first_checkpoint.index
+                                first_checkpoint.sequence_number
                             );
-                            watermark = first_checkpoint.index;
+                            watermark = first_checkpoint.sequence_number;
                             executor
                                 .update_watermark(task_name.clone(), watermark)
                                 .await?;
@@ -171,7 +171,7 @@ async fn main() -> Result<()> {
                                 tracing::info!(
                                     "Extracted current epoch {} from checkpoint {}",
                                     current_epoch,
-                                    first_checkpoint.index
+                                    first_checkpoint.sequence_number
                                 );
                             } else {
                                 tracing::error!(
