@@ -24,16 +24,16 @@ For all cases, the `full` flag determines the data type:
 
 The four supported range patterns:
 
-- **Both `start_index` and `end_index` omitted:**
+- **Both `start_sequence_number` and `end_sequence_number` omitted:**
   - Streams the latest checkpoint and keeps streaming new ones as they arrive.
-- **Only `start_index` provided:**
-  - Streams from `start_index` and keeps streaming new ones as they arrive.
-- **Only `end_index` provided:**
-  - Streams only the checkpoint at `end_index`. Note that the end_index can be a future checkpoint, which is not streamed yet.
-- **Both `start_index` and `end_index` provided:**
-  - Streams from `start_index` to `end_index` (inclusive). Note that the end_index can be a future checkpoint, which is not streamed yet.
+- **Only `start_sequence_number` provided:**
+  - Streams from `start_sequence_number` and keeps streaming new ones as they arrive.
+- **Only `end_sequence_number` provided:**
+  - Streams only the checkpoint at `end_sequence_number`. Note that the end_sequence_number can be a future checkpoint, which is not streamed yet.
+- **Both `start_sequence_number` and `end_sequence_number` provided:**
+  - Streams from `start_sequence_number` to `end_sequence_number` (inclusive). Note that the end_sequence_number can be a future checkpoint, which is not streamed yet.
 
-The service does not attempt to compute a "latest" checkpoint index, making it robust to on-the-fly checkpoint generation.
+The service does not attempt to compute a "latest" checkpoint sequence number, making it robust to on-the-fly checkpoint generation.
 
 #### Streaming Flow and Gap Handling
 
@@ -41,15 +41,15 @@ The following flowchart illustrates how the `CheckpointGrpcService` handles hist
 
 ```mermaid
 flowchart TD
-    A["Client Request: StreamCheckpoints"] --> B{"Which indices are provided?"}
+    A["Client Request: StreamCheckpoints"] --> B{"Which sequence numbers are provided?"}
     B -- "Both omitted" --> C1["Start at latest checkpoint, enter Live Stream"]
-    B -- "Only start_index" --> C2["Fetch historical from start_index, then Live Stream"]
-    B -- "Only end_index" --> C3["Fetch only end_index checkpoint, then End"]
-    B -- "Both start and end" --> C4["Fetch historical from start_index to end_index, then End"]
+    B -- "Only start_sequence_number" --> C2["Fetch historical from start_sequence_number, then Live Stream"]
+    B -- "Only end_sequence_number" --> C3["Fetch only end_sequence_number checkpoint, then End"]
+    B -- "Both start and end" --> C4["Fetch historical from start_sequence_number to end_sequence_number, then End"]
 
     %% Historical Fetch Phase
-    C2 --> D1["For each index: get_item(idx) from DB"]
-    C4 --> D2["For each index: get_item(idx) from DB"]
+    C2 --> D1["For each sequence number: get_item(seq) from DB"]
+    C4 --> D2["For each sequence number: get_item(seq) from DB"]
     D1 --> E1{"Found in DB?"}
     D2 --> E2{"Found in DB?"}
     E1 -- "Yes" --> F1["Stream checkpoint to client"]
@@ -64,20 +64,20 @@ flowchart TD
     %% Live Stream Phase
     C1 --> H
     H --> I["Wait for broadcast channel"]
-    I --> J{"Received checkpoint idx"}
-    J -- "idx == last_sent+1" --> K1["Stream checkpoint, update last_sent"]
-    J -- "idx > last_sent+1" --> L1["Gap Detected"]
-    L1 --> M1["For each missing idx: Try get_item(idx) from DB"]
+    I --> J{"Received checkpoint seq"}
+    J -- "seq == last_sent+1" --> K1["Stream checkpoint, update last_sent"]
+    J -- "seq > last_sent+1" --> L1["Gap Detected"]
+    L1 --> M1["For each missing seq: Try get_item(seq) from DB"]
     M1 --> N1{"Found in DB?"}
     N1 -- "Yes" --> O1["Stream missing checkpoint, update last_sent"]
     N1 -- "No" --> P1["Wait for broadcast or skip"]
     O1 --> M1
     P1 --> I
     K1 --> I
-    J -- "idx <= last_sent" --> Q1["Duplicate/Out-of-order, skip"]
+    J -- "seq <= last_sent" --> Q1["Duplicate/Out-of-order, skip"]
     Q1 --> I
 
-    %% End Index Only
+    %% End Sequence Number Only
     C3 --> R1{"Found in DB?"}
     R1 -- "Yes" --> S1["Stream checkpoint, End"]
     R1 -- "No" --> T1["Wait for broadcast, then stream, End"]
@@ -87,7 +87,7 @@ flowchart TD
 
 - **Historical fetch**: Always tries to get each requested checkpoint from the DB first.
 - **Live stream**: Waits for new checkpoints on the broadcast channel. If a gap is detected (missed checkpoints), the service tries to fill the gap from the DB before resuming live streaming.
-- **End index only**: Only streams the requested checkpoint, from DB if possible, otherwise waits for it to appear on the broadcast channel.
+- **End sequence number only**: Only streams the requested checkpoint, from DB if possible, otherwise waits for it to appear on the broadcast channel.
 
 This logic ensures robust, real-time, and gap-free checkpoint streaming for all client request patterns.
 
@@ -194,18 +194,18 @@ The following tests have been added to ensure the correctness and robustness of 
 Located in `crates/iota-grpc-api/tests/`:
 
 - **`checkpoint_stream.rs`**
-  - **`test_start_index_only`**: Streams all available checkpoints starting from the specified `start_index` (5). The test collects checkpoints from 5 up to 30, covering both buffered and live-streamed checkpoints, and then ends.
-  - **`test_start_and_end_index`**: Streams checkpoints within the inclusive range defined by `start_index` (3) and `end_index` (7). The test collects checkpoints `[3, 4, 5, 6, 7]` and then ends, ensuring no live checkpoints are collected beyond the end index.
-  - **`test_end_index_only`**: Streams only the checkpoint at the specified `end_index` (4). The test collects `[4]` and then ends, verifying that only the requested checkpoint is streamed and the stream terminates immediately after.
-  - **`test_future_end_index_only_full`**: Streams only the checkpoint at a future `end_index` (e.g., 100). The test waits for the checkpoint to become available, collects it, and then ends.
-  - **`test_both_indices_omitted`**: Streams all available buffered checkpoints (0..=10) and then continues to collect live checkpoints as they are produced, up to index 24. The test collects checkpoints `[10, 11, 12, ..., 24]` to verify both buffered and live streaming.
+  - **`test_start_sequence_number_only`**: Streams all available checkpoints starting from the specified `start_sequence_number` (5). The test collects checkpoints from 5 up to 30, covering both buffered and live-streamed checkpoints, and then ends.
+  - **`test_start_and_end_sequence_number`**: Streams checkpoints within the inclusive range defined by `start_sequence_number` (3) and `end_sequence_number` (7). The test collects checkpoints `[3, 4, 5, 6, 7]` and then ends, ensuring no live checkpoints are collected beyond the end sequence number.
+  - **`test_end_sequence_number_only`**: Streams only the checkpoint at the specified `end_sequence_number` (4). The test collects `[4]` and then ends, verifying that only the requested checkpoint is streamed and the stream terminates immediately after.
+  - **`test_future_end_sequence_number_only_full`**: Streams only the checkpoint at a future `end_sequence_number` (e.g., 100). The test waits for the checkpoint to become available, collects it, and then ends.
+  - **`test_both_indices_omitted`**: Streams all available buffered checkpoints (0..=10) and then continues to collect live checkpoints as they are produced, up to sequence number 24. The test collects checkpoints `[10, 11, 12, ..., 24]` to verify both buffered and live streaming.
   - **`test_historical_to_live_gap_fill`**: Verifies that the client can stream a continuous range of checkpoints from historical storage and seamlessly transition to live streaming, filling any gaps from the DB if the client is slow or the broadcast buffer overflows.
   - **`test_gap_fill_with_slow_client`**: Simulates a slow client and verifies that all checkpoints from 0 to 20 are received in order, even if the client falls behind and the server must fill gaps from the DB.
 
 - **`checkpoint_e2e.rs`**
-  - **`e2e_stream_checkpoints`**: End-to-end test that connects to a real node and streams checkpoints from the gRPC API with both indices omitted. The test collects the first two checkpoints (e.g., genesis and the next one) to verify that streaming works and new checkpoints are delivered in real time.
+  - **`e2e_stream_checkpoints`**: End-to-end test that connects to a real node and streams checkpoints from the gRPC API with both sequence numbers omitted. The test collects the first two checkpoints (e.g., genesis and the next one) to verify that streaming works and new checkpoints are delivered in real time.
   - **`test_get_epoch_first_checkpoint_sequence_number`**: End-to-end test that streams all checkpoints from the node and verifies the epoch for each. It also tests the gRPC endpoint for querying the first checkpoint of a given epoch, ensuring that the correct sequence number is returned for both epoch 0 and epoch 1.
-  - **`test_stream_full_checkpoint_data`**: Streams the full checkpoint data for a specific checkpoint (using `full=true` and `end_index=Some(idx)`), decodes it, and verifies the sequence number matches the requested checkpoint.
+  - **`test_stream_full_checkpoint_data`**: Streams the full checkpoint data for a specific checkpoint (using `full=true` and `end_sequence_number=Some(seq)`), decodes it, and verifies the sequence number matches the requested checkpoint.
 
 ### **How to Run the Tests**
 
@@ -214,7 +214,7 @@ Located in `crates/iota-grpc-api/tests/`:
   cargo test -p iota-grpc-api -- --nocapture --test-threads=1
   ```
 
-These tests ensure that the gRPC streaming API behaves as expected for all supported request patterns and edge cases, including gap-filling, end_index-only streaming, epoch boundary, and reset handling. All downstream consumers are encouraged to run these tests when upgrading or integrating the gRPC API.
+These tests ensure that the gRPC streaming API behaves as expected for all supported request patterns and edge cases, including gap-filling, end_sequence_number-only streaming, epoch boundary, and reset handling. All downstream consumers are encouraged to run these tests when upgrading or integrating the gRPC API.
 
 ## Downstream Integration Tests: gRPC Checkpoint Streaming
 
@@ -223,7 +223,7 @@ The following integration tests have been added in downstream crates to ensure t
 ### **iota-data-ingestion**
 
 - **`tests/grpc_blob_ingestion.rs`**
-  - **`test_grpc_blob_worker_logic`**: Streams the full CheckpointData for a single checkpoint (using full=true, start_index=None, end_index=Some(idx)), decodes it, and passes it to the GrpcBlobWorker to verify ingestion logic. This test ensures the worker can process a full checkpoint streamed via gRPC.
+  - **`test_grpc_blob_worker_logic`**: Streams the full CheckpointData for a single checkpoint (using full=true, start_sequence_number=None, end_sequence_number=Some(seq)), decodes it, and passes it to the GrpcBlobWorker to verify ingestion logic. This test ensures the worker can process a full checkpoint streamed via gRPC.
 
   **How to run:**
   ```bash
