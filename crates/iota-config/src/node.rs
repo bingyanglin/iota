@@ -262,7 +262,7 @@ pub struct NodeConfig {
     pub iota_names_config: Option<IotaNamesConfig>,
 
     /// Flag to enable the gRPC API.
-    #[serde(default = "bool_false")]
+    #[serde(default)]
     pub enable_grpc_api: bool,
     #[serde(
         default = "default_grpc_api_config",
@@ -416,10 +416,6 @@ pub fn default_end_of_epoch_broadcast_channel_capacity() -> usize {
 
 pub fn bool_true() -> bool {
     true
-}
-
-pub fn bool_false() -> bool {
-    false
 }
 
 fn is_true(value: &bool) -> bool {
