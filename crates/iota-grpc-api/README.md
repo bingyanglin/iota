@@ -1,6 +1,6 @@
 # IOTA Checkpoint gRPC API (Proof of Concept)
 
-This crate introduces a proof-of-concept (PoC) gRPC API for streaming IOTA checkpoints. The primary goal of this API is to provide a more efficient and lower-latency method for fetching checkpoints, specifically intended to replace the existing REST-API polling or filesystem-based synchronization used by the indexer and data ingestion services. This reduces the delay between checkpoint creation and their subsequent indexing or processing.
+This crate introduces a proof-of-concept (PoC) gRPC API for streaming IOTA checkpoints. The primary goal of this API is to provide a more efficient and lower-latency method for fetching checkpoints, specifically intended to replace the existing REST-API polling or filesystem-based synchronization. This reduces the delay between checkpoint creation and their subsequent processing by external services.
 
 The gRPC API supports subscriptions, similar to the `INX` (IOTA Node Extension) component in Hornet, allowing clients to receive new checkpoints as they are confirmed ([reference](https://github.com/iotaledger/hornet/blob/3ab964191f30ec70f4d54dc121ea01bc48497bc1/components/inx/server_milestones.go#L169)).
 
@@ -97,8 +97,7 @@ This logic ensures robust, real-time, and gap-free checkpoint streaming for all 
 | -------------------- | ------------------------------------------------ | ------------------------------------------------ | ------------------------- |
 | **Purpose**          | Fetch full checkpoint data via HTTP              | Stream full checkpoint data via gRPC             | Aligned (for checkpoints) |
 | **Data Model**       | `CheckpointData` (BCS-encoded)                   | `CheckpointData` (BCS-encoded in bytes field)    | Aligned                   |
-| **Worker Interface** | Implements `Worker` trait (`process_checkpoint`) | Implements `Worker` trait (`process_checkpoint`) | Aligned                   |
-| **Client Location**  | Inline HTTP client in worker                     | Shared gRPC client in `iota-grpc-api`            | Aligned (modular)         |
+| **Client Location**  | Inline HTTP client in consumer                   | Shared gRPC client in `iota-grpc-api`            | Aligned (modular)         |
 | **Test Coverage**    | Integration tests with REST node                 | Integration tests with gRPC node                 | Aligned                   |
 | **Scope**            | Can fetch any checkpoint, full or summary        | **Only streams checkpoints**                     | Aligned (by requirement)  |
 | **Extensibility**    | Can add more REST endpoints if needed            | Only checkpoint streaming is implemented         | Aligned (by requirement)  |
@@ -108,12 +107,12 @@ This logic ensures robust, real-time, and gap-free checkpoint streaming for all 
 ```mermaid
 flowchart LR
     subgraph REST_API
-        A1["Indexer"] -- "HTTP GET /api/v1/checkpoints/{checkpoint}/full" --> B1["Node REST API"]
+        A1["Client"] -- "HTTP GET /api/v1/checkpoints/{checkpoint}/full" --> B1["Node REST API"]
         B1 -- "fetches from" --> C1["Node State"]
         B1 -- "returns checkpoint data" --> A1
     end
     subgraph gRPC
-        A2["Indexer"] -- "gRPC connect" --> B2["Node gRPC API"]
+        A2["Client"] -- "gRPC connect" --> B2["Node gRPC API"]
         B2 -- "streams checkpoints" --> A2
         B2 -- "fetches from" --> C2["Node State"]
     end
@@ -124,17 +123,17 @@ flowchart LR
 | Aspect               | REST API Flow                           | gRPC Flow                                                         |
 | -------------------- | --------------------------------------- | ----------------------------------------------------------------- |
 | **Server**           | Node REST API                           | Node gRPC API                                                     |
-| **Client**           | Indexer (HTTP client)                   | Indexer (gRPC client)                                             |
+| **Client**           | External client (HTTP client)          | External client (gRPC client)                                    |
 | **Data Transfer**    | Polling (pull)                          | Streaming (push)                                                  |
 | **Protocol**         | HTTP/1.1 or HTTP/2, JSON/BCS            | HTTP/2, Protocol Buffers (protobuf)                               |
 | **Efficiency**       | Higher latency (polling interval)       | Lower latency (real-time streaming)                               |
 | **Setup**            | `enable_rest_api = true` in node config | `enable_grpc_api = true` and `grpc_api_config` set in node config |
-| **Integration Test** | Yes (REST tests)                        | Yes (`grpc_ingestion.rs`, `grpc_blob_ingestion.rs`)               |
+| **Integration Test** | Yes (REST tests)                        | Yes (checkpoint streaming tests)                                   |
 
 ## In summary
 
-- **REST API:** Indexer pulls checkpoints from the node by polling HTTP endpoints.
-- **gRPC API:** Indexer receives checkpoints as a real-time stream from the node.
+- **REST API:** External clients pull checkpoints from the node by polling HTTP endpoints.
+- **gRPC API:** External clients receive checkpoints as a real-time stream from the node.
 
 > **Note:**
 > The gRPC API now provides an endpoint for querying the first checkpoint of a given epoch (`GetEpochFirstCheckpointSequenceNumber`), making robust reset and epoch boundary handling possible for clients. Handling epoch boundaries or resets can be implemented by the client by inspecting the streamed checkpoint data or by using this endpoint.
@@ -143,7 +142,7 @@ flowchart LR
 
 The `iota-grpc-api` crate defines the gRPC service and its messages. The `iota-node` crate integrates and starts this gRPC server if `enable_grpc_api` is set to `true` and `grpc_api_config` is configured.
 
-A shared gRPC client (`GrpcNodeClient`) is provided by this crate and should be used by downstream consumers (e.g., `iota-indexer`, `iota-data-ingestion`) to connect and stream checkpoints. This ensures all consumers use the same, up-to-date protocol and data model.
+A shared gRPC client (`GrpcNodeClient`) is provided by this crate and should be used by downstream consumers to connect and stream checkpoints. This ensures all consumers use the same, up-to-date protocol and data model.
 
 **Configuration Example:**
 
@@ -215,31 +214,3 @@ Located in `crates/iota-grpc-api/tests/`:
   ```
 
 These tests ensure that the gRPC streaming API behaves as expected for all supported request patterns and edge cases, including gap-filling, end_sequence_number-only streaming, epoch boundary, and reset handling. All downstream consumers are encouraged to run these tests when upgrading or integrating the gRPC API.
-
-## Downstream Integration Tests: gRPC Checkpoint Streaming
-
-The following integration tests have been added in downstream crates to ensure that the gRPC checkpoint streaming API works as expected for real consumers:
-
-### **iota-data-ingestion**
-
-- **`tests/grpc_blob_ingestion.rs`**
-  - **`test_grpc_blob_worker_logic`**: Streams the full CheckpointData for a single checkpoint (using full=true, start_sequence_number=None, end_sequence_number=Some(seq)), decodes it, and passes it to the GrpcBlobWorker to verify ingestion logic. This test ensures the worker can process a full checkpoint streamed via gRPC.
-
-  **How to run:**
-  ```bash
-  cargo test -p iota-data-ingestion --test grpc_blob_ingestion -- --nocapture
-  ```
-
-### **iota-indexer**
-
-- **`tests/grpc_ingestion.rs`**
-  - **`test_grpc_checkpoint_ingestion`**: This test starts a test cluster with gRPC enabled, launches the indexer with gRPC ingestion, and waits for the indexer to process at least six checkpoints. It verifies that the indexer can successfully connect to the gRPC service and stream both previously produced (buffered) and newly created checkpoints in real time. The test ensures the end-to-end gRPC ingestion path is working, robust to cluster startup, and that the indexer can handle both historical and live checkpoint streaming scenarios.
-
-  **How to run:**
-  ```bash
-  cargo test -p iota-indexer --test grpc_ingestion -- --nocapture
-  ```
-
-This test provides confidence that the indexer is correctly integrated with the gRPC API and can process checkpoints as soon as they are available from the node, whether they are old or new.
-
-These tests are recommended for all downstream consumers and contributors to verify that gRPC checkpoint streaming works as expected in real-world integration scenarios.
