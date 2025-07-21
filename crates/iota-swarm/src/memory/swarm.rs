@@ -423,8 +423,8 @@ impl<R: rand::RngCore + rand::CryptoRng> SwarmBuilder<R> {
 
         // Add gRPC config wiring
         if let Some(grpc_config) = &self.fullnode_grpc_api_config {
-            fullnode_config_builder = fullnode_config_builder
-                .with_grpc_api_config(grpc_config.clone());
+            fullnode_config_builder =
+                fullnode_config_builder.with_grpc_api_config(grpc_config.clone());
         }
 
         if self.fullnode_count > 0 {

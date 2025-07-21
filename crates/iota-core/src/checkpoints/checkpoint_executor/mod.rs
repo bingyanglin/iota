@@ -503,6 +503,9 @@ impl CheckpointExecutor {
                 .await
                 .expect("Failed to accumulate running root");
             self.bump_highest_executed_checkpoint(checkpoint);
+
+            // `broadcast_grpc_checkpoint` for the last checkpoint of an epoch
+            // is handled specially in `check_epoch_last_checkpoint`
             self.broadcast_grpc_checkpoint(checkpoint, all_tx_digests);
         }
     }
