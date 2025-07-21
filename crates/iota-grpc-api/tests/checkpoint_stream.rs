@@ -11,16 +11,16 @@ use std::{
 use iota_grpc_api::{
     CheckpointGrpcService,
     checkpoint::{CheckpointStreamRequest, checkpoint_service_server::CheckpointService},
+    types::{
+        CertifiedCheckpointSummary as GrpcCertifiedCheckpointSummary,
+        CheckpointData as GrpcCheckpointData,
+    },
 };
 use iota_types::{
     base_types::{IotaAddress, ObjectID},
     committee::EpochId,
     crypto::AuthorityStrongQuorumSignInfo,
     full_checkpoint_content::CheckpointData,
-    grpc::{
-        CertifiedCheckpointSummary as GrpcCertifiedCheckpointSummary,
-        CheckpointData as GrpcCheckpointData,
-    },
     messages_checkpoint::{
         CertifiedCheckpointSummary, CheckpointContents, CheckpointSequenceNumber,
         CheckpointSummary, VerifiedCheckpoint,

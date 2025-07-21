@@ -31,6 +31,7 @@ use std::{
 use either::Either;
 use futures::stream::FuturesOrdered;
 use iota_config::node::{CheckpointExecutorConfig, RunWithRange};
+use iota_grpc_api::{GrpcCertifiedCheckpointSummary, GrpcCheckpointData};
 use iota_macros::{fail_point, fail_point_async};
 use iota_metrics::spawn_monitored_task;
 use iota_types::{
@@ -41,7 +42,6 @@ use iota_types::{
     error::IotaResult,
     executable_transaction::VerifiedExecutableTransaction,
     full_checkpoint_content::CheckpointData,
-    grpc,
     inner_temporary_store::PackageStoreWithFallback,
     message_envelope::Message,
     messages_checkpoint::{
@@ -155,8 +155,8 @@ pub struct CheckpointExecutor {
     accumulator: Arc<StateAccumulator>,
     config: CheckpointExecutorConfig,
     metrics: Arc<CheckpointExecutorMetrics>,
-    grpc_checkpoint_summary_tx: Option<broadcast::Sender<Arc<grpc::CertifiedCheckpointSummary>>>,
-    grpc_checkpoint_data_tx: Option<broadcast::Sender<Arc<grpc::CheckpointData>>>,
+    grpc_checkpoint_summary_tx: Option<broadcast::Sender<Arc<GrpcCertifiedCheckpointSummary>>>,
+    grpc_checkpoint_data_tx: Option<broadcast::Sender<Arc<GrpcCheckpointData>>>,
 }
 
 impl CheckpointExecutor {
@@ -168,9 +168,9 @@ impl CheckpointExecutor {
         config: CheckpointExecutorConfig,
         metrics: Arc<CheckpointExecutorMetrics>,
         grpc_checkpoint_summary_tx: Option<
-            broadcast::Sender<Arc<grpc::CertifiedCheckpointSummary>>,
+            broadcast::Sender<Arc<GrpcCertifiedCheckpointSummary>>,
         >,
-        grpc_checkpoint_data_tx: Option<broadcast::Sender<Arc<grpc::CheckpointData>>>,
+        grpc_checkpoint_data_tx: Option<broadcast::Sender<Arc<GrpcCheckpointData>>>,
     ) -> Self {
         Self {
             mailbox,
@@ -447,7 +447,7 @@ impl CheckpointExecutor {
     ) {
         if let Some(tx) = &self.grpc_checkpoint_summary_tx {
             let summary = CertifiedCheckpointSummary::from(checkpoint.clone());
-            let grpc_summary = Arc::new(grpc::CertifiedCheckpointSummary::from(summary));
+            let grpc_summary = Arc::new(GrpcCertifiedCheckpointSummary::from(summary));
             let _ = tx.send(grpc_summary);
         }
         if let Some(data_tx) = &self.grpc_checkpoint_data_tx {
@@ -463,7 +463,7 @@ impl CheckpointExecutor {
                 )
                 .expect("Failed to load full CheckpointData")
             };
-            let grpc_data = Arc::new(grpc::CheckpointData::from(checkpoint_data));
+            let grpc_data = Arc::new(GrpcCheckpointData::from(checkpoint_data));
             let _ = data_tx.send(grpc_data);
         }
 

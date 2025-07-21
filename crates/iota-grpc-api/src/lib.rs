@@ -6,6 +6,10 @@ use std::{pin::Pin, sync::Arc};
 use serde::{Deserialize, Serialize};
 use tonic::{Request, Response, Status};
 
+// Re-export gRPC types for external use
+pub mod types;
+pub use types::{CertifiedCheckpointSummary as GrpcCertifiedCheckpointSummary, CheckpointData as GrpcCheckpointData};
+
 /// Configuration for the gRPC API service
 #[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
 #[serde(rename_all = "kebab-case")]
@@ -46,10 +50,6 @@ use iota_types::storage::RestStateReader;
 pub mod client;
 use iota_types::{
     full_checkpoint_content::CheckpointData,
-    grpc::{
-        CertifiedCheckpointSummary as GrpcCertifiedCheckpointSummary,
-        CheckpointData as GrpcCheckpointData,
-    },
     messages_checkpoint::CertifiedCheckpointSummary,
 };
 use tracing::{debug, info};

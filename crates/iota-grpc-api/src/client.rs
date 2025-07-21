@@ -3,7 +3,7 @@
 
 tonic::include_proto!("iota.grpc");
 
-use iota_types::grpc::{CertifiedCheckpointSummary, CheckpointData};
+use crate::types::{CertifiedCheckpointSummary, CheckpointData};
 use tonic::transport::Channel;
 
 use crate::checkpoint::checkpoint_service_client::CheckpointServiceClient;

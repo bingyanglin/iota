@@ -113,7 +113,6 @@ use iota_types::{
     error::{IotaError, IotaResult},
     executable_transaction::VerifiedExecutableTransaction,
     execution_config_utils::to_binary_config,
-    grpc::{CertifiedCheckpointSummary, CheckpointData},
     iota_system_state::{
         IotaSystemState, IotaSystemStateTrait,
         epoch_start_iota_system_state::{EpochStartSystemState, EpochStartSystemStateTrait},
@@ -126,6 +125,7 @@ use iota_types::{
     supported_protocol_versions::SupportedProtocolVersions,
     transaction::{Transaction, VerifiedCertificate},
 };
+use iota_grpc_api::{GrpcCertifiedCheckpointSummary as CertifiedCheckpointSummary, GrpcCheckpointData as CheckpointData};
 use prometheus::Registry;
 #[cfg(msim)]
 pub use simulator::set_jwk_injector;
