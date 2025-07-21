@@ -93,14 +93,14 @@ This logic ensures robust, real-time, and gap-free checkpoint streaming for all 
 
 ## REST vs. gRPC Checkpoint Streaming: Comparison
 
-| Aspect               | REST API Path                                    | gRPC API Path                                    | Alignment Status          |
-| -------------------- | ------------------------------------------------ | ------------------------------------------------ | ------------------------- |
-| **Purpose**          | Fetch full checkpoint data via HTTP              | Stream full checkpoint data via gRPC             | Aligned (for checkpoints) |
-| **Data Model**       | `CheckpointData` (BCS-encoded)                   | `CheckpointData` (BCS-encoded in bytes field)    | Aligned                   |
-| **Client Location**  | Inline HTTP client in consumer                   | Shared gRPC client in `iota-grpc-api`            | Aligned (modular)         |
-| **Test Coverage**    | Integration tests with REST node                 | Integration tests with gRPC node                 | Aligned                   |
-| **Scope**            | Can fetch any checkpoint, full or summary        | **Only streams checkpoints**                     | Aligned (by requirement)  |
-| **Extensibility**    | Can add more REST endpoints if needed            | Only checkpoint streaming is implemented         | Aligned (by requirement)  |
+| Aspect              | REST API Path                             | gRPC API Path                                 | Alignment Status          |
+| ------------------- | ----------------------------------------- | --------------------------------------------- | ------------------------- |
+| **Purpose**         | Fetch full checkpoint data via HTTP       | Stream full checkpoint data via gRPC          | Aligned (for checkpoints) |
+| **Data Model**      | `CheckpointData` (BCS-encoded)            | `CheckpointData` (BCS-encoded in bytes field) | Aligned                   |
+| **Client Location** | Inline HTTP client in consumer            | Shared gRPC client in `iota-grpc-api`         | Aligned (modular)         |
+| **Test Coverage**   | Integration tests with REST node          | Integration tests with gRPC node              | Aligned                   |
+| **Scope**           | Can fetch any checkpoint, full or summary | **Only streams checkpoints**                  | Aligned (by requirement)  |
+| **Extensibility**   | Can add more REST endpoints if needed     | Only checkpoint streaming is implemented      | Aligned (by requirement)  |
 
 ## Visual Comparison
 
@@ -123,12 +123,12 @@ flowchart LR
 | Aspect               | REST API Flow                           | gRPC Flow                                                         |
 | -------------------- | --------------------------------------- | ----------------------------------------------------------------- |
 | **Server**           | Node REST API                           | Node gRPC API                                                     |
-| **Client**           | External client (HTTP client)          | External client (gRPC client)                                    |
+| **Client**           | External client (HTTP client)           | External client (gRPC client)                                     |
 | **Data Transfer**    | Polling (pull)                          | Streaming (push)                                                  |
 | **Protocol**         | HTTP/1.1 or HTTP/2, JSON/BCS            | HTTP/2, Protocol Buffers (protobuf)                               |
 | **Efficiency**       | Higher latency (polling interval)       | Lower latency (real-time streaming)                               |
 | **Setup**            | `enable_rest_api = true` in node config | `enable_grpc_api = true` and `grpc_api_config` set in node config |
-| **Integration Test** | Yes (REST tests)                        | Yes (checkpoint streaming tests)                                   |
+| **Integration Test** | Yes (REST tests)                        | Yes (checkpoint streaming tests)                                  |
 
 ## In summary
 
