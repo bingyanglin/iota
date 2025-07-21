@@ -443,6 +443,7 @@ impl CheckpointExecutor {
         &self,
         checkpoint: &VerifiedCheckpoint,
         all_tx_digests: &[TransactionDigest],
+        checkpoint_data: Option<&CheckpointData>,
     ) {
         if let Some(tx) = &self.grpc_checkpoint_summary_tx {
             let summary = CertifiedCheckpointSummary::from(checkpoint.clone());
@@ -450,14 +451,18 @@ impl CheckpointExecutor {
             let _ = tx.send(grpc_summary);
         }
         if let Some(data_tx) = &self.grpc_checkpoint_data_tx {
-            let checkpoint_data = load_checkpoint_data(
-                checkpoint.clone(),
-                self.object_cache_reader.as_ref(),
-                self.transaction_cache_reader.as_ref(),
-                self.checkpoint_store.clone(),
-                all_tx_digests,
-            )
-            .expect("Failed to load full CheckpointData");
+            let checkpoint_data = if let Some(data) = checkpoint_data {
+                data.clone()
+            } else {
+                load_checkpoint_data(
+                    checkpoint.clone(),
+                    self.object_cache_reader.as_ref(),
+                    self.transaction_cache_reader.as_ref(),
+                    self.checkpoint_store.clone(),
+                    all_tx_digests,
+                )
+                .expect("Failed to load full CheckpointData")
+            };
             let grpc_data = Arc::new(grpc::CheckpointData::from(checkpoint_data));
             let _ = data_tx.send(grpc_data);
         }
@@ -492,10 +497,8 @@ impl CheckpointExecutor {
             .handle_committed_transactions(all_tx_digests)
             .expect("cannot fail");
 
-        if let Some(checkpoint_data) = checkpoint_data {
-            self.commit_index_updates_and_enqueue_to_subscription_service(checkpoint_data)
-                .await;
-        }
+        // Handle checkpoint data commit and broadcast if available
+        let checkpoint_data_for_broadcast = checkpoint_data.as_ref();
 
         if !checkpoint.is_last_checkpoint_of_epoch() {
             self.accumulator
@@ -506,7 +509,16 @@ impl CheckpointExecutor {
 
             // `broadcast_grpc_checkpoint` for the last checkpoint of an epoch
             // is handled specially in `check_epoch_last_checkpoint`
-            self.broadcast_grpc_checkpoint(checkpoint, all_tx_digests);
+            self.broadcast_grpc_checkpoint(
+                checkpoint,
+                all_tx_digests,
+                checkpoint_data_for_broadcast,
+            );
+        }
+
+        if let Some(checkpoint_data) = checkpoint_data {
+            self.commit_index_updates_and_enqueue_to_subscription_service(checkpoint_data)
+                .await;
         }
     }
 
@@ -766,8 +778,10 @@ impl CheckpointExecutor {
                     .await
                     .expect("Finalizing checkpoint cannot fail");
 
-                    self.commit_index_updates_and_enqueue_to_subscription_service(checkpoint_data)
-                        .await;
+                    self.commit_index_updates_and_enqueue_to_subscription_service(
+                        checkpoint_data.clone(),
+                    )
+                    .await;
 
                     self.checkpoint_store
                         .insert_epoch_last_checkpoint(cur_epoch, checkpoint)
@@ -784,7 +798,11 @@ impl CheckpointExecutor {
 
                     self.bump_highest_executed_checkpoint(checkpoint);
 
-                    self.broadcast_grpc_checkpoint(checkpoint, &all_tx_digests);
+                    self.broadcast_grpc_checkpoint(
+                        checkpoint,
+                        &all_tx_digests,
+                        Some(&checkpoint_data),
+                    );
 
                     return true;
                 }
