@@ -5724,6 +5724,7 @@ dependencies = [
  "dirs 5.0.1",
  "fastcrypto",
  "iota-genesis-common",
+ "iota-grpc-api",
  "iota-keys",
  "iota-names",
  "iota-protocol-config",
@@ -5777,6 +5778,7 @@ dependencies = [
  "iota-execution",
  "iota-framework",
  "iota-genesis-builder",
+ "iota-grpc-types",
  "iota-json-rpc-types",
  "iota-macros",
  "iota-metrics",
@@ -6352,6 +6354,34 @@ name = "iota-graphql-rpc-headers"
 version = "1.4.0-alpha"
 dependencies = [
  "axum 0.8.4",
+]
+
+[[package]]
+name = "iota-grpc-api"
+version = "0.1.0"
+dependencies = [
+ "async-stream",
+ "bcs",
+ "futures",
+ "iota-grpc-types",
+ "iota-types",
+ "move-core-types",
+ "prost",
+ "serde",
+ "test-cluster",
+ "tokio",
+ "tokio-stream",
+ "tonic 0.13.1",
+ "tonic-build",
+ "tracing",
+]
+
+[[package]]
+name = "iota-grpc-types"
+version = "1.4.0-alpha"
+dependencies = [
+ "iota-types",
+ "serde",
 ]
 
 [[package]]
@@ -6947,6 +6977,9 @@ dependencies = [
  "iota-common",
  "iota-config",
  "iota-core",
+ "iota-grpc-api",
+ "iota-grpc-types",
+ "iota-indexer",
  "iota-json-rpc",
  "iota-json-rpc-api",
  "iota-macros",
@@ -6968,6 +7001,7 @@ dependencies = [
  "tap",
  "telemetry-subscribers",
  "tokio",
+ "tonic 0.13.1",
  "tower 0.4.13",
  "tracing",
  "typed-store",
@@ -7664,6 +7698,7 @@ dependencies = [
  "anyhow",
  "futures",
  "iota-config",
+ "iota-grpc-api",
  "iota-macros",
  "iota-metrics",
  "iota-names",
@@ -7696,6 +7731,7 @@ dependencies = [
  "iota-config",
  "iota-execution",
  "iota-genesis-builder",
+ "iota-grpc-api",
  "iota-macros",
  "iota-names",
  "iota-protocol-config",
@@ -13843,6 +13879,7 @@ dependencies = [
  "iota-core",
  "iota-framework",
  "iota-genesis-builder",
+ "iota-grpc-api",
  "iota-json-rpc",
  "iota-json-rpc-api",
  "iota-json-rpc-types",
