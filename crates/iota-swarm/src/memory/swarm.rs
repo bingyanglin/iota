@@ -296,10 +296,7 @@ impl<R> SwarmBuilder<R> {
     }
 
     pub fn with_fullnode_grpc_api_address(mut self, addr: SocketAddr) -> Self {
-        self.fullnode_grpc_api_config = Some(iota_grpc_api::Config {
-            address: addr,
-            ..Default::default()
-        });
+        self.fullnode_grpc_api_config.get_or_insert_default().address = addr;
         self
     }
 
