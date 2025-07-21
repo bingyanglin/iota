@@ -295,11 +295,6 @@ impl<R> SwarmBuilder<R> {
         self
     }
 
-    pub fn with_fullnode_grpc_api_address(mut self, addr: SocketAddr) -> Self {
-        self.fullnode_grpc_api_config.get_or_insert_default().address = addr;
-        self
-    }
-
     fn get_or_init_genesis_config(&mut self) -> &mut GenesisConfig {
         if self.genesis_config.is_none() {
             assert!(self.network_config.is_none());
@@ -426,11 +421,10 @@ impl<R: rand::RngCore + rand::CryptoRng> SwarmBuilder<R> {
                 fullnode_config_builder.with_supported_protocol_versions(supported_versions);
         }
 
-        // Add gRPC address/port wiring
+        // Add gRPC config wiring
         if let Some(grpc_config) = &self.fullnode_grpc_api_config {
             fullnode_config_builder = fullnode_config_builder
-                .with_grpc_api_address(grpc_config.address)
-                .with_enable_grpc_api(true);
+                .with_grpc_api_config(grpc_config.clone());
         }
 
         if self.fullnode_count > 0 {
