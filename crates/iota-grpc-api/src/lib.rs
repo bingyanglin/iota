@@ -130,8 +130,7 @@ fn get_full_checkpoint_data(
     seq: u64,
 ) -> Option<CheckpointData> {
     let summary = state_reader.get_checkpoint_by_sequence_number(seq)?;
-    let contents = state_reader
-        .get_checkpoint_contents_by_sequence_number(seq)?;
+    let contents = state_reader.get_checkpoint_contents_by_sequence_number(seq)?;
     Some(state_reader.get_checkpoint_data(summary, contents))
 }
 
@@ -145,9 +144,7 @@ impl CheckpointOracle<GrpcCheckpointData> for Oracle {
             .map(Arc::new)
     }
     fn get_latest(&self) -> Option<u64> {
-        Some(*self.state_reader
-            .get_latest_checkpoint()
-            .sequence_number())
+        Some(*self.state_reader.get_latest_checkpoint().sequence_number())
     }
 }
 
@@ -162,9 +159,7 @@ impl CheckpointOracle<GrpcCertifiedCheckpointSummary> for Oracle {
             .map(Arc::new)
     }
     fn get_latest(&self) -> Option<u64> {
-        Some(*self.state_reader
-            .get_latest_checkpoint()
-            .sequence_number())
+        Some(*self.state_reader.get_latest_checkpoint().sequence_number())
     }
 }
 

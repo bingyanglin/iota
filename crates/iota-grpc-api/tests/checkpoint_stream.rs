@@ -95,10 +95,7 @@ impl iota_types::storage::ObjectStore for MockRestStateReader {
     ) -> iota_types::storage::error::Result<Option<iota_types::object::Object>> {
         unimplemented!()
     }
-    fn get_object(
-        &self,
-        id: &ObjectID,
-    ) -> Option<iota_types::object::Object> {
+    fn get_object(&self, id: &ObjectID) -> Option<iota_types::object::Object> {
         self.try_get_object(id).expect("storage access failed")
     }
     fn get_object_by_key(
@@ -106,7 +103,8 @@ impl iota_types::storage::ObjectStore for MockRestStateReader {
         id: &ObjectID,
         version: iota_types::base_types::SequenceNumber,
     ) -> Option<iota_types::object::Object> {
-        self.try_get_object_by_key(id, version).expect("storage access failed")
+        self.try_get_object_by_key(id, version)
+            .expect("storage access failed")
     }
 }
 impl iota_types::storage::ReadStore for MockRestStateReader {
@@ -120,11 +118,11 @@ impl iota_types::storage::ReadStore for MockRestStateReader {
     fn get_committee(
         &self,
         epoch: EpochId,
-    ) -> Option<std::sync::Arc<iota_types::committee::Committee>>
-    {
-        self.try_get_committee(epoch).expect("storage access failed")
+    ) -> Option<std::sync::Arc<iota_types::committee::Committee>> {
+        self.try_get_committee(epoch)
+            .expect("storage access failed")
     }
-    
+
     fn try_get_latest_checkpoint(&self) -> iota_types::storage::error::Result<VerifiedCheckpoint> {
         // Return the checkpoint with the highest sequence number
         let guard = self.checkpoints.lock().unwrap();
@@ -138,20 +136,20 @@ impl iota_types::storage::ReadStore for MockRestStateReader {
         }
     }
     fn get_latest_checkpoint(&self) -> VerifiedCheckpoint {
-        self.try_get_latest_checkpoint().expect("storage access failed")
+        self.try_get_latest_checkpoint()
+            .expect("storage access failed")
     }
-    
+
     fn try_get_highest_verified_checkpoint(
         &self,
     ) -> iota_types::storage::error::Result<VerifiedCheckpoint> {
         unimplemented!()
     }
-    fn get_highest_verified_checkpoint(
-        &self,
-    ) -> VerifiedCheckpoint {
-        self.try_get_highest_verified_checkpoint().expect("storage access failed")
+    fn get_highest_verified_checkpoint(&self) -> VerifiedCheckpoint {
+        self.try_get_highest_verified_checkpoint()
+            .expect("storage access failed")
     }
-    
+
     fn try_get_highest_synced_checkpoint(
         &self,
     ) -> iota_types::storage::error::Result<VerifiedCheckpoint> {
@@ -164,19 +162,19 @@ impl iota_types::storage::ReadStore for MockRestStateReader {
             ))
         }
     }
-    fn get_highest_synced_checkpoint(
-        &self,
-    ) -> VerifiedCheckpoint {
-        self.try_get_highest_synced_checkpoint().expect("storage access failed")
+    fn get_highest_synced_checkpoint(&self) -> VerifiedCheckpoint {
+        self.try_get_highest_synced_checkpoint()
+            .expect("storage access failed")
     }
-    
+
     fn try_get_lowest_available_checkpoint(&self) -> iota_types::storage::error::Result<u64> {
         unimplemented!()
     }
     fn get_lowest_available_checkpoint(&self) -> u64 {
-        self.try_get_lowest_available_checkpoint().expect("storage access failed")
+        self.try_get_lowest_available_checkpoint()
+            .expect("storage access failed")
     }
-    
+
     fn try_get_checkpoint_by_digest(
         &self,
         _digest: &iota_types::messages_checkpoint::CheckpointDigest,
@@ -187,9 +185,10 @@ impl iota_types::storage::ReadStore for MockRestStateReader {
         &self,
         digest: &iota_types::messages_checkpoint::CheckpointDigest,
     ) -> Option<VerifiedCheckpoint> {
-        self.try_get_checkpoint_by_digest(digest).expect("storage access failed")
+        self.try_get_checkpoint_by_digest(digest)
+            .expect("storage access failed")
     }
-    
+
     fn try_get_checkpoint_by_sequence_number(
         &self,
         seq: CheckpointSequenceNumber,
@@ -215,9 +214,10 @@ impl iota_types::storage::ReadStore for MockRestStateReader {
         seq: CheckpointSequenceNumber,
     ) -> Option<VerifiedCheckpoint> {
         println!("Mock get_checkpoint_by_sequence_number called for seq: {seq}");
-        self.try_get_checkpoint_by_sequence_number(seq).expect("storage access failed")
+        self.try_get_checkpoint_by_sequence_number(seq)
+            .expect("storage access failed")
     }
-    
+
     fn try_get_checkpoint_contents_by_digest(
         &self,
         _digest: &iota_types::messages_checkpoint::CheckpointContentsDigest,
@@ -228,9 +228,10 @@ impl iota_types::storage::ReadStore for MockRestStateReader {
         &self,
         digest: &iota_types::messages_checkpoint::CheckpointContentsDigest,
     ) -> Option<CheckpointContents> {
-        self.try_get_checkpoint_contents_by_digest(digest).expect("storage access failed")
+        self.try_get_checkpoint_contents_by_digest(digest)
+            .expect("storage access failed")
     }
-    
+
     fn try_get_checkpoint_contents_by_sequence_number(
         &self,
         seq: CheckpointSequenceNumber,
@@ -242,9 +243,10 @@ impl iota_types::storage::ReadStore for MockRestStateReader {
         &self,
         seq: CheckpointSequenceNumber,
     ) -> Option<CheckpointContents> {
-        self.try_get_checkpoint_contents_by_sequence_number(seq).expect("storage access failed")
+        self.try_get_checkpoint_contents_by_sequence_number(seq)
+            .expect("storage access failed")
     }
-    
+
     fn try_get_transaction(
         &self,
         _digest: &iota_types::digests::TransactionDigest,
@@ -271,9 +273,10 @@ impl iota_types::storage::ReadStore for MockRestStateReader {
             >,
         >,
     > {
-        self.try_get_transaction(digest).expect("storage access failed")
+        self.try_get_transaction(digest)
+            .expect("storage access failed")
     }
-    
+
     fn try_get_transaction_effects(
         &self,
         _digest: &iota_types::digests::TransactionDigest,
@@ -284,9 +287,10 @@ impl iota_types::storage::ReadStore for MockRestStateReader {
         &self,
         digest: &iota_types::digests::TransactionDigest,
     ) -> Option<iota_types::effects::TransactionEffects> {
-        self.try_get_transaction_effects(digest).expect("storage access failed")
+        self.try_get_transaction_effects(digest)
+            .expect("storage access failed")
     }
-    
+
     fn try_get_events(
         &self,
         _digest: &iota_types::digests::TransactionEventsDigest,
@@ -299,7 +303,7 @@ impl iota_types::storage::ReadStore for MockRestStateReader {
     ) -> Option<iota_types::effects::TransactionEvents> {
         self.try_get_events(digest).expect("storage access failed")
     }
-    
+
     fn try_get_full_checkpoint_contents_by_sequence_number(
         &self,
         _seq: CheckpointSequenceNumber,
@@ -312,9 +316,10 @@ impl iota_types::storage::ReadStore for MockRestStateReader {
         &self,
         seq: CheckpointSequenceNumber,
     ) -> Option<iota_types::messages_checkpoint::FullCheckpointContents> {
-        self.try_get_full_checkpoint_contents_by_sequence_number(seq).expect("storage access failed")
+        self.try_get_full_checkpoint_contents_by_sequence_number(seq)
+            .expect("storage access failed")
     }
-    
+
     fn try_get_full_checkpoint_contents(
         &self,
         _digest: &iota_types::messages_checkpoint::CheckpointContentsDigest,
@@ -327,7 +332,8 @@ impl iota_types::storage::ReadStore for MockRestStateReader {
         &self,
         digest: &iota_types::messages_checkpoint::CheckpointContentsDigest,
     ) -> Option<iota_types::messages_checkpoint::FullCheckpointContents> {
-        self.try_get_full_checkpoint_contents(digest).expect("storage access failed")
+        self.try_get_full_checkpoint_contents(digest)
+            .expect("storage access failed")
     }
 }
 
