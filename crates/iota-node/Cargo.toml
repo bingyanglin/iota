@@ -30,6 +30,7 @@ reqwest.workspace = true
 serde.workspace = true
 tap.workspace = true
 tokio = { workspace = true, features = ["full"] }
+tonic.workspace = true
 tower.workspace = true
 tracing.workspace = true
 url.workspace = true
@@ -40,6 +41,9 @@ iota-archival.workspace = true
 iota-common.workspace = true
 iota-config.workspace = true
 iota-core.workspace = true
+iota-grpc-api.workspace = true
+iota-grpc-types.workspace = true
+iota-indexer.workspace = true
 iota-json-rpc.workspace = true
 iota-json-rpc-api.workspace = true
 iota-macros.workspace = true

@@ -31,6 +31,7 @@ use std::{
 use either::Either;
 use futures::stream::FuturesOrdered;
 use iota_config::node::{CheckpointExecutorConfig, RunWithRange};
+use iota_grpc_types as grpc;
 use iota_macros::{fail_point, fail_point_async};
 use iota_metrics::spawn_monitored_task;
 use iota_types::{
@@ -43,7 +44,9 @@ use iota_types::{
     full_checkpoint_content::CheckpointData,
     inner_temporary_store::PackageStoreWithFallback,
     message_envelope::Message,
-    messages_checkpoint::{CheckpointSequenceNumber, VerifiedCheckpoint},
+    messages_checkpoint::{
+        CertifiedCheckpointSummary, CheckpointSequenceNumber, VerifiedCheckpoint,
+    },
     transaction::{TransactionDataAPI, TransactionKind, VerifiedTransaction},
 };
 use itertools::izip;
@@ -156,6 +159,8 @@ pub struct CheckpointExecutor {
     backpressure_manager: Arc<BackpressureManager>,
     config: CheckpointExecutorConfig,
     metrics: Arc<CheckpointExecutorMetrics>,
+    grpc_checkpoint_summary_tx: Option<broadcast::Sender<Arc<grpc::CertifiedCheckpointSummary>>>,
+    grpc_checkpoint_data_tx: Option<broadcast::Sender<Arc<grpc::CheckpointData>>>,
 }
 
 impl CheckpointExecutor {
@@ -167,6 +172,10 @@ impl CheckpointExecutor {
         backpressure_manager: Arc<BackpressureManager>,
         config: CheckpointExecutorConfig,
         metrics: Arc<CheckpointExecutorMetrics>,
+        grpc_checkpoint_summary_tx: Option<
+            broadcast::Sender<Arc<grpc::CertifiedCheckpointSummary>>,
+        >,
+        grpc_checkpoint_data_tx: Option<broadcast::Sender<Arc<grpc::CheckpointData>>>,
     ) -> Self {
         Self {
             mailbox,
@@ -179,6 +188,8 @@ impl CheckpointExecutor {
             backpressure_manager,
             config,
             metrics,
+            grpc_checkpoint_summary_tx,
+            grpc_checkpoint_data_tx,
         }
     }
 
@@ -196,6 +207,8 @@ impl CheckpointExecutor {
             BackpressureManager::new_from_checkpoint_store(&checkpoint_store),
             Default::default(),
             CheckpointExecutorMetrics::new_for_tests(),
+            None,
+            None,
         )
     }
 
@@ -435,6 +448,42 @@ impl CheckpointExecutor {
         checkpoint.report_checkpoint_age(&self.metrics.last_executed_checkpoint_age);
     }
 
+    /// Helper to broadcast checkpoint summary and data over gRPC if the
+    /// channels are set.
+    fn broadcast_grpc_checkpoint(
+        &self,
+        checkpoint: &VerifiedCheckpoint,
+        all_tx_digests: &[TransactionDigest],
+        checkpoint_data: Option<&CheckpointData>,
+    ) {
+        if let Some(tx) = &self.grpc_checkpoint_summary_tx {
+            let summary = CertifiedCheckpointSummary::from(checkpoint.clone());
+            let grpc_summary = Arc::new(grpc::CertifiedCheckpointSummary::from(summary));
+            let _ = tx.send(grpc_summary);
+        }
+        if let Some(data_tx) = &self.grpc_checkpoint_data_tx {
+            let checkpoint_data = if let Some(data) = checkpoint_data {
+                data.clone()
+            } else {
+                load_checkpoint_data(
+                    checkpoint.clone(),
+                    self.object_cache_reader.as_ref(),
+                    self.transaction_cache_reader.as_ref(),
+                    self.checkpoint_store.clone(),
+                    all_tx_digests,
+                )
+                .expect("Failed to load full CheckpointData")
+            };
+            let grpc_data = Arc::new(grpc::CheckpointData::from(checkpoint_data));
+            let _ = data_tx.send(grpc_data);
+        }
+
+        debug!(
+            "[gRPC][Fullnode] Full CheckpointData is available: seq={}",
+            checkpoint.sequence_number()
+        );
+    }
+
     /// Post processing and plumbing after we executed a checkpoint. This
     /// function is guaranteed to be called in the order of checkpoint
     /// sequence number.
@@ -459,10 +508,8 @@ impl CheckpointExecutor {
             .handle_committed_transactions(all_tx_digests)
             .expect("cannot fail");
 
-        if let Some(checkpoint_data) = checkpoint_data {
-            self.commit_index_updates_and_enqueue_to_subscription_service(checkpoint_data)
-                .await;
-        }
+        // Handle checkpoint data commit and broadcast if available
+        let checkpoint_data_for_broadcast = checkpoint_data.as_ref();
 
         if !checkpoint.is_last_checkpoint_of_epoch() {
             self.accumulator
@@ -470,6 +517,19 @@ impl CheckpointExecutor {
                 .await
                 .expect("Failed to accumulate running root");
             self.bump_highest_executed_checkpoint(checkpoint);
+
+            // `broadcast_grpc_checkpoint` for the last checkpoint of an epoch
+            // is handled specially in `check_epoch_last_checkpoint`
+            self.broadcast_grpc_checkpoint(
+                checkpoint,
+                all_tx_digests,
+                checkpoint_data_for_broadcast,
+            );
+        }
+
+        if let Some(checkpoint_data) = checkpoint_data {
+            self.commit_index_updates_and_enqueue_to_subscription_service(checkpoint_data)
+                .await;
         }
     }
 
@@ -729,8 +789,10 @@ impl CheckpointExecutor {
                     .await
                     .expect("Finalizing checkpoint cannot fail");
 
-                    self.commit_index_updates_and_enqueue_to_subscription_service(checkpoint_data)
-                        .await;
+                    self.commit_index_updates_and_enqueue_to_subscription_service(
+                        checkpoint_data.clone(),
+                    )
+                    .await;
 
                     self.checkpoint_store
                         .insert_epoch_last_checkpoint(cur_epoch, checkpoint)
@@ -746,6 +808,12 @@ impl CheckpointExecutor {
                         .expect("Accumulating epoch cannot fail");
 
                     self.bump_highest_executed_checkpoint(checkpoint);
+
+                    self.broadcast_grpc_checkpoint(
+                        checkpoint,
+                        &all_tx_digests,
+                        Some(&checkpoint_data),
+                    );
 
                     return true;
                 }
