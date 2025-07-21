@@ -462,7 +462,7 @@ impl CheckpointExecutor {
             let _ = data_tx.send(grpc_data);
         }
 
-        info!(
+        debug!(
             "[gRPC][Fullnode] Full CheckpointData is available: seq={}",
             checkpoint.sequence_number()
         );
