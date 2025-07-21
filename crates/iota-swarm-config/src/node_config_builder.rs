@@ -231,6 +231,8 @@ impl ValidatorConfigBuilder {
             verifier_signing_config: VerifierSigningConfig::default(),
             enable_db_write_stall: None,
             iota_names_config: None,
+            enable_grpc_api: false,
+            grpc_api_config: None,
         }
     }
 
@@ -277,6 +279,7 @@ pub struct FullnodeConfigBuilder {
     fw_config: Option<RemoteFirewallConfig>,
     data_ingestion_dir: Option<PathBuf>,
     disable_pruning: bool,
+    grpc_api_config: Option<iota_grpc_api::Config>,
 }
 
 impl FullnodeConfigBuilder {
@@ -394,6 +397,11 @@ impl FullnodeConfigBuilder {
 
     pub fn with_data_ingestion_dir(mut self, path: Option<PathBuf>) -> Self {
         self.data_ingestion_dir = path;
+        self
+    }
+
+    pub fn with_grpc_api_config(mut self, config: iota_grpc_api::Config) -> Self {
+        self.grpc_api_config = Some(config);
         self
     }
 
@@ -542,6 +550,8 @@ impl FullnodeConfigBuilder {
             verifier_signing_config: VerifierSigningConfig::default(),
             enable_db_write_stall: None,
             iota_names_config: None,
+            enable_grpc_api: self.grpc_api_config.is_some(),
+            grpc_api_config: self.grpc_api_config,
         }
     }
 

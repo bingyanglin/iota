@@ -17,6 +17,7 @@ use iota_config::{
     IOTA_GENESIS_FILENAME, NodeConfig,
     node::{AuthorityOverloadConfig, DBCheckpointConfig, RunWithRange},
 };
+use iota_grpc_api;
 use iota_macros::nondeterministic;
 use iota_node::IotaNodeHandle;
 use iota_protocol_config::ProtocolVersion;
@@ -67,6 +68,7 @@ pub struct SwarmBuilder<R = OsRng> {
     submit_delay_step_override_millis: Option<u64>,
     state_accumulator_config: StateAccumulatorV1EnabledConfig,
     disable_fullnode_pruning: bool,
+    fullnode_grpc_api_config: Option<iota_grpc_api::Config>,
 }
 
 impl SwarmBuilder {
@@ -96,6 +98,7 @@ impl SwarmBuilder {
             submit_delay_step_override_millis: None,
             state_accumulator_config: StateAccumulatorV1EnabledConfig::Global(true),
             disable_fullnode_pruning: false,
+            fullnode_grpc_api_config: None,
         }
     }
 }
@@ -127,6 +130,7 @@ impl<R> SwarmBuilder<R> {
             submit_delay_step_override_millis: self.submit_delay_step_override_millis,
             state_accumulator_config: self.state_accumulator_config,
             disable_fullnode_pruning: self.disable_fullnode_pruning,
+            fullnode_grpc_api_config: self.fullnode_grpc_api_config,
         }
     }
 
@@ -286,6 +290,11 @@ impl<R> SwarmBuilder<R> {
         self
     }
 
+    pub fn with_fullnode_grpc_api_config(mut self, config: iota_grpc_api::Config) -> Self {
+        self.fullnode_grpc_api_config = Some(config);
+        self
+    }
+
     fn get_or_init_genesis_config(&mut self) -> &mut GenesisConfig {
         if self.genesis_config.is_none() {
             assert!(self.network_config.is_none());
@@ -410,6 +419,12 @@ impl<R: rand::RngCore + rand::CryptoRng> SwarmBuilder<R> {
             };
             fullnode_config_builder =
                 fullnode_config_builder.with_supported_protocol_versions(supported_versions);
+        }
+
+        // Add gRPC config wiring
+        if let Some(grpc_config) = &self.fullnode_grpc_api_config {
+            fullnode_config_builder =
+                fullnode_config_builder.with_grpc_api_config(grpc_config.clone());
         }
 
         if self.fullnode_count > 0 {

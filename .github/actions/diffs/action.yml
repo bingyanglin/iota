@@ -65,6 +65,7 @@ runs:
             - "crates/iota-json-rpc-types/**"
             - "crates/iota-json-rpc-api/**"
             - "crates/iota-graphql-rpc/**"
+            - "crates/iota-grpc-api/**"
             - ".github/workflows/hierarchy.yml"
             - ".github/workflows/_e2e.yml"
             - "Cargo.toml"
