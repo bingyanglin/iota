@@ -167,8 +167,8 @@ impl CheckpointReader<GrpcCertifiedCheckpointSummary> for Oracle {
 fn create_checkpoint_stream<T, F>(
     oracle: F,
     mut rx: Receiver<Arc<T>>,
-    start: Option<u64>,
-    end: Option<u64>,
+    start_sequence_number: Option<u64>,
+    end_sequence_number: Option<u64>,
     is_full: bool,
 ) -> impl futures::Stream<Item = CheckpointStreamResult> + Send
 where
@@ -181,7 +181,7 @@ where
         // can be very big. The genesis checkpoint should be imported directly.
         let mut latest = oracle.get_latest().unwrap_or(0);
         debug!("[profile][grpc] Latest checkpoint index: {latest}.");
-        let (mut start, end) = match (start, end) {
+        let (mut start, end) = match (start_sequence_number, end_sequence_number) {
             (None, None) => (latest, u64::MAX),
             (None, Some(end)) => (end, end),
             (Some(start), None) => (start, u64::MAX),
@@ -256,32 +256,32 @@ where
 impl NodeGrpcService {
     fn stream_checkpoint_data(
         &self,
-        start: Option<u64>,
-        end: Option<u64>,
+        start_sequence_number: Option<u64>,
+        end_sequence_number: Option<u64>,
     ) -> impl futures::Stream<Item = CheckpointStreamResult> + Send {
         let state_reader = self.state_reader.clone();
         let oracle = Oracle { state_reader };
         create_checkpoint_stream(
             oracle,
             self.grpc_checkpoint_data_tx.subscribe(),
-            start,
-            end,
+            start_sequence_number,
+            end_sequence_number,
             true,
         )
     }
 
     fn stream_checkpoint_summary(
         &self,
-        start: Option<u64>,
-        end: Option<u64>,
+        start_sequence_number: Option<u64>,
+        end_sequence_number: Option<u64>,
     ) -> impl futures::Stream<Item = CheckpointStreamResult> + Send {
         let state_reader = self.state_reader.clone();
         let oracle = Oracle { state_reader };
         create_checkpoint_stream(
             oracle,
             self.grpc_checkpoint_summary_tx.subscribe(),
-            start,
-            end,
+            start_sequence_number,
+            end_sequence_number,
             false,
         )
     }
@@ -297,14 +297,14 @@ impl NodeService for NodeGrpcService {
         request: Request<node::CheckpointStreamRequest>,
     ) -> Result<Response<Self::StreamCheckpointsStream>, Status> {
         let req = request.into_inner();
-        let start = req.start_sequence_number;
-        let end = req.end_sequence_number;
+        let start_sequence_number = req.start_sequence_number;
+        let end_sequence_number = req.end_sequence_number;
         let full = req.full;
 
         let stream: Self::StreamCheckpointsStream = if full.unwrap_or(false) {
-            Box::pin(self.stream_checkpoint_data(start, end))
+            Box::pin(self.stream_checkpoint_data(start_sequence_number, end_sequence_number))
         } else {
-            Box::pin(self.stream_checkpoint_summary(start, end))
+            Box::pin(self.stream_checkpoint_summary(start_sequence_number, end_sequence_number))
         };
         Ok(Response::new(stream))
     }
