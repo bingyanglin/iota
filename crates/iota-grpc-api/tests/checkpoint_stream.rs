@@ -59,7 +59,7 @@ fn mock_checkpoint_summary(sequence_number: u64) -> CheckpointSummary {
     }
 }
 
-fn mock_cert(sequence_number: u64) -> CertifiedCheckpointSummary {
+fn mock_summary(sequence_number: u64) -> CertifiedCheckpointSummary {
     let summary = mock_checkpoint_summary(sequence_number);
     let sig = AuthorityStrongQuorumSignInfo {
         epoch: 0,
@@ -69,14 +69,14 @@ fn mock_cert(sequence_number: u64) -> CertifiedCheckpointSummary {
     CertifiedCheckpointSummary::new_from_data_and_sig(summary, sig)
 }
 
-fn mock_cert_data(sequence_number: u64) -> (CertifiedCheckpointSummary, CheckpointData) {
-    let cert = mock_cert(sequence_number);
+fn mock_summary_data(sequence_number: u64) -> (CertifiedCheckpointSummary, CheckpointData) {
+    let summary = mock_summary(sequence_number);
     let data = CheckpointData {
-        checkpoint_summary: cert.clone(),
+        checkpoint_summary: summary.clone(),
         checkpoint_contents: MOCK_CHECKPOINT_CONTENTS.clone(),
         transactions: vec![],
     };
-    (cert, data)
+    (summary, data)
 }
 
 // Minimal empty trait impls to satisfy RestStateReader supertraits
@@ -126,7 +126,7 @@ impl iota_types::storage::ReadStore for MockRestStateReader {
         // Return the checkpoint with the highest sequence number
         let guard = self.checkpoints.lock().unwrap();
         if let Some(max_seq) = guard.iter().max().cloned() {
-            Ok(VerifiedCheckpoint::new_unchecked(mock_cert(max_seq)))
+            Ok(VerifiedCheckpoint::new_unchecked(mock_summary(max_seq)))
         } else {
             // Use the missing error constructor
             Err(iota_types::storage::error::Error::missing(
@@ -154,7 +154,7 @@ impl iota_types::storage::ReadStore for MockRestStateReader {
     ) -> iota_types::storage::error::Result<VerifiedCheckpoint> {
         let guard = self.checkpoints.lock().unwrap();
         if let Some(max_seq) = guard.iter().max().cloned() {
-            Ok(VerifiedCheckpoint::new_unchecked(mock_cert(max_seq)))
+            Ok(VerifiedCheckpoint::new_unchecked(mock_summary(max_seq)))
         } else {
             Err(iota_types::storage::error::Error::custom(
                 "No checkpoints available",
@@ -198,14 +198,16 @@ impl iota_types::storage::ReadStore for MockRestStateReader {
             // Return the highest checkpoint
             if let Some(max_seq) = guard.iter().max().cloned() {
                 println!("[READER] Returning highest checkpoint {max_seq}");
-                return Ok(Some(VerifiedCheckpoint::new_unchecked(mock_cert(max_seq))));
+                return Ok(Some(VerifiedCheckpoint::new_unchecked(mock_summary(
+                    max_seq,
+                ))));
             } else {
                 return Ok(None);
             }
         }
         Ok(guard.get(&seq).map(|_| {
             println!("[READER] Returning checkpoint {seq}");
-            VerifiedCheckpoint::new_unchecked(mock_cert(seq))
+            VerifiedCheckpoint::new_unchecked(mock_summary(seq))
         }))
     }
     fn get_checkpoint_by_sequence_number(
@@ -406,8 +408,8 @@ fn spawn_checkpoint_sender(
     tokio::spawn(async move {
         let mut seq = start_seq;
         loop {
-            let (cert, data) = mock_cert_data(seq);
-            let _ = summary_tx.send(Arc::new(GrpcCertifiedCheckpointSummary::from(cert)));
+            let (summary, data) = mock_summary_data(seq);
+            let _ = summary_tx.send(Arc::new(GrpcCertifiedCheckpointSummary::from(summary)));
             let _ = data_tx.send(Arc::new(GrpcCheckpointData::from(data)));
             seq += 1;
             tokio::time::sleep(std::time::Duration::from_millis(100)).await;
@@ -615,7 +617,7 @@ async fn test_historical_to_live_gap_fill() {
     );
 
     // Simulate broadcast channel at 150
-    let (summary_150, data_150) = mock_cert_data(150);
+    let (summary_150, data_150) = mock_summary_data(150);
     let _ = grpc_checkpoint_summary_tx
         .send(Arc::new(GrpcCertifiedCheckpointSummary::from(summary_150)));
     let _ = grpc_checkpoint_data_tx.send(Arc::new(GrpcCheckpointData::from(data_150)));
@@ -667,11 +669,11 @@ async fn test_gap_fill_with_slow_client() {
         let grpc_checkpoint_data_tx = grpc_checkpoint_data_tx.clone();
         async move {
             for i in 11..=200u64 {
-                let (cert, data) = mock_cert_data(i);
+                let (summary, data) = mock_summary_data(i);
                 checkpoints.lock().unwrap().insert(i);
                 println!("[gRPC] Producer inserted checkpoint {i}");
                 let _ = grpc_checkpoint_summary_tx
-                    .send(Arc::new(GrpcCertifiedCheckpointSummary::from(cert)));
+                    .send(Arc::new(GrpcCertifiedCheckpointSummary::from(summary)));
                 let _ = grpc_checkpoint_data_tx.send(Arc::new(GrpcCheckpointData::from(data)));
                 tokio::time::sleep(Duration::from_millis(100)).await;
             }
