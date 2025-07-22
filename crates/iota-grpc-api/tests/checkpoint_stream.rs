@@ -456,17 +456,17 @@ async fn test_start_sequence_number_only() {
 }
 
 #[tokio::test]
-async fn test_start_and_end_sequence_number() {
+async fn test_start_and_future_end_sequence_number() {
     let svc = test_service().await;
 
     spawn_checkpoint_sender(
         svc.grpc_checkpoint_summary_tx.clone(),
         svc.grpc_checkpoint_data_tx.clone(),
-        100,
+        11,
     );
     let req = CheckpointStreamRequest {
         start_sequence_number: Some(3),
-        end_sequence_number: Some(7),
+        end_sequence_number: Some(15),
         full: Some(false),
     };
     let mut stream = svc
@@ -494,14 +494,9 @@ async fn test_start_and_end_sequence_number() {
 }
 
 #[tokio::test]
-async fn test_end_sequence_number_only() {
+async fn test_historical_end_sequence_number_only() {
     let svc = test_service().await;
 
-    spawn_checkpoint_sender(
-        svc.grpc_checkpoint_summary_tx.clone(),
-        svc.grpc_checkpoint_data_tx.clone(),
-        100,
-    );
     let req = CheckpointStreamRequest {
         start_sequence_number: None,
         end_sequence_number: Some(4),
