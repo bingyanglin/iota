@@ -101,7 +101,7 @@ type CheckpointStreamResult = Result<node::Checkpoint, Status>;
 
 // Helper trait for getting checkpoint data and summaries,
 // intended as an abstractoin for Arc<dyn RestStateReader>.
-trait CheckpointOracle<T>
+trait CheckpointReader<T>
 where
     T: Send + Sync + 'static + Serialize,
     Self: Send + Sync + 'static,
@@ -135,7 +135,7 @@ fn get_full_checkpoint_data(
     Some(state_reader.get_checkpoint_data(summary, contents))
 }
 
-impl CheckpointOracle<GrpcCheckpointData> for Oracle {
+impl CheckpointReader<GrpcCheckpointData> for Oracle {
     fn get_sequence_number(&self, item: &Arc<GrpcCheckpointData>) -> u64 {
         item.sequence_number()
     }
@@ -149,7 +149,7 @@ impl CheckpointOracle<GrpcCheckpointData> for Oracle {
     }
 }
 
-impl CheckpointOracle<GrpcCertifiedCheckpointSummary> for Oracle {
+impl CheckpointReader<GrpcCertifiedCheckpointSummary> for Oracle {
     fn get_sequence_number(&self, item: &Arc<GrpcCertifiedCheckpointSummary>) -> u64 {
         item.sequence_number()
     }
@@ -173,7 +173,7 @@ fn create_checkpoint_stream<T, F>(
 ) -> impl futures::Stream<Item = CheckpointStreamResult> + Send
 where
     T: Send + Sync + 'static + Serialize,
-    F: CheckpointOracle<T> + Clone + Send + Sync + 'static,
+    F: CheckpointReader<T> + Clone + Send + Sync + 'static,
 {
     async_stream::try_stream! {
         // TODO: Modify the latest checkpoint to start from 1.
