@@ -314,7 +314,7 @@ impl NodeService for NodeGrpcService {
         request: Request<node::EpochRequest>,
     ) -> Result<Response<node::CheckpointSequenceNumberResponse>, Status> {
         let epoch = request.into_inner().epoch;
-        info!(
+        debug!(
             "get_epoch_first_checkpoint_sequence_number called for epoch {}",
             epoch
         );
