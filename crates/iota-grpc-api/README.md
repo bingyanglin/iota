@@ -31,7 +31,7 @@ grpc_api_config:
 use iota_grpc_api::client::GrpcNodeClient;
 
 let mut client = GrpcNodeClient::connect("http://localhost:50051").await?;
-let mut stream = client.stream_checkpoints(0, Some(10), Some(false)).await?;
+let mut stream = client.stream_checkpoints(Some(0), Some(10), Some(false)).await?;
 while let Some(Ok(checkpoint)) = stream.next().await {
     // Deserialize and process checkpoint.data (BCS-encoded CertifiedCheckpointSummary)
 }

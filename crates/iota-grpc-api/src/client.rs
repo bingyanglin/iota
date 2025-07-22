@@ -25,13 +25,13 @@ impl GrpcNodeClient {
     /// Stream checkpoints from the IOTA node with flexible range options.
     pub async fn stream_checkpoints(
         &mut self,
-        start: Option<u64>,
-        end: Option<u64>,
+        start_sequence_number: Option<u64>,
+        end_sequence_number: Option<u64>,
         full: Option<bool>,
     ) -> Result<tonic::Streaming<crate::node::Checkpoint>, tonic::Status> {
         let request = crate::node::CheckpointStreamRequest {
-            start_sequence_number: start,
-            end_sequence_number: end,
+            start_sequence_number,
+            end_sequence_number,
             full,
         };
         let response = self.client.stream_checkpoints(request).await?;
