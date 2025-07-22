@@ -14,4 +14,4 @@ workspace = true
 serde.workspace = true
 
 # internal dependencies
-iota-types = { path = "../iota-types" }
+iota-types.workspace = true
