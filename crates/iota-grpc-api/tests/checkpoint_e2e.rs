@@ -18,6 +18,7 @@ async fn e2e_stream_checkpoints() {
     // Start a test cluster with gRPC enabled and pruning disabled
     let cluster = TestClusterBuilder::new()
         .with_fullnode_grpc_api_address(grpc_addr.parse().expect("Invalid gRPC address"))
+        .disable_fullnode_pruning()
         .with_num_validators(1)
         .build()
         .await;
