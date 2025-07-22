@@ -71,6 +71,7 @@ impl BcsData {
         bcs::from_bytes(&self.data)
     }
 }
+
 pub struct NodeGrpcService {
     pub state_reader: Arc<dyn RestStateReader>,
     pub grpc_checkpoint_summary_tx:
