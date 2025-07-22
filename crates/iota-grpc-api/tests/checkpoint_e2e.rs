@@ -63,15 +63,12 @@ async fn e2e_stream_checkpoints() {
                 }
             }
             Err(e) => {
-                println!("[gRPC] Error streaming checkpoint: {e:?}");
-                break;
+                panic!("Error streaming checkpoint: {e:?}");
             }
         }
     }
     cluster.wait_for_checkpoint(20, None).await;
-    if indices.is_empty() {
-        println!("No checkpoints were streamed!");
-    }
+    assert!(!indices.is_empty(), "No checkpoints were streamed!");
     // There should be at least two checkpoints (genesis and at least one more)
     assert!(indices.len() >= 2, "Should stream at least two checkpoints");
 }
@@ -145,26 +142,20 @@ async fn test_get_epoch_first_checkpoint_sequence_number() {
                     }
                 }
                 Ok(iota_grpc_api::client::CheckpointContent::Data(_)) => {
-                    println!(
-                        "[gRPC] Expected checkpoint summary but received data at sequence_number {}",
+                    panic!(
+                        "Expected checkpoint summary but received data at sequence_number {}",
                         cp.sequence_number
                     );
-                    break;
                 }
                 Err(e) => {
-                    println!(
-                        "[gRPC] Failed to deserialize checkpoint at sequence_number {}: {:?}",
+                    panic!(
+                        "Failed to deserialize checkpoint at sequence_number {}: {:?}",
                         cp.sequence_number, e
                     );
-                    if let Some(bcs_data) = &cp.bcs_data {
-                        println!("[gRPC] Raw checkpoint data: {:?}", bcs_data.data);
-                    }
-                    break;
                 }
             },
             Err(e) => {
-                println!("[gRPC] Stream error: {e:?}");
-                break;
+                panic!("gRPC stream error: {e:?}");
             }
         }
     }
