@@ -550,7 +550,7 @@ async fn test_future_end_sequence_number_only_full() {
                 _ => panic!("Expected checkpoint data but got summary or error"),
             },
             Err(status) if status.code() == tonic::Code::NotFound => {
-                // Handle not found case
+                panic!("Stream ended unexpectedly before receiving enough checkpoints")
             }
             Err(e) => panic!("Unexpected error: {e:?}"),
         }
