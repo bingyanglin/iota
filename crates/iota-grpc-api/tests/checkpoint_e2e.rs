@@ -46,10 +46,8 @@ async fn e2e_stream_checkpoints() {
         .expect("gRPC call")
         .into_inner();
     println!("Starting to stream checkpoints");
-    // Wait for 10 checkpoints to be available
-    cluster.wait_for_checkpoint(10, None).await;
 
-    // Only collect the first 2 checkpoints to avoid hanging
+    // Only collect the first 20 checkpoints to avoid hanging
     let mut indices = Vec::new();
     let mut count = 0;
     while let Some(res) = stream.next().await {
@@ -58,7 +56,7 @@ async fn e2e_stream_checkpoints() {
                 println!("[gRPC] Received checkpoint: {cp:?}");
                 indices.push(cp.sequence_number);
                 count += 1;
-                if count >= 2 {
+                if count >= 20 {
                     break;
                 }
             }
@@ -67,10 +65,8 @@ async fn e2e_stream_checkpoints() {
             }
         }
     }
-    cluster.wait_for_checkpoint(20, None).await;
-    assert!(!indices.is_empty(), "No checkpoints were streamed!");
-    // There should be at least two checkpoints (genesis and at least one more)
-    assert!(indices.len() >= 2, "Should stream at least two checkpoints");
+    // There should be at least 20 checkpoints
+    assert!(indices.len() >= 20, "Should stream at least 20 checkpoints");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
