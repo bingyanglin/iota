@@ -3,7 +3,7 @@
 
 use futures::StreamExt;
 use iota_grpc_api::{
-    checkpoint::{CheckpointStreamRequest, checkpoint_service_client::CheckpointServiceClient},
+    node::{CheckpointStreamRequest, node_service_client::NodeServiceClient},
     client::GrpcNodeClient,
 };
 use test_cluster::TestClusterBuilder;
@@ -27,7 +27,7 @@ async fn e2e_stream_checkpoints() {
     cluster.wait_for_checkpoint(2, None).await;
 
     println!("Connecting to gRPC at {grpc_addr}");
-    let mut client = CheckpointServiceClient::connect(format!("http://{grpc_addr}"))
+    let mut client = NodeServiceClient::connect(format!("http://{grpc_addr}"))
         .await
         .expect("connect gRPC");
     println!("Connected to gRPC!");

@@ -37,11 +37,11 @@ fn default_checkpoint_broadcast_buffer_size() -> usize {
     100
 }
 
-pub mod checkpoint {
+pub mod node {
     tonic::include_proto!("iota.grpc");
 }
 
-use checkpoint::{BcsData, checkpoint_service_server::CheckpointService};
+use node::{BcsData, node_service_server::NodeService};
 use iota_types::storage::RestStateReader;
 pub mod client;
 use iota_grpc_types::{
@@ -71,14 +71,14 @@ impl BcsData {
         bcs::from_bytes(&self.data)
     }
 }
-pub struct CheckpointGrpcService {
+pub struct NodeGrpcService {
     pub state_reader: Arc<dyn RestStateReader>,
     pub grpc_checkpoint_summary_tx:
         tokio::sync::broadcast::Sender<Arc<GrpcCertifiedCheckpointSummary>>,
     pub grpc_checkpoint_data_tx: tokio::sync::broadcast::Sender<Arc<GrpcCheckpointData>>,
 }
 
-impl CheckpointGrpcService {
+impl NodeGrpcService {
     pub fn new(
         state_reader: Arc<dyn RestStateReader>,
         grpc_checkpoint_summary_tx: tokio::sync::broadcast::Sender<
@@ -95,8 +95,8 @@ impl CheckpointGrpcService {
 }
 
 // Checkpoint stream item.
-// Note, checkpoint::Checkpoint may contain either checkpoint data or summary.
-type CheckpointStreamResult = Result<checkpoint::Checkpoint, Status>;
+// Note, node::Checkpoint may contain either checkpoint data or summary.
+type CheckpointStreamResult = Result<node::Checkpoint, Status>;
 
 // Helper trait for getting checkpoint data and summaries,
 // intended as an abstractoin for Arc<dyn RestStateReader>.
@@ -111,7 +111,7 @@ where
 
     fn create_checkpoint_response(&self, item: &Arc<T>, is_full: bool) -> CheckpointStreamResult {
         BcsData::serialize_from(item)
-            .map(|data| checkpoint::Checkpoint {
+            .map(|data| node::Checkpoint {
                 sequence_number: self.get_index(item),
                 bcs_data: Some(data),
                 is_full,
@@ -252,7 +252,7 @@ where
     }
 }
 
-impl CheckpointGrpcService {
+impl NodeGrpcService {
     fn stream_checkpoint_data(
         &self,
         start: Option<u64>,
@@ -287,13 +287,13 @@ impl CheckpointGrpcService {
 }
 
 #[tonic::async_trait]
-impl CheckpointService for CheckpointGrpcService {
+impl NodeService for NodeGrpcService {
     type StreamCheckpointsStream =
-        Pin<Box<dyn futures::Stream<Item = Result<checkpoint::Checkpoint, Status>> + Send>>;
+        Pin<Box<dyn futures::Stream<Item = Result<node::Checkpoint, Status>> + Send>>;
 
     async fn stream_checkpoints(
         &self,
-        request: Request<checkpoint::CheckpointStreamRequest>,
+        request: Request<node::CheckpointStreamRequest>,
     ) -> Result<Response<Self::StreamCheckpointsStream>, Status> {
         let req = request.into_inner();
         let start = req.start_sequence_number;
@@ -310,8 +310,8 @@ impl CheckpointService for CheckpointGrpcService {
 
     async fn get_epoch_first_checkpoint_sequence_number(
         &self,
-        request: Request<checkpoint::EpochRequest>,
-    ) -> Result<Response<checkpoint::CheckpointSequenceNumberResponse>, Status> {
+        request: Request<node::EpochRequest>,
+    ) -> Result<Response<node::CheckpointSequenceNumberResponse>, Status> {
         let epoch = request.into_inner().epoch;
         info!(
             "get_epoch_first_checkpoint_sequence_number called for epoch {}",
@@ -350,7 +350,7 @@ impl CheckpointService for CheckpointGrpcService {
         );
 
         Ok(Response::new(
-            checkpoint::CheckpointSequenceNumberResponse { sequence_number },
+            node::CheckpointSequenceNumberResponse { sequence_number },
         ))
     }
 }

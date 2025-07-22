@@ -4,7 +4,7 @@ This crate introduces a gRPC API for IOTA. The primary goal of this API is to pr
 
 ## Features
 
-The `CheckpointService` provides the following RPC endpoints:
+The `NodeService` provides the following RPC endpoints:
 
 - `StreamCheckpoints`: Stream checkpoint data based on a flexible range.
 - `GetEpochFirstCheckpointSequenceNumber`: Query the first checkpoint sequence number for a given epoch (useful for robust reset and epoch boundary handling).

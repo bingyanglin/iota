@@ -4,32 +4,32 @@
 use iota_grpc_types::{CertifiedCheckpointSummary, CheckpointData};
 use tonic::transport::Channel;
 
-use crate::checkpoint::checkpoint_service_client::CheckpointServiceClient;
+use crate::node::node_service_client::NodeServiceClient;
 
 /// Enum representing the content of a checkpoint, either full data or summary.
 pub enum CheckpointContent {
     Data(iota_types::full_checkpoint_content::CheckpointData),
     Summary(iota_types::messages_checkpoint::CertifiedCheckpointSummary),
 }
-/// Shared gRPC client for checkpoint streaming.
+/// Shared gRPC client for IOTA node operations.
 pub struct GrpcNodeClient {
-    client: CheckpointServiceClient<Channel>,
+    client: NodeServiceClient<Channel>,
 }
 
 impl GrpcNodeClient {
     pub async fn connect(url: &str) -> Result<Self, tonic::transport::Error> {
-        let client = CheckpointServiceClient::connect(url.to_string()).await?;
+        let client = NodeServiceClient::connect(url.to_string()).await?;
         Ok(Self { client })
     }
 
-    /// Stream checkpoints with any combination of start and end indices.
+    /// Stream checkpoints from the IOTA node with flexible range options.
     pub async fn stream_checkpoints(
         &mut self,
         start: Option<u64>,
         end: Option<u64>,
         full: Option<bool>,
-    ) -> Result<tonic::Streaming<crate::checkpoint::Checkpoint>, tonic::Status> {
-        let request = crate::checkpoint::CheckpointStreamRequest {
+    ) -> Result<tonic::Streaming<crate::node::Checkpoint>, tonic::Status> {
+        let request = crate::node::CheckpointStreamRequest {
             start_sequence_number: start,
             end_sequence_number: end,
             full,
@@ -38,11 +38,12 @@ impl GrpcNodeClient {
         Ok(response.into_inner())
     }
 
+    /// Get the first checkpoint sequence number for a given epoch.
     pub async fn get_epoch_first_checkpoint_sequence_number(
         &mut self,
         epoch: u64,
     ) -> Result<u64, tonic::Status> {
-        let request = crate::checkpoint::EpochRequest { epoch };
+        let request = crate::node::EpochRequest { epoch };
         let response = self
             .client
             .get_epoch_first_checkpoint_sequence_number(request)
@@ -50,11 +51,11 @@ impl GrpcNodeClient {
         Ok(response.into_inner().sequence_number)
     }
 
-    /// Auto-deserialize checkpoint based on the is_full field.
+    /// Deserialize checkpoint data based on the checkpoint type (full or summary).
     /// Returns either checkpoint data or summary depending on the checkpoint
     /// type.
     pub fn deserialize_checkpoint(
-        checkpoint: &crate::checkpoint::Checkpoint,
+        checkpoint: &crate::node::Checkpoint,
     ) -> Result<CheckpointContent, Box<dyn std::error::Error + Send + Sync>> {
         let bcs_data = checkpoint
             .bcs_data
