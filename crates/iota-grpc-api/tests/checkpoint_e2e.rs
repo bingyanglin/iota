@@ -3,8 +3,8 @@
 
 use futures::StreamExt;
 use iota_grpc_api::{
-    node::{CheckpointStreamRequest, node_service_client::NodeServiceClient},
     client::GrpcNodeClient,
+    node::{CheckpointStreamRequest, node_service_client::NodeServiceClient},
 };
 use test_cluster::TestClusterBuilder;
 use tonic::Request;

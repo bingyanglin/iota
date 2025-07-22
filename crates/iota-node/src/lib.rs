@@ -76,9 +76,7 @@ use iota_core::{
     transaction_orchestrator::TransactionOrchestrator,
     validator_tx_finalizer::ValidatorTxFinalizer,
 };
-use iota_grpc_api::{
-    NodeGrpcService, node::node_service_server::NodeServiceServer,
-};
+use iota_grpc_api::{NodeGrpcService, node::node_service_server::NodeServiceServer};
 use iota_grpc_types::{CertifiedCheckpointSummary, CheckpointData};
 use iota_json_rpc::{
     JsonRpcServerBuilder, coin_api::CoinReadApi, governance_api::GovernanceReadApi,
@@ -2265,8 +2263,7 @@ async fn build_grpc_server(
 
     let rest_read_store = Arc::new(RestReadStore::new(state, state_sync_store));
 
-    let grpc_service =
-        NodeGrpcService::new(rest_read_store, summary_tx.clone(), data_tx.clone());
+    let grpc_service = NodeGrpcService::new(rest_read_store, summary_tx.clone(), data_tx.clone());
 
     tokio::spawn(async move {
         info!("Starting gRPC server on {grpc_api_address}");

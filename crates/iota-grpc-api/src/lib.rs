@@ -41,8 +41,8 @@ pub mod node {
     tonic::include_proto!("iota.grpc");
 }
 
-use node::{BcsData, node_service_server::NodeService};
 use iota_types::storage::RestStateReader;
+use node::{BcsData, node_service_server::NodeService};
 pub mod client;
 use iota_grpc_types::{
     CertifiedCheckpointSummary as GrpcCertifiedCheckpointSummary,
@@ -349,8 +349,8 @@ impl NodeService for NodeGrpcService {
             epoch, sequence_number
         );
 
-        Ok(Response::new(
-            node::CheckpointSequenceNumberResponse { sequence_number },
-        ))
+        Ok(Response::new(node::CheckpointSequenceNumberResponse {
+            sequence_number,
+        }))
     }
 }

@@ -22,7 +22,7 @@ impl GrpcNodeClient {
         Ok(Self { client })
     }
 
-    /// Stream checkpoints from the IOTA node with flexible range options.
+    /// Stream checkpoints with any combination of start and end sequence numbers.
     pub async fn stream_checkpoints(
         &mut self,
         start_sequence_number: Option<u64>,
@@ -51,9 +51,9 @@ impl GrpcNodeClient {
         Ok(response.into_inner().sequence_number)
     }
 
-    /// Deserialize checkpoint data based on the checkpoint type (full or summary).
-    /// Returns either checkpoint data or summary depending on the checkpoint
-    /// type.
+    /// Deserialize checkpoint data based on the checkpoint type (full or
+    /// summary). Returns either checkpoint data or summary depending on the
+    /// checkpoint type.
     pub fn deserialize_checkpoint(
         checkpoint: &crate::node::Checkpoint,
     ) -> Result<CheckpointContent, Box<dyn std::error::Error + Send + Sync>> {
