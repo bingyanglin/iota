@@ -1,8 +1,6 @@
 // Copyright (c) 2025 IOTA Stiftung
 // SPDX-License-Identifier: Apache-2.0
 
-tonic::include_proto!("iota.grpc");
-
 use iota_grpc_types::{CertifiedCheckpointSummary, CheckpointData};
 use tonic::transport::Channel;
 
