@@ -5477,6 +5477,7 @@ dependencies = [
  "test-cluster",
  "thiserror 1.0.64",
  "tokio",
+ "toml 0.7.8",
  "tracing",
  "url",
 ]
