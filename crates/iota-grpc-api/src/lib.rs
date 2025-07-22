@@ -106,14 +106,14 @@ where
     T: Send + Sync + 'static + Serialize,
     Self: Send + Sync + 'static,
 {
-    fn get_index(&self, item: &Arc<T>) -> u64;
+    fn get_sequence_number(&self, item: &Arc<T>) -> u64;
     fn get_item(&self, ix: u64) -> Option<Arc<T>>;
     fn get_latest(&self) -> Option<u64>;
 
     fn create_checkpoint_response(&self, item: &Arc<T>, is_full: bool) -> CheckpointStreamResult {
         BcsData::serialize_from(item)
             .map(|data| node::Checkpoint {
-                sequence_number: self.get_index(item),
+                sequence_number: self.get_sequence_number(item),
                 bcs_data: Some(data),
                 is_full,
             })
@@ -136,7 +136,7 @@ fn get_full_checkpoint_data(
 }
 
 impl CheckpointOracle<GrpcCheckpointData> for Oracle {
-    fn get_index(&self, item: &Arc<GrpcCheckpointData>) -> u64 {
+    fn get_sequence_number(&self, item: &Arc<GrpcCheckpointData>) -> u64 {
         item.sequence_number()
     }
     fn get_item(&self, ix: u64) -> Option<Arc<GrpcCheckpointData>> {
@@ -150,7 +150,7 @@ impl CheckpointOracle<GrpcCheckpointData> for Oracle {
 }
 
 impl CheckpointOracle<GrpcCertifiedCheckpointSummary> for Oracle {
-    fn get_index(&self, item: &Arc<GrpcCertifiedCheckpointSummary>) -> u64 {
+    fn get_sequence_number(&self, item: &Arc<GrpcCertifiedCheckpointSummary>) -> u64 {
         item.sequence_number()
     }
     fn get_item(&self, ix: u64) -> Option<Arc<GrpcCertifiedCheckpointSummary>> {
@@ -209,7 +209,7 @@ where
             if let Some(item) = cached.take() {
                 // already have something in cache
                 debug!("[profile][grpc] Using cached checkpoint data for index {start}.");
-                let idx = oracle.get_index(&item);
+                let idx = oracle.get_sequence_number(&item);
                 if start == idx {
                     yield oracle.create_checkpoint_response(&item, is_full)?;
                     if start == end {
@@ -223,8 +223,8 @@ where
             // wait for broadcast
             match rx.recv().await {
                 Ok(item) => {
-                    debug!("[profile][grpc] Get checkpoint data for index {} from broadcast channel", oracle.get_index(&item));
-                    let idx = oracle.get_index(&item);
+                    debug!("[profile][grpc] Get checkpoint data for index {} from broadcast channel", oracle.get_sequence_number(&item));
+                    let idx = oracle.get_sequence_number(&item);
                     if start == idx {
                         yield oracle.create_checkpoint_response(&item, is_full)?;
                         if start == end {
