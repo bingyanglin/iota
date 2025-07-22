@@ -1358,10 +1358,6 @@ impl TestClusterBuilder {
             .with_fullnode_policy_config(self.fullnode_policy_config.clone())
             .with_fullnode_fw_config(self.fullnode_fw_config.clone());
 
-        if let Some(config) = &self.fullnode_grpc_api_config {
-            builder = builder.with_fullnode_grpc_api_config(config.clone());
-        }
-
         if let Some(genesis_config) = self.genesis_config.take() {
             builder = builder.with_genesis_config(genesis_config);
         }
