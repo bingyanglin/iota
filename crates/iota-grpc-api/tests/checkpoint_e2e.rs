@@ -4,42 +4,39 @@
 use std::time::Duration;
 
 use futures::StreamExt;
-use iota_grpc_api::{
-    client::GrpcNodeClient,
-    node::{CheckpointStreamRequest, node_service_client::NodeServiceClient},
-};
-use test_cluster::TestClusterBuilder;
-use tonic::Request;
+use iota_config::local_ip_utils;
+use iota_grpc_api::client::GrpcNodeClient;
+use test_cluster::{TestCluster, TestClusterBuilder};
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn e2e_stream_checkpoints() {
-    // Pick a port for gRPC
-    let grpc_port = 50055u16;
-    let grpc_addr = format!("127.0.0.1:{grpc_port}");
+async fn setup_test_cluster_and_client() -> (TestCluster, GrpcNodeClient) {
+    let localhost = local_ip_utils::localhost_for_testing();
+    let grpc_port = local_ip_utils::get_available_port(&localhost);
+    let grpc_addr = format!("{localhost}:{grpc_port}");
 
     // Start a test cluster with gRPC enabled and pruning disabled
-    let _cluster = TestClusterBuilder::new()
+    let cluster = TestClusterBuilder::new()
         .with_fullnode_grpc_api_address(grpc_addr.parse().expect("Invalid gRPC address"))
         .disable_fullnode_pruning()
         .with_num_validators(1)
         .build()
         .await;
 
-    let mut client = NodeServiceClient::connect(format!("http://{grpc_addr}"))
+    let client = GrpcNodeClient::connect(&format!("http://{grpc_addr}"))
         .await
         .expect("connect gRPC");
 
-    // Request all checkpoints
-    let request = Request::new(CheckpointStreamRequest {
-        start_sequence_number: None,
-        end_sequence_number: None,
-        full: None,
-    });
+    (cluster, client)
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn e2e_stream_checkpoints() {
+    let (_cluster, mut client) = setup_test_cluster_and_client().await;
+
+    // Request all checkpoints using the higher-level GrpcNodeClient API
     let mut stream = client
-        .stream_checkpoints(request)
+        .stream_checkpoints(None, None, None)
         .await
-        .expect("gRPC call")
-        .into_inner();
+        .expect("gRPC call");
 
     // Only collect the first 20 checkpoints to avoid hanging
     let mut indices = Vec::new();
@@ -70,17 +67,7 @@ async fn e2e_stream_checkpoints() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_get_epoch_first_checkpoint_sequence_number() {
-    // Pick a port for gRPC
-    let grpc_port = 50058u16;
-    let grpc_addr = format!("127.0.0.1:{grpc_port}");
-
-    // Start a test cluster with gRPC enabled and pruning disabled
-    let cluster = TestClusterBuilder::new()
-        .with_fullnode_grpc_api_address(grpc_addr.parse().expect("Invalid gRPC address"))
-        .disable_fullnode_pruning()
-        .with_num_validators(1)
-        .build()
-        .await;
+    let (cluster, mut client) = setup_test_cluster_and_client().await;
 
     let sender = cluster.get_address_0();
     let receiver = cluster.get_address_1();
@@ -96,11 +83,6 @@ async fn test_get_epoch_first_checkpoint_sequence_number() {
     cluster.wait_for_checkpoint(3, None).await;
     cluster.force_new_epoch().await;
     cluster.transfer_iota_must_exceed(sender, receiver, 1).await;
-
-    // Connect to the gRPC endpoint
-    let mut client = GrpcNodeClient::connect(&format!("http://{grpc_addr}"))
-        .await
-        .expect("connect gRPC");
 
     // List all checkpoints and their epochs using the gRPC stream
     let mut stream = client
@@ -167,19 +149,8 @@ async fn test_get_epoch_first_checkpoint_sequence_number() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_stream_full_checkpoint_data() {
-    let grpc_port = 50059u16;
-    let grpc_addr = format!("127.0.0.1:{grpc_port}");
+    let (_cluster, mut client) = setup_test_cluster_and_client().await;
 
-    // Start a test cluster with gRPC enabled and pruning disabled
-    let _cluster = TestClusterBuilder::new()
-        .with_fullnode_grpc_api_address(grpc_addr.parse().expect("Invalid gRPC address"))
-        .disable_fullnode_pruning()
-        .with_num_validators(1)
-        .build()
-        .await;
-    let mut client = GrpcNodeClient::connect(&format!("http://{grpc_addr}"))
-        .await
-        .unwrap();
     let mut stream = client
         .stream_checkpoints(None, Some(2), Some(true))
         .await

@@ -6439,6 +6439,7 @@ dependencies = [
  "async-stream",
  "bcs",
  "futures",
+ "iota-config",
  "iota-grpc-types",
  "iota-types",
  "move-core-types",
