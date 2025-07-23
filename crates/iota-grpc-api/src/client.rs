@@ -11,6 +11,7 @@ pub enum CheckpointContent {
     Data(CheckpointData),
     Summary(CertifiedCheckpointSummary),
 }
+
 /// Shared gRPC client for IOTA node operations.
 pub struct GrpcNodeClient {
     client: NodeServiceClient<Channel>,
