@@ -188,8 +188,6 @@ where
             (Some(start), None) => (start, u64::MAX),
             (Some(start), Some(end)) => (start, end),
         };
-        let mut cached = None;
-
         while start <= end {
             // try fetching historical data from the DB first
             if start <= latest {
@@ -207,20 +205,6 @@ where
                 }
             }
             // latest < start, live phase
-            if let Some(item) = cached.take() {
-                // already have something in cache
-                debug!("[profile][grpc] Using cached checkpoint data for index {start}.");
-                let seq_number = oracle.get_sequence_number(&item);
-                if start == seq_number {
-                    yield oracle.create_checkpoint_response(&item, is_full)?;
-                    if start == end {
-                        break;
-                    }
-                    start += 1;
-                } else if start < seq_number {
-                    cached = Some(item);
-                }
-            }
             // wait for broadcast
             match rx.recv().await {
                 Ok(item) => {
@@ -233,11 +217,8 @@ where
                         }
                         start += 1;
                         continue;
-                    } else if start < seq_number {
-                        // the item is too fresh, need to fill the gap from history DB
-                        debug!("[profile][grpc] Gap detected, waiting for historical data for index {start} (latest: {latest}).");
-                        cached = Some(item);
-                    } // else item is too old, just drop it and continue
+                    }
+                    // else item sequence doesn't match, drop it and continue
                 }
                 Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
                     // continue, lagged item should be picked up from history DB

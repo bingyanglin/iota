@@ -662,7 +662,7 @@ async fn test_gap_fill_with_slow_client() {
         grpc_checkpoint_data_tx.clone(),
     );
 
-    // Producer: generates checkpoints 0..=20, one every 100ms
+    // Producer: generates checkpoints 0..=200, one every 100ms
     tokio::spawn({
         let grpc_checkpoint_summary_tx = grpc_checkpoint_summary_tx.clone();
         let grpc_checkpoint_data_tx = grpc_checkpoint_data_tx.clone();
