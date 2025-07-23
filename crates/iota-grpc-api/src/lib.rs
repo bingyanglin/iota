@@ -122,7 +122,7 @@ where
 }
 
 #[derive(Clone)]
-struct Oracle {
+struct Reader {
     state_reader: Arc<dyn RestStateReader>,
 }
 
@@ -135,7 +135,7 @@ fn get_full_checkpoint_data(
     Some(state_reader.get_checkpoint_data(summary, contents))
 }
 
-impl CheckpointReader<GrpcCheckpointData> for Oracle {
+impl CheckpointReader<GrpcCheckpointData> for Reader {
     fn get_sequence_number(&self, item: &Arc<GrpcCheckpointData>) -> u64 {
         item.sequence_number()
     }
@@ -149,7 +149,7 @@ impl CheckpointReader<GrpcCheckpointData> for Oracle {
     }
 }
 
-impl CheckpointReader<GrpcCertifiedCheckpointSummary> for Oracle {
+impl CheckpointReader<GrpcCertifiedCheckpointSummary> for Reader {
     fn get_sequence_number(&self, item: &Arc<GrpcCertifiedCheckpointSummary>) -> u64 {
         item.sequence_number()
     }
@@ -165,7 +165,7 @@ impl CheckpointReader<GrpcCertifiedCheckpointSummary> for Oracle {
 }
 
 fn create_checkpoint_stream<T, F>(
-    oracle: F,
+    reader: F,
     mut rx: Receiver<Arc<T>>,
     start_sequence_number: Option<u64>,
     end_sequence_number: Option<u64>,
@@ -180,7 +180,7 @@ where
         // TODO: Modify the latest checkpoint to start from 1.
         // Note that we do not stream the Genesis checkpoint because its size
         // can be very big. The genesis checkpoint should be imported directly.
-        let mut latest = oracle.get_latest().unwrap_or(0);
+        let mut latest = reader.get_latest().unwrap_or(0);
         debug!("[profile][grpc] Latest checkpoint index: {latest}.");
         let (mut start, end) = match (start_sequence_number, end_sequence_number) {
             (None, None) => (latest, u64::MAX),
@@ -191,10 +191,10 @@ where
         while start <= end {
             // try fetching historical data from the DB first
             if start <= latest {
-                if let Some(item) = oracle.get_item(start) {
+                if let Some(item) = reader.get_item(start) {
                     // TODO: add backfill tracing messages
                     debug!("[profile][grpc] Fetched checkpoint data for index {start} from DB.");
-                    yield oracle.create_checkpoint_response(&item, is_full)?;
+                    yield reader.create_checkpoint_response(&item, is_full)?;
                     if start == end {
                         break;
                     }
@@ -208,10 +208,10 @@ where
             // wait for broadcast
             match rx.recv().await {
                 Ok(item) => {
-                    debug!("[profile][grpc] Get checkpoint data for index {} from broadcast channel", oracle.get_sequence_number(&item));
-                    let seq_number = oracle.get_sequence_number(&item);
+                    debug!("[profile][grpc] Get checkpoint data for index {} from broadcast channel", reader.get_sequence_number(&item));
+                    let seq_number = reader.get_sequence_number(&item);
                     if start == seq_number {
-                        yield oracle.create_checkpoint_response(&item, is_full)?;
+                        yield reader.create_checkpoint_response(&item, is_full)?;
                         if start == end {
                             break;
                         }
@@ -229,7 +229,7 @@ where
                     break;
                 },
             }
-            latest = oracle.get_latest().unwrap_or(start);
+            latest = reader.get_latest().unwrap_or(start);
             debug!("[profile][grpc] Updating latest checkpoint index to {latest}.");
         }
     }
@@ -242,9 +242,9 @@ impl NodeGrpcService {
         end_sequence_number: Option<u64>,
     ) -> impl futures::Stream<Item = CheckpointStreamResult> + Send {
         let state_reader = self.state_reader.clone();
-        let oracle = Oracle { state_reader };
+        let reader = Reader { state_reader };
         create_checkpoint_stream(
-            oracle,
+            reader,
             self.grpc_checkpoint_data_tx.subscribe(),
             start_sequence_number,
             end_sequence_number,
@@ -258,9 +258,9 @@ impl NodeGrpcService {
         end_sequence_number: Option<u64>,
     ) -> impl futures::Stream<Item = CheckpointStreamResult> + Send {
         let state_reader = self.state_reader.clone();
-        let oracle = Oracle { state_reader };
+        let reader = Reader { state_reader };
         create_checkpoint_stream(
-            oracle,
+            reader,
             self.grpc_checkpoint_summary_tx.subscribe(),
             start_sequence_number,
             end_sequence_number,
