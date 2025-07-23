@@ -100,7 +100,7 @@ impl NodeGrpcService {
 type CheckpointStreamResult = Result<node::Checkpoint, Status>;
 
 // Helper trait for getting checkpoint data and summaries,
-// intended as an abstractoin for Arc<dyn RestStateReader>.
+// intended as an abstraction for Arc<dyn RestStateReader>.
 trait CheckpointReader<T>
 where
     T: Send + Sync + 'static + Serialize,
