@@ -64,12 +64,10 @@ impl GrpcNodeClient {
             .ok_or("Missing BCS data in checkpoint")?;
 
         if checkpoint.is_full {
-            let checkpoint_data = bcs_data
-                .deserialize_into::<CheckpointData>()?;
+            let checkpoint_data = bcs_data.deserialize_into::<CheckpointData>()?;
             Ok(CheckpointContent::Data(checkpoint_data))
         } else {
-            let checkpoint_summary = bcs_data
-                .deserialize_into::<CertifiedCheckpointSummary>()?;
+            let checkpoint_summary = bcs_data.deserialize_into::<CertifiedCheckpointSummary>()?;
             Ok(CheckpointContent::Summary(checkpoint_summary))
         }
     }

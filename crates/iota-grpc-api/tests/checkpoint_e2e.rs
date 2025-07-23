@@ -23,7 +23,6 @@ async fn e2e_stream_checkpoints() {
         .build()
         .await;
 
-
     println!("Connecting to gRPC at {grpc_addr}");
     let mut client = NodeServiceClient::connect(format!("http://{grpc_addr}"))
         .await
