@@ -16,16 +16,13 @@ async fn e2e_stream_checkpoints() {
     let grpc_addr = format!("127.0.0.1:{grpc_port}");
 
     // Start a test cluster with gRPC enabled and pruning disabled
-    let cluster = TestClusterBuilder::new()
+    let _cluster = TestClusterBuilder::new()
         .with_fullnode_grpc_api_address(grpc_addr.parse().expect("Invalid gRPC address"))
         .disable_fullnode_pruning()
         .with_num_validators(1)
         .build()
         .await;
 
-    // Wait for checkpoint 2 to be available
-    println!("Waiting for checkpoint 2");
-    cluster.wait_for_checkpoint(2, None).await;
 
     println!("Connecting to gRPC at {grpc_addr}");
     let mut client = NodeServiceClient::connect(format!("http://{grpc_addr}"))
@@ -184,13 +181,12 @@ async fn test_stream_full_checkpoint_data() {
     let grpc_addr = format!("127.0.0.1:{grpc_port}");
 
     // Start a test cluster with gRPC enabled and pruning disabled
-    let cluster = TestClusterBuilder::new()
+    let _cluster = TestClusterBuilder::new()
         .with_fullnode_grpc_api_address(grpc_addr.parse().expect("Invalid gRPC address"))
         .disable_fullnode_pruning()
         .with_num_validators(1)
         .build()
         .await;
-    cluster.wait_for_checkpoint(2, None).await;
     let mut client = GrpcNodeClient::connect(&format!("http://{grpc_addr}"))
         .await
         .unwrap();
