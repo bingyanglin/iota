@@ -176,6 +176,7 @@ where
     F: CheckpointReader<T> + Clone + Send + Sync + 'static,
 {
     async_stream::try_stream! {
+        // Link to issue (https://github.com/iotaledger/iota/issues/7943)
         // TODO: Modify the latest checkpoint to start from 1.
         // Note that we do not stream the Genesis checkpoint because its size
         // can be very big. The genesis checkpoint should be imported directly.
