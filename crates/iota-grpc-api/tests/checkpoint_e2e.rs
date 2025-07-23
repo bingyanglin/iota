@@ -121,8 +121,8 @@ async fn test_get_epoch_first_checkpoint_sequence_number() {
     while let Some(res) = stream.next().await {
         match res {
             Ok(cp) => match GrpcNodeClient::deserialize_checkpoint(&cp) {
-                Ok(iota_grpc_api::client::CheckpointContent::Summary(summary)) => {
-                    if let Some(v1_summary) = summary.as_v1() {
+                Ok(iota_grpc_api::client::CheckpointContent::Summary(summary)) => match summary {
+                    iota_grpc_types::CertifiedCheckpointSummary::V1(v1_summary) => {
                         let epoch = v1_summary.data().epoch;
                         println!(
                             "Checkpoint sequence_number: {}, epoch: {}",
@@ -134,7 +134,7 @@ async fn test_get_epoch_first_checkpoint_sequence_number() {
                             break;
                         }
                     }
-                }
+                },
                 Ok(iota_grpc_api::client::CheckpointContent::Data(_)) => {
                     panic!(
                         "Expected checkpoint summary but received data at sequence_number {}",
@@ -202,10 +202,10 @@ async fn test_stream_full_checkpoint_data() {
                 panic!("Expected data, got summary")
             }
         };
-        if let Some(v1_data) = checkpoint_data.as_v1() {
-            assert_eq!(v1_data.checkpoint_summary.sequence_number, 2);
-        } else {
-            panic!("Expected V1 checkpoint data");
+        match checkpoint_data {
+            iota_grpc_types::CheckpointData::V1(v1_data) => {
+                assert_eq!(v1_data.checkpoint_summary.sequence_number, 2);
+            }
         }
     } else {
         panic!("No checkpoint data returned");
