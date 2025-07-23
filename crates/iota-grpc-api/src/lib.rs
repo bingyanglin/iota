@@ -209,14 +209,14 @@ where
             if let Some(item) = cached.take() {
                 // already have something in cache
                 debug!("[profile][grpc] Using cached checkpoint data for index {start}.");
-                let idx = oracle.get_sequence_number(&item);
-                if start == idx {
+                let seq_number = oracle.get_sequence_number(&item);
+                if start == seq_number {
                     yield oracle.create_checkpoint_response(&item, is_full)?;
                     if start == end {
                         break;
                     }
                     start += 1;
-                } else if start < idx {
+                } else if start < seq_number {
                     cached = Some(item);
                 }
             }
@@ -224,15 +224,15 @@ where
             match rx.recv().await {
                 Ok(item) => {
                     debug!("[profile][grpc] Get checkpoint data for index {} from broadcast channel", oracle.get_sequence_number(&item));
-                    let idx = oracle.get_sequence_number(&item);
-                    if start == idx {
+                    let seq_number = oracle.get_sequence_number(&item);
+                    if start == seq_number {
                         yield oracle.create_checkpoint_response(&item, is_full)?;
                         if start == end {
                             break;
                         }
                         start += 1;
                         continue;
-                    } else if start < idx {
+                    } else if start < seq_number {
                         // the item is too fresh, need to fill the gap from history DB
                         debug!("[profile][grpc] Gap detected, waiting for historical data for index {start} (latest: {latest}).");
                         cached = Some(item);
