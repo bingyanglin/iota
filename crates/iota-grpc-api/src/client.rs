@@ -1,6 +1,7 @@
 // Copyright (c) 2025 IOTA Stiftung
 // SPDX-License-Identifier: Apache-2.0
 
+use futures::{Stream, StreamExt};
 use iota_grpc_types::{CertifiedCheckpointSummary, CheckpointData};
 use tonic::transport::Channel;
 
@@ -23,21 +24,26 @@ impl GrpcNodeClient {
         Ok(Self { client })
     }
 
-    /// Stream checkpoints with any combination of start and end sequence
-    /// numbers.
+    /// Stream checkpoints with automatic deserialization.
     pub async fn stream_checkpoints(
         &mut self,
         start_sequence_number: Option<u64>,
         end_sequence_number: Option<u64>,
         full: Option<bool>,
-    ) -> Result<tonic::Streaming<crate::node::Checkpoint>, tonic::Status> {
+    ) -> Result<impl Stream<Item = Result<CheckpointContent, tonic::Status>>, tonic::Status> {
         let request = crate::node::CheckpointStreamRequest {
             start_sequence_number,
             end_sequence_number,
             full,
         };
-        let response = self.client.stream_checkpoints(request).await?;
-        Ok(response.into_inner())
+        let stream = self.client.stream_checkpoints(request).await?.into_inner();
+
+        Ok(stream.map(|result| {
+            result.and_then(|checkpoint| {
+                Self::deserialize_checkpoint(&checkpoint)
+                    .map_err(|_| tonic::Status::internal("Failed to deserialize checkpoint"))
+            })
+        }))
     }
 
     /// Get the first checkpoint sequence number for a given epoch.
@@ -56,7 +62,7 @@ impl GrpcNodeClient {
     /// Deserialize checkpoint data based on the checkpoint type (full or
     /// summary). Returns either checkpoint data or summary depending on the
     /// checkpoint type.
-    pub fn deserialize_checkpoint(
+    fn deserialize_checkpoint(
         checkpoint: &crate::node::Checkpoint,
     ) -> Result<CheckpointContent, Box<dyn std::error::Error + Send + Sync>> {
         let bcs_data = checkpoint

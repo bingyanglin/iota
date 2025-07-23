@@ -45,13 +45,20 @@ async fn e2e_stream_checkpoints() {
     tokio::time::timeout(Duration::from_secs(120), async {
         while let Some(res) = stream.next().await {
             match res {
-                Ok(cp) => {
-                    indices.push(cp.sequence_number);
-                    count += 1;
-                    if count >= 20 {
-                        break;
+                Ok(checkpoint_content) => match checkpoint_content {
+                    iota_grpc_api::client::CheckpointContent::Summary(summary) => match summary {
+                        iota_grpc_types::CertifiedCheckpointSummary::V1(v1_summary) => {
+                            indices.push(v1_summary.data().sequence_number);
+                            count += 1;
+                            if count >= 20 {
+                                break;
+                            }
+                        }
+                    },
+                    iota_grpc_api::client::CheckpointContent::Data(_) => {
+                        panic!("Expected summary, got data");
                     }
-                }
+                },
                 Err(e) => {
                     panic!("Error streaming checkpoint: {e:?}");
                 }
@@ -95,29 +102,19 @@ async fn test_get_epoch_first_checkpoint_sequence_number() {
     tokio::time::timeout(Duration::from_secs(120), async {
         while let Some(res) = stream.next().await {
             match res {
-                Ok(cp) => match GrpcNodeClient::deserialize_checkpoint(&cp) {
-                    Ok(iota_grpc_api::client::CheckpointContent::Summary(summary)) => match summary
-                    {
+                Ok(checkpoint_content) => match checkpoint_content {
+                    iota_grpc_api::client::CheckpointContent::Summary(summary) => match summary {
                         iota_grpc_types::CertifiedCheckpointSummary::V1(v1_summary) => {
                             let epoch = v1_summary.data().epoch;
-                            all_indices.push(cp.sequence_number);
+                            all_indices.push(v1_summary.data().sequence_number);
                             all_epochs.push(epoch);
-                            if cp.sequence_number > 50 {
+                            if v1_summary.data().sequence_number > 50 {
                                 break;
                             }
                         }
                     },
-                    Ok(iota_grpc_api::client::CheckpointContent::Data(_)) => {
-                        panic!(
-                            "Expected checkpoint summary but received data at sequence_number {}",
-                            cp.sequence_number
-                        );
-                    }
-                    Err(e) => {
-                        panic!(
-                            "Failed to deserialize checkpoint at sequence_number {}: {:?}",
-                            cp.sequence_number, e
-                        );
+                    iota_grpc_api::client::CheckpointContent::Data(_) => {
+                        panic!("Expected summary, got data");
                     }
                 },
                 Err(e) => {
@@ -157,18 +154,22 @@ async fn test_stream_full_checkpoint_data() {
         .unwrap();
 
     tokio::time::timeout(Duration::from_secs(120), async {
-        if let Some(Ok(cp)) = stream.next().await {
-            let checkpoint_data = match GrpcNodeClient::deserialize_checkpoint(&cp)
-                .expect("Failed to deserialize checkpoint")
-            {
-                iota_grpc_api::client::CheckpointContent::Data(data) => data,
-                iota_grpc_api::client::CheckpointContent::Summary(_) => {
-                    panic!("Expected data, got summary")
-                }
-            };
-            match checkpoint_data {
-                iota_grpc_types::CheckpointData::V1(v1_data) => {
-                    assert_eq!(v1_data.checkpoint_summary.sequence_number, 2);
+        if let Some(res) = stream.next().await {
+            match res {
+                Ok(checkpoint_content) => match checkpoint_content {
+                    iota_grpc_api::client::CheckpointContent::Data(checkpoint_data) => {
+                        match checkpoint_data {
+                            iota_grpc_types::CheckpointData::V1(v1_data) => {
+                                assert_eq!(v1_data.checkpoint_summary.sequence_number, 2);
+                            }
+                        }
+                    }
+                    iota_grpc_api::client::CheckpointContent::Summary(_) => {
+                        panic!("Expected data, got summary");
+                    }
+                },
+                Err(e) => {
+                    panic!("Stream error: {e:?}");
                 }
             }
         } else {

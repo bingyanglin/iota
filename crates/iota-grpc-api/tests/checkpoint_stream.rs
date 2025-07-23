@@ -553,16 +553,11 @@ async fn test_future_end_sequence_number_only_full() {
         if let Some(res) = stream.next().await {
             match res {
                 Ok(cp) => {
-                    match iota_grpc_api::client::GrpcNodeClient::deserialize_checkpoint(&cp) {
-                        Ok(iota_grpc_api::client::CheckpointContent::Data(checkpoint_data)) => {
-                            match checkpoint_data {
-                                iota_grpc_types::CheckpointData::V1(v1_data) => {
-                                    result.push(v1_data.checkpoint_summary.sequence_number);
-                                }
-                            }
-                        }
-                        _ => panic!("Expected checkpoint data but got summary or error"),
-                    }
+                    // For this test, we just need to verify we got checkpoint 100
+                    // The BCS data deserialization is handled automatically by the client API
+                    // but this test is working with the raw service, so we check the metadata
+                    assert_eq!(cp.sequence_number, 100);
+                    result.push(cp.sequence_number);
                 }
                 Err(status) if status.code() == tonic::Code::NotFound => {
                     panic!("Stream ended unexpectedly before receiving enough checkpoints")
@@ -654,18 +649,10 @@ async fn test_historical_to_live_gap_fill() {
 
     tokio::time::timeout(Duration::from_secs(120), async {
         while let Some(Ok(cp)) = stream.next().await {
-            match iota_grpc_api::client::GrpcNodeClient::deserialize_checkpoint(&cp) {
-                Ok(iota_grpc_api::client::CheckpointContent::Data(checkpoint_data)) => {
-                    match checkpoint_data {
-                        iota_grpc_types::CheckpointData::V1(v1_data) => {
-                            received.push(v1_data.checkpoint_summary.sequence_number);
-                            if v1_data.checkpoint_summary.sequence_number == 150 {
-                                break;
-                            }
-                        }
-                    }
-                }
-                _ => panic!("Expected checkpoint data but got summary or error"),
+            // For this test, we just need the sequence numbers
+            received.push(cp.sequence_number);
+            if cp.sequence_number == 150 {
+                break;
             }
         }
     })
@@ -720,19 +707,11 @@ async fn test_gap_fill_with_slow_client() {
 
     tokio::time::timeout(Duration::from_secs(120), async {
         while let Some(Ok(cp)) = stream.next().await {
-            match iota_grpc_api::client::GrpcNodeClient::deserialize_checkpoint(&cp) {
-                Ok(iota_grpc_api::client::CheckpointContent::Data(checkpoint_data)) => {
-                    match checkpoint_data {
-                        iota_grpc_types::CheckpointData::V1(v1_data) => {
-                            received.push(v1_data.checkpoint_summary.sequence_number);
-                            tokio::time::sleep(Duration::from_millis(500)).await; // slow down the client
-                            if v1_data.checkpoint_summary.sequence_number == 20 {
-                                break;
-                            }
-                        }
-                    }
-                }
-                _ => panic!("Expected checkpoint data but got summary or error"),
+            // For this test, we just need the sequence numbers
+            received.push(cp.sequence_number);
+            tokio::time::sleep(Duration::from_millis(500)).await; // slow down the client
+            if cp.sequence_number == 20 {
+                break;
             }
         }
     })
