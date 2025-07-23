@@ -438,19 +438,25 @@ async fn test_start_sequence_number_only() {
         .into_inner();
     println!("Collecting results for test_start_sequence_number_only");
     let mut result = Vec::new();
-    while let Some(res) = stream.next().await {
-        match res {
-            Ok(cp) => {
-                // Only collect the expected range
-                if cp.sequence_number > 30 {
-                    break;
+
+    tokio::time::timeout(Duration::from_secs(120), async {
+        while let Some(res) = stream.next().await {
+            match res {
+                Ok(cp) => {
+                    // Only collect the expected range
+                    if cp.sequence_number > 30 {
+                        break;
+                    }
+                    result.push(cp.sequence_number)
                 }
-                result.push(cp.sequence_number)
+                Err(status) if status.code() == tonic::Code::NotFound => break,
+                Err(e) => panic!("Unexpected error: {e:?}"),
             }
-            Err(status) if status.code() == tonic::Code::NotFound => break,
-            Err(e) => panic!("Unexpected error: {e:?}"),
         }
-    }
+    })
+    .await
+    .expect("waiting for checkpoints timed out");
+
     println!("Result: {result:?}");
     assert_eq!(result, (5..=30).collect::<Vec<_>>());
 }
@@ -476,19 +482,25 @@ async fn test_start_and_future_end_sequence_number() {
         .into_inner();
     println!("Collecting results for test_start_and_end_sequence_number");
     let mut result = Vec::new();
-    while let Some(res) = stream.next().await {
-        match res {
-            Ok(cp) => {
-                // Only collect the expected range
-                if cp.sequence_number > 7 {
-                    break;
+
+    tokio::time::timeout(Duration::from_secs(120), async {
+        while let Some(res) = stream.next().await {
+            match res {
+                Ok(cp) => {
+                    // Only collect the expected range
+                    if cp.sequence_number > 7 {
+                        break;
+                    }
+                    result.push(cp.sequence_number)
                 }
-                result.push(cp.sequence_number)
+                Err(status) if status.code() == tonic::Code::NotFound => break,
+                Err(e) => panic!("Unexpected error: {e:?}"),
             }
-            Err(status) if status.code() == tonic::Code::NotFound => break,
-            Err(e) => panic!("Unexpected error: {e:?}"),
         }
-    }
+    })
+    .await
+    .expect("waiting for checkpoints timed out");
+
     println!("Result: {result:?}");
     assert_eq!(result, (3..=7).collect::<Vec<_>>());
 }
@@ -509,13 +521,19 @@ async fn test_historical_end_sequence_number_only() {
         .into_inner();
     println!("Collecting results for test_end_sequence_number_only");
     let mut result = Vec::new();
-    while let Some(res) = stream.next().await {
-        match res {
-            Ok(cp) => result.push(cp.sequence_number),
-            Err(status) if status.code() == tonic::Code::NotFound => break,
-            Err(e) => panic!("Unexpected error: {e:?}"),
+
+    tokio::time::timeout(Duration::from_secs(120), async {
+        while let Some(res) = stream.next().await {
+            match res {
+                Ok(cp) => result.push(cp.sequence_number),
+                Err(status) if status.code() == tonic::Code::NotFound => break,
+                Err(e) => panic!("Unexpected error: {e:?}"),
+            }
         }
-    }
+    })
+    .await
+    .expect("waiting for checkpoints timed out");
+
     println!("Result: {result:?}");
     assert_eq!(result, vec![4]);
 }
@@ -541,24 +559,32 @@ async fn test_future_end_sequence_number_only_full() {
         .into_inner();
     println!("Collecting results for test_future_end_sequence_number_only_full");
     let mut result = Vec::new();
-    if let Some(res) = stream.next().await {
-        match res {
-            Ok(cp) => match iota_grpc_api::client::GrpcNodeClient::deserialize_checkpoint(&cp) {
-                Ok(iota_grpc_api::client::CheckpointContent::Data(checkpoint_data)) => {
-                    match checkpoint_data {
-                        iota_grpc_types::CheckpointData::V1(v1_data) => {
-                            result.push(v1_data.checkpoint_summary.sequence_number);
+
+    tokio::time::timeout(Duration::from_secs(120), async {
+        if let Some(res) = stream.next().await {
+            match res {
+                Ok(cp) => {
+                    match iota_grpc_api::client::GrpcNodeClient::deserialize_checkpoint(&cp) {
+                        Ok(iota_grpc_api::client::CheckpointContent::Data(checkpoint_data)) => {
+                            match checkpoint_data {
+                                iota_grpc_types::CheckpointData::V1(v1_data) => {
+                                    result.push(v1_data.checkpoint_summary.sequence_number);
+                                }
+                            }
                         }
+                        _ => panic!("Expected checkpoint data but got summary or error"),
                     }
                 }
-                _ => panic!("Expected checkpoint data but got summary or error"),
-            },
-            Err(status) if status.code() == tonic::Code::NotFound => {
-                panic!("Stream ended unexpectedly before receiving enough checkpoints")
+                Err(status) if status.code() == tonic::Code::NotFound => {
+                    panic!("Stream ended unexpectedly before receiving enough checkpoints")
+                }
+                Err(e) => panic!("Unexpected error: {e:?}"),
             }
-            Err(e) => panic!("Unexpected error: {e:?}"),
         }
-    }
+    })
+    .await
+    .expect("waiting for checkpoint data timed out");
+
     println!("Result: {result:?}");
     assert_eq!(result, vec![100]);
 }
@@ -589,15 +615,20 @@ async fn test_both_indices_omitted() {
     );
 
     // Collect enough checkpoints to see both buffered and live ones
-    for _ in 0..15 {
-        if let Some(res) = stream.next().await {
-            match res {
-                Ok(cp) => result.push(cp.sequence_number),
-                Err(status) if status.code() == tonic::Code::NotFound => break,
-                Err(e) => panic!("Unexpected error: {e:?}"),
+    tokio::time::timeout(Duration::from_secs(120), async {
+        for _ in 0..15 {
+            if let Some(res) = stream.next().await {
+                match res {
+                    Ok(cp) => result.push(cp.sequence_number),
+                    Err(status) if status.code() == tonic::Code::NotFound => break,
+                    Err(e) => panic!("Unexpected error: {e:?}"),
+                }
             }
         }
-    }
+    })
+    .await
+    .expect("waiting for checkpoints timed out");
+
     println!("Result: {result:?}");
     // The first 11 should be 0..=10 (buffered), then live ones (11, 12, ...)
     assert_eq!(&result[..], &(10..=24).collect::<Vec<_>>()[..]);
@@ -634,21 +665,27 @@ async fn test_historical_to_live_gap_fill() {
         .into_inner();
     let mut received = Vec::new();
     // Collect up to 151 checkpoints
-    while let Some(Ok(cp)) = stream.next().await {
-        match iota_grpc_api::client::GrpcNodeClient::deserialize_checkpoint(&cp) {
-            Ok(iota_grpc_api::client::CheckpointContent::Data(checkpoint_data)) => {
-                match checkpoint_data {
-                    iota_grpc_types::CheckpointData::V1(v1_data) => {
-                        received.push(v1_data.checkpoint_summary.sequence_number);
-                        if v1_data.checkpoint_summary.sequence_number == 150 {
-                            break;
+
+    tokio::time::timeout(Duration::from_secs(120), async {
+        while let Some(Ok(cp)) = stream.next().await {
+            match iota_grpc_api::client::GrpcNodeClient::deserialize_checkpoint(&cp) {
+                Ok(iota_grpc_api::client::CheckpointContent::Data(checkpoint_data)) => {
+                    match checkpoint_data {
+                        iota_grpc_types::CheckpointData::V1(v1_data) => {
+                            received.push(v1_data.checkpoint_summary.sequence_number);
+                            if v1_data.checkpoint_summary.sequence_number == 150 {
+                                break;
+                            }
                         }
                     }
                 }
+                _ => panic!("Expected checkpoint data but got summary or error"),
             }
-            _ => panic!("Expected checkpoint data but got summary or error"),
         }
-    }
+    })
+    .await
+    .expect("waiting for checkpoint data timed out");
+
     // Assert we got all checkpoints 0..=150
     assert_eq!(received, (0..=150u64).collect::<Vec<_>>());
 }
@@ -695,25 +732,31 @@ async fn test_gap_fill_with_slow_client() {
         .unwrap()
         .into_inner();
     let mut received = Vec::new();
-    while let Some(Ok(cp)) = stream.next().await {
-        match iota_grpc_api::client::GrpcNodeClient::deserialize_checkpoint(&cp) {
-            Ok(iota_grpc_api::client::CheckpointContent::Data(checkpoint_data)) => {
-                match checkpoint_data {
-                    iota_grpc_types::CheckpointData::V1(v1_data) => {
-                        received.push(v1_data.checkpoint_summary.sequence_number);
-                        tokio::time::sleep(Duration::from_millis(500)).await; // slow down the client
-                        println!(
-                            "[gRPC] Client gets Checkpoint {:?}",
-                            v1_data.checkpoint_summary.sequence_number
-                        );
-                        if v1_data.checkpoint_summary.sequence_number == 20 {
-                            break;
+
+    tokio::time::timeout(Duration::from_secs(120), async {
+        while let Some(Ok(cp)) = stream.next().await {
+            match iota_grpc_api::client::GrpcNodeClient::deserialize_checkpoint(&cp) {
+                Ok(iota_grpc_api::client::CheckpointContent::Data(checkpoint_data)) => {
+                    match checkpoint_data {
+                        iota_grpc_types::CheckpointData::V1(v1_data) => {
+                            received.push(v1_data.checkpoint_summary.sequence_number);
+                            tokio::time::sleep(Duration::from_millis(500)).await; // slow down the client
+                            println!(
+                                "[gRPC] Client gets Checkpoint {:?}",
+                                v1_data.checkpoint_summary.sequence_number
+                            );
+                            if v1_data.checkpoint_summary.sequence_number == 20 {
+                                break;
+                            }
                         }
                     }
                 }
+                _ => panic!("Expected checkpoint data but got summary or error"),
             }
-            _ => panic!("Expected checkpoint data but got summary or error"),
         }
-    }
+    })
+    .await
+    .expect("waiting for checkpoint data timed out");
+
     assert_eq!(received, (0..=20u64).collect::<Vec<_>>());
 }

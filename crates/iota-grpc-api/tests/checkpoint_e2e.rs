@@ -1,6 +1,8 @@
 // Copyright (c) 2025 IOTA Stiftung
 // SPDX-License-Identifier: Apache-2.0
 
+use std::time::Duration;
+
 use futures::StreamExt;
 use iota_grpc_api::{
     client::GrpcNodeClient,
@@ -46,21 +48,27 @@ async fn e2e_stream_checkpoints() {
     // Only collect the first 20 checkpoints to avoid hanging
     let mut indices = Vec::new();
     let mut count = 0;
-    while let Some(res) = stream.next().await {
-        match res {
-            Ok(cp) => {
-                println!("[gRPC] Received checkpoint: {cp:?}");
-                indices.push(cp.sequence_number);
-                count += 1;
-                if count >= 20 {
-                    break;
+
+    tokio::time::timeout(Duration::from_secs(120), async {
+        while let Some(res) = stream.next().await {
+            match res {
+                Ok(cp) => {
+                    println!("[gRPC] Received checkpoint: {cp:?}");
+                    indices.push(cp.sequence_number);
+                    count += 1;
+                    if count >= 20 {
+                        break;
+                    }
+                }
+                Err(e) => {
+                    panic!("Error streaming checkpoint: {e:?}");
                 }
             }
-            Err(e) => {
-                panic!("Error streaming checkpoint: {e:?}");
-            }
         }
-    }
+    })
+    .await
+    .expect("waiting for checkpoints timed out");
+
     // There should be at least 20 checkpoints
     assert!(indices.len() >= 20, "Should stream at least 20 checkpoints");
 }
@@ -118,41 +126,47 @@ async fn test_get_epoch_first_checkpoint_sequence_number() {
         .expect("gRPC stream");
     let mut all_indices = vec![];
     let mut all_epochs = vec![];
-    while let Some(res) = stream.next().await {
-        match res {
-            Ok(cp) => match GrpcNodeClient::deserialize_checkpoint(&cp) {
-                Ok(iota_grpc_api::client::CheckpointContent::Summary(summary)) => match summary {
-                    iota_grpc_types::CertifiedCheckpointSummary::V1(v1_summary) => {
-                        let epoch = v1_summary.data().epoch;
-                        println!(
-                            "Checkpoint sequence_number: {}, epoch: {}",
-                            cp.sequence_number, epoch
-                        );
-                        all_indices.push(cp.sequence_number);
-                        all_epochs.push(epoch);
-                        if cp.sequence_number > 50 {
-                            break;
+
+    tokio::time::timeout(Duration::from_secs(120), async {
+        while let Some(res) = stream.next().await {
+            match res {
+                Ok(cp) => match GrpcNodeClient::deserialize_checkpoint(&cp) {
+                    Ok(iota_grpc_api::client::CheckpointContent::Summary(summary)) => match summary
+                    {
+                        iota_grpc_types::CertifiedCheckpointSummary::V1(v1_summary) => {
+                            let epoch = v1_summary.data().epoch;
+                            println!(
+                                "Checkpoint sequence_number: {}, epoch: {}",
+                                cp.sequence_number, epoch
+                            );
+                            all_indices.push(cp.sequence_number);
+                            all_epochs.push(epoch);
+                            if cp.sequence_number > 50 {
+                                break;
+                            }
                         }
+                    },
+                    Ok(iota_grpc_api::client::CheckpointContent::Data(_)) => {
+                        panic!(
+                            "Expected checkpoint summary but received data at sequence_number {}",
+                            cp.sequence_number
+                        );
+                    }
+                    Err(e) => {
+                        panic!(
+                            "Failed to deserialize checkpoint at sequence_number {}: {:?}",
+                            cp.sequence_number, e
+                        );
                     }
                 },
-                Ok(iota_grpc_api::client::CheckpointContent::Data(_)) => {
-                    panic!(
-                        "Expected checkpoint summary but received data at sequence_number {}",
-                        cp.sequence_number
-                    );
-                }
                 Err(e) => {
-                    panic!(
-                        "Failed to deserialize checkpoint at sequence_number {}: {:?}",
-                        cp.sequence_number, e
-                    );
+                    panic!("gRPC stream error: {e:?}");
                 }
-            },
-            Err(e) => {
-                panic!("gRPC stream error: {e:?}");
             }
         }
-    }
+    })
+    .await
+    .expect("waiting for checkpoints timed out");
 
     // Query for the first checkpoint of epoch 0 (should be 0)
     let first_0 = client
@@ -193,21 +207,26 @@ async fn test_stream_full_checkpoint_data() {
         .stream_checkpoints(None, Some(2), Some(true))
         .await
         .unwrap();
-    if let Some(Ok(cp)) = stream.next().await {
-        let checkpoint_data = match GrpcNodeClient::deserialize_checkpoint(&cp)
-            .expect("Failed to deserialize checkpoint")
-        {
-            iota_grpc_api::client::CheckpointContent::Data(data) => data,
-            iota_grpc_api::client::CheckpointContent::Summary(_) => {
-                panic!("Expected data, got summary")
+
+    tokio::time::timeout(Duration::from_secs(120), async {
+        if let Some(Ok(cp)) = stream.next().await {
+            let checkpoint_data = match GrpcNodeClient::deserialize_checkpoint(&cp)
+                .expect("Failed to deserialize checkpoint")
+            {
+                iota_grpc_api::client::CheckpointContent::Data(data) => data,
+                iota_grpc_api::client::CheckpointContent::Summary(_) => {
+                    panic!("Expected data, got summary")
+                }
+            };
+            match checkpoint_data {
+                iota_grpc_types::CheckpointData::V1(v1_data) => {
+                    assert_eq!(v1_data.checkpoint_summary.sequence_number, 2);
+                }
             }
-        };
-        match checkpoint_data {
-            iota_grpc_types::CheckpointData::V1(v1_data) => {
-                assert_eq!(v1_data.checkpoint_summary.sequence_number, 2);
-            }
+        } else {
+            panic!("No checkpoint data returned");
         }
-    } else {
-        panic!("No checkpoint data returned");
-    }
+    })
+    .await
+    .expect("waiting for checkpoint data timed out");
 }
