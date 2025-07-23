@@ -192,12 +192,10 @@ impl iota_types::storage::ReadStore for MockRestStateReader {
         &self,
         seq: CheckpointSequenceNumber,
     ) -> iota_types::storage::error::Result<Option<VerifiedCheckpoint>> {
-        println!("Mock try_get_checkpoint_by_sequence_number called for seq: {seq}");
         let guard = self.checkpoints.lock().unwrap();
         if seq == u64::MAX {
             // Return the highest checkpoint
             if let Some(max_seq) = guard.iter().max().cloned() {
-                println!("[READER] Returning highest checkpoint {max_seq}");
                 return Ok(Some(VerifiedCheckpoint::new_unchecked(mock_summary(
                     max_seq,
                 ))));
@@ -205,16 +203,14 @@ impl iota_types::storage::ReadStore for MockRestStateReader {
                 return Ok(None);
             }
         }
-        Ok(guard.get(&seq).map(|_| {
-            println!("[READER] Returning checkpoint {seq}");
-            VerifiedCheckpoint::new_unchecked(mock_summary(seq))
-        }))
+        Ok(guard
+            .get(&seq)
+            .map(|_| VerifiedCheckpoint::new_unchecked(mock_summary(seq))))
     }
     fn get_checkpoint_by_sequence_number(
         &self,
         seq: CheckpointSequenceNumber,
     ) -> Option<VerifiedCheckpoint> {
-        println!("Mock get_checkpoint_by_sequence_number called for seq: {seq}");
         self.try_get_checkpoint_by_sequence_number(seq)
             .expect("storage access failed")
     }
@@ -436,7 +432,6 @@ async fn test_start_sequence_number_only() {
         .await
         .unwrap()
         .into_inner();
-    println!("Collecting results for test_start_sequence_number_only");
     let mut result = Vec::new();
 
     tokio::time::timeout(Duration::from_secs(120), async {
@@ -457,7 +452,6 @@ async fn test_start_sequence_number_only() {
     .await
     .expect("waiting for checkpoints timed out");
 
-    println!("Result: {result:?}");
     assert_eq!(result, (5..=30).collect::<Vec<_>>());
 }
 
@@ -480,7 +474,6 @@ async fn test_start_and_future_end_sequence_number() {
         .await
         .unwrap()
         .into_inner();
-    println!("Collecting results for test_start_and_end_sequence_number");
     let mut result = Vec::new();
 
     tokio::time::timeout(Duration::from_secs(120), async {
@@ -501,7 +494,6 @@ async fn test_start_and_future_end_sequence_number() {
     .await
     .expect("waiting for checkpoints timed out");
 
-    println!("Result: {result:?}");
     assert_eq!(result, (3..=7).collect::<Vec<_>>());
 }
 
@@ -519,7 +511,6 @@ async fn test_historical_end_sequence_number_only() {
         .await
         .unwrap()
         .into_inner();
-    println!("Collecting results for test_end_sequence_number_only");
     let mut result = Vec::new();
 
     tokio::time::timeout(Duration::from_secs(120), async {
@@ -534,7 +525,6 @@ async fn test_historical_end_sequence_number_only() {
     .await
     .expect("waiting for checkpoints timed out");
 
-    println!("Result: {result:?}");
     assert_eq!(result, vec![4]);
 }
 
@@ -557,7 +547,6 @@ async fn test_future_end_sequence_number_only_full() {
         .await
         .unwrap()
         .into_inner();
-    println!("Collecting results for test_future_end_sequence_number_only_full");
     let mut result = Vec::new();
 
     tokio::time::timeout(Duration::from_secs(120), async {
@@ -585,7 +574,6 @@ async fn test_future_end_sequence_number_only_full() {
     .await
     .expect("waiting for checkpoint data timed out");
 
-    println!("Result: {result:?}");
     assert_eq!(result, vec![100]);
 }
 
@@ -604,7 +592,6 @@ async fn test_both_indices_omitted() {
         .await
         .unwrap()
         .into_inner();
-    println!("Collecting results for test_both_indices_omitted");
     let mut result = Vec::new();
 
     // Now send new checkpoints (live) after subscribing
@@ -629,7 +616,6 @@ async fn test_both_indices_omitted() {
     .await
     .expect("waiting for checkpoints timed out");
 
-    println!("Result: {result:?}");
     // The first 11 should be 0..=10 (buffered), then live ones (11, 12, ...)
     assert_eq!(&result[..], &(10..=24).collect::<Vec<_>>()[..]);
 }
@@ -711,7 +697,6 @@ async fn test_gap_fill_with_slow_client() {
             for i in 11..=200u64 {
                 let (summary, data) = mock_summary_data(i);
                 checkpoints.lock().unwrap().insert(i);
-                println!("[gRPC] Producer inserted checkpoint {i}");
                 let _ = grpc_checkpoint_summary_tx
                     .send(Arc::new(GrpcCertifiedCheckpointSummary::from(summary)));
                 let _ = grpc_checkpoint_data_tx.send(Arc::new(GrpcCheckpointData::from(data)));
@@ -741,10 +726,6 @@ async fn test_gap_fill_with_slow_client() {
                         iota_grpc_types::CheckpointData::V1(v1_data) => {
                             received.push(v1_data.checkpoint_summary.sequence_number);
                             tokio::time::sleep(Duration::from_millis(500)).await; // slow down the client
-                            println!(
-                                "[gRPC] Client gets Checkpoint {:?}",
-                                v1_data.checkpoint_summary.sequence_number
-                            );
                             if v1_data.checkpoint_summary.sequence_number == 20 {
                                 break;
                             }

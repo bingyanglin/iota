@@ -25,14 +25,11 @@ async fn e2e_stream_checkpoints() {
         .build()
         .await;
 
-    println!("Connecting to gRPC at {grpc_addr}");
     let mut client = NodeServiceClient::connect(format!("http://{grpc_addr}"))
         .await
         .expect("connect gRPC");
-    println!("Connected to gRPC!");
 
     // Request all checkpoints
-    println!("Sending gRPC stream request");
     let request = Request::new(CheckpointStreamRequest {
         start_sequence_number: None,
         end_sequence_number: None,
@@ -43,7 +40,6 @@ async fn e2e_stream_checkpoints() {
         .await
         .expect("gRPC call")
         .into_inner();
-    println!("Starting to stream checkpoints");
 
     // Only collect the first 20 checkpoints to avoid hanging
     let mut indices = Vec::new();
@@ -53,7 +49,6 @@ async fn e2e_stream_checkpoints() {
         while let Some(res) = stream.next().await {
             match res {
                 Ok(cp) => {
-                    println!("[gRPC] Received checkpoint: {cp:?}");
                     indices.push(cp.sequence_number);
                     count += 1;
                     if count >= 20 {
@@ -92,26 +87,15 @@ async fn test_get_epoch_first_checkpoint_sequence_number() {
 
     // Wait for 2 new checkpoint to be available
     cluster.wait_for_checkpoint(2, None).await;
-    println!("Checkpoint 2 available, forcing new epoch");
 
     // Advance to a new epoch
     cluster.force_new_epoch().await;
     cluster.transfer_iota_must_exceed(sender, receiver, 1).await;
-    let current_epoch = cluster
-        .fullnode_handle
-        .iota_node
-        .with(|node| node.state().epoch_store_for_testing().epoch());
-    println!("Current epoch after force_new_epoch: {current_epoch}");
 
     // Wait for 3 new checkpoints in the new epoch
     cluster.wait_for_checkpoint(3, None).await;
     cluster.force_new_epoch().await;
     cluster.transfer_iota_must_exceed(sender, receiver, 1).await;
-    let current_epoch = cluster
-        .fullnode_handle
-        .iota_node
-        .with(|node| node.state().epoch_store_for_testing().epoch());
-    println!("Current epoch after force_new_epoch: {current_epoch}");
 
     // Connect to the gRPC endpoint
     let mut client = GrpcNodeClient::connect(&format!("http://{grpc_addr}"))
@@ -119,7 +103,6 @@ async fn test_get_epoch_first_checkpoint_sequence_number() {
         .expect("connect gRPC");
 
     // List all checkpoints and their epochs using the gRPC stream
-    println!("[gRPC] Listing all checkpoints and their epochs via gRPC stream");
     let mut stream = client
         .stream_checkpoints(Some(0), None, Some(false))
         .await
@@ -135,10 +118,6 @@ async fn test_get_epoch_first_checkpoint_sequence_number() {
                     {
                         iota_grpc_types::CertifiedCheckpointSummary::V1(v1_summary) => {
                             let epoch = v1_summary.data().epoch;
-                            println!(
-                                "Checkpoint sequence_number: {}, epoch: {}",
-                                cp.sequence_number, epoch
-                            );
                             all_indices.push(cp.sequence_number);
                             all_epochs.push(epoch);
                             if cp.sequence_number > 50 {
@@ -173,7 +152,6 @@ async fn test_get_epoch_first_checkpoint_sequence_number() {
         .get_epoch_first_checkpoint_sequence_number(0)
         .await
         .expect("gRPC call");
-    println!("[gRPC] First checkpoint of epoch 0: {first_0}");
     assert_eq!(first_0, 0, "First checkpoint of epoch 0 should be 0");
 
     // Query for the first checkpoint of epoch 1 (should be >= 2)
@@ -181,7 +159,6 @@ async fn test_get_epoch_first_checkpoint_sequence_number() {
         .get_epoch_first_checkpoint_sequence_number(1)
         .await
         .expect("gRPC call");
-    println!("[gRPC] First checkpoint of epoch 1: {first_1}");
     assert!(
         first_1 >= 2,
         "First checkpoint of epoch 1 should be >= 2, got {first_1}"
