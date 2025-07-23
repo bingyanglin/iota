@@ -8,8 +8,8 @@ use crate::node::node_service_client::NodeServiceClient;
 
 /// Enum representing the content of a checkpoint, either full data or summary.
 pub enum CheckpointContent {
-    Data(iota_types::full_checkpoint_content::CheckpointData),
-    Summary(iota_types::messages_checkpoint::CertifiedCheckpointSummary),
+    Data(CheckpointData),
+    Summary(CertifiedCheckpointSummary),
 }
 /// Shared gRPC client for IOTA node operations.
 pub struct GrpcNodeClient {
@@ -65,15 +65,11 @@ impl GrpcNodeClient {
 
         if checkpoint.is_full {
             let checkpoint_data = bcs_data
-                .deserialize_into::<CheckpointData>()?
-                .into_v1()
-                .ok_or("Unsupported checkpoint data version")?;
+                .deserialize_into::<CheckpointData>()?;
             Ok(CheckpointContent::Data(checkpoint_data))
         } else {
             let checkpoint_summary = bcs_data
-                .deserialize_into::<CertifiedCheckpointSummary>()?
-                .into_v1()
-                .ok_or("Unsupported checkpoint summary version")?;
+                .deserialize_into::<CertifiedCheckpointSummary>()?;
             Ok(CheckpointContent::Summary(checkpoint_summary))
         }
     }

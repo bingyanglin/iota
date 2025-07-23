@@ -545,7 +545,9 @@ async fn test_future_end_sequence_number_only_full() {
         match res {
             Ok(cp) => match iota_grpc_api::client::GrpcNodeClient::deserialize_checkpoint(&cp) {
                 Ok(iota_grpc_api::client::CheckpointContent::Data(checkpoint_data)) => {
-                    result.push(checkpoint_data.checkpoint_summary.sequence_number);
+                    if let Some(v1_data) = checkpoint_data.as_v1() {
+                        result.push(v1_data.checkpoint_summary.sequence_number);
+                    }
                 }
                 _ => panic!("Expected checkpoint data but got summary or error"),
             },
@@ -633,9 +635,11 @@ async fn test_historical_to_live_gap_fill() {
     while let Some(Ok(cp)) = stream.next().await {
         match iota_grpc_api::client::GrpcNodeClient::deserialize_checkpoint(&cp) {
             Ok(iota_grpc_api::client::CheckpointContent::Data(checkpoint_data)) => {
-                received.push(checkpoint_data.checkpoint_summary.sequence_number);
-                if checkpoint_data.checkpoint_summary.sequence_number == 150 {
-                    break;
+                if let Some(v1_data) = checkpoint_data.as_v1() {
+                    received.push(v1_data.checkpoint_summary.sequence_number);
+                    if v1_data.checkpoint_summary.sequence_number == 150 {
+                        break;
+                    }
                 }
             }
             _ => panic!("Expected checkpoint data but got summary or error"),
@@ -690,14 +694,16 @@ async fn test_gap_fill_with_slow_client() {
     while let Some(Ok(cp)) = stream.next().await {
         match iota_grpc_api::client::GrpcNodeClient::deserialize_checkpoint(&cp) {
             Ok(iota_grpc_api::client::CheckpointContent::Data(checkpoint_data)) => {
-                received.push(checkpoint_data.checkpoint_summary.sequence_number);
-                tokio::time::sleep(Duration::from_millis(500)).await; // slow down the client
-                println!(
-                    "[gRPC] Client gets Checkpoint {:?}",
-                    checkpoint_data.checkpoint_summary.sequence_number
-                );
-                if checkpoint_data.checkpoint_summary.sequence_number == 20 {
-                    break;
+                if let Some(v1_data) = checkpoint_data.as_v1() {
+                    received.push(v1_data.checkpoint_summary.sequence_number);
+                    tokio::time::sleep(Duration::from_millis(500)).await; // slow down the client
+                    println!(
+                        "[gRPC] Client gets Checkpoint {:?}",
+                        v1_data.checkpoint_summary.sequence_number
+                    );
+                    if v1_data.checkpoint_summary.sequence_number == 20 {
+                        break;
+                    }
                 }
             }
             _ => panic!("Expected checkpoint data but got summary or error"),

@@ -126,15 +126,17 @@ async fn test_get_epoch_first_checkpoint_sequence_number() {
         match res {
             Ok(cp) => match GrpcNodeClient::deserialize_checkpoint(&cp) {
                 Ok(iota_grpc_api::client::CheckpointContent::Summary(summary)) => {
-                    let epoch = summary.data().epoch;
-                    println!(
-                        "Checkpoint sequence_number: {}, epoch: {}",
-                        cp.sequence_number, epoch
-                    );
-                    all_indices.push(cp.sequence_number);
-                    all_epochs.push(epoch);
-                    if cp.sequence_number > 50 {
-                        break;
+                    if let Some(v1_summary) = summary.as_v1() {
+                        let epoch = v1_summary.data().epoch;
+                        println!(
+                            "Checkpoint sequence_number: {}, epoch: {}",
+                            cp.sequence_number, epoch
+                        );
+                        all_indices.push(cp.sequence_number);
+                        all_epochs.push(epoch);
+                        if cp.sequence_number > 50 {
+                            break;
+                        }
                     }
                 }
                 Ok(iota_grpc_api::client::CheckpointContent::Data(_)) => {
@@ -205,7 +207,11 @@ async fn test_stream_full_checkpoint_data() {
                 panic!("Expected data, got summary")
             }
         };
-        assert_eq!(checkpoint_data.checkpoint_summary.sequence_number, 2);
+        if let Some(v1_data) = checkpoint_data.as_v1() {
+            assert_eq!(v1_data.checkpoint_summary.sequence_number, 2);
+        } else {
+            panic!("Expected V1 checkpoint data");
+        }
     } else {
         panic!("No checkpoint data returned");
     }
