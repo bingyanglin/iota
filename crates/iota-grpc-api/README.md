@@ -1,5 +1,9 @@
 # IOTA gRPC API
 
+> **⚠️ EXPERIMENTAL - INTERNAL USE ONLY**
+> 
+> This gRPC API is highly experimental and intended for internal use only. The API surface, data formats, and behavior are subject to significant changes without notice. **Do not use this in production or build external integrations against it** as breaking changes are expected and likely.
+
 This crate introduces a gRPC API for IOTA. The primary goal of this API is to provide a more efficient and lower-latency method for data access, intended to replace existing REST-API polling or filesystem-based synchronization. This reduces the delay between data creation and their subsequent processing by external services.
 
 ## Features
