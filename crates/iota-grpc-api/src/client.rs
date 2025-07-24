@@ -40,8 +40,9 @@ impl GrpcNodeClient {
 
         Ok(stream.map(|result| {
             result.and_then(|checkpoint| {
-                Self::deserialize_checkpoint(&checkpoint)
-                    .map_err(|_| tonic::Status::internal("Failed to deserialize checkpoint"))
+                Self::deserialize_checkpoint(&checkpoint).map_err(|e| {
+                    tonic::Status::internal(format!("Failed to deserialize checkpoint: {}", e))
+                })
             })
         }))
     }
