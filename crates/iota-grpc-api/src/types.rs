@@ -182,7 +182,6 @@ impl Reader {
                 // try fetching historical data from the DB first
                 if start <= latest {
                     if let Some(item) = reader.get_item(start) {
-                        // TODO: add backfill tracing messages
                         tracing::debug!("[profile][grpc] Fetched checkpoint data for index {start} from DB.");
                         yield reader.create_checkpoint_response(&item, is_full)?;
                         if start == end {
