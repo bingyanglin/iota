@@ -20,7 +20,7 @@ use crate::{
 };
 
 pub struct CheckpointGrpcService {
-    pub state_reader: Arc<dyn RestStateReader>,
+    pub reader: Reader,
     pub checkpoint_summary_tx: tokio::sync::broadcast::Sender<Arc<GrpcCertifiedCheckpointSummary>>,
     pub checkpoint_data_tx: tokio::sync::broadcast::Sender<Arc<GrpcCheckpointData>>,
 }
@@ -32,7 +32,7 @@ impl CheckpointGrpcService {
         checkpoint_data_tx: tokio::sync::broadcast::Sender<Arc<GrpcCheckpointData>>,
     ) -> Self {
         Self {
-            state_reader,
+            reader: Reader { state_reader },
             checkpoint_summary_tx,
             checkpoint_data_tx,
         }
@@ -45,9 +45,7 @@ impl CheckpointGrpcService {
         start_sequence_number: Option<u64>,
         end_sequence_number: Option<u64>,
     ) -> impl futures::Stream<Item = CheckpointStreamResult> + Send {
-        let state_reader = self.state_reader.clone();
-        let reader = Reader { state_reader };
-        reader.create_checkpoint_stream(
+        self.reader.create_checkpoint_stream(
             self.checkpoint_data_tx.subscribe(),
             start_sequence_number,
             end_sequence_number,
@@ -60,9 +58,7 @@ impl CheckpointGrpcService {
         start_sequence_number: Option<u64>,
         end_sequence_number: Option<u64>,
     ) -> impl futures::Stream<Item = CheckpointStreamResult> + Send {
-        let state_reader = self.state_reader.clone();
-        let reader = Reader { state_reader };
-        reader.create_checkpoint_stream(
+        self.reader.create_checkpoint_stream(
             self.checkpoint_summary_tx.subscribe(),
             start_sequence_number,
             end_sequence_number,
@@ -108,7 +104,7 @@ impl CheckpointService for CheckpointGrpcService {
             0
         } else {
             // Get the last checkpoint of the previous epoch
-            match self.state_reader.get_epoch_last_checkpoint(epoch - 1) {
+            match self.reader.state_reader.get_epoch_last_checkpoint(epoch - 1) {
                 Ok(Some(last_checkpoint)) => {
                     // First checkpoint of current epoch is the next one
                     *last_checkpoint.sequence_number() + 1
