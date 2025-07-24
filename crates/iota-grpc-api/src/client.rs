@@ -5,7 +5,7 @@ use futures::{Stream, StreamExt};
 use iota_grpc_types::{CertifiedCheckpointSummary, CheckpointData};
 use tonic::transport::Channel;
 
-use crate::node::node_service_client::NodeServiceClient;
+use crate::checkpoint::checkpoint_service_client::CheckpointServiceClient;
 
 /// Enum representing the content of a checkpoint, either full data or summary.
 pub enum CheckpointContent {
@@ -13,14 +13,14 @@ pub enum CheckpointContent {
     Summary(CertifiedCheckpointSummary),
 }
 
-/// Shared gRPC client for IOTA node operations.
-pub struct GrpcNodeClient {
-    client: NodeServiceClient<Channel>,
+/// Shared gRPC client for IOTA checkpoint operations.
+pub struct GrpcCheckpointClient {
+    client: CheckpointServiceClient<Channel>,
 }
 
-impl GrpcNodeClient {
+impl GrpcCheckpointClient {
     pub async fn connect(url: &str) -> Result<Self, tonic::transport::Error> {
-        let client = NodeServiceClient::connect(url.to_string()).await?;
+        let client = CheckpointServiceClient::connect(url.to_string()).await?;
         Ok(Self { client })
     }
 
@@ -31,7 +31,7 @@ impl GrpcNodeClient {
         end_sequence_number: Option<u64>,
         full: bool,
     ) -> Result<impl Stream<Item = Result<CheckpointContent, tonic::Status>>, tonic::Status> {
-        let request = crate::node::CheckpointStreamRequest {
+        let request = crate::checkpoint::CheckpointStreamRequest {
             start_sequence_number,
             end_sequence_number,
             full,
@@ -52,7 +52,7 @@ impl GrpcNodeClient {
         &mut self,
         epoch: u64,
     ) -> Result<u64, tonic::Status> {
-        let request = crate::node::EpochRequest { epoch };
+        let request = crate::checkpoint::EpochRequest { epoch };
         let response = self
             .client
             .get_epoch_first_checkpoint_sequence_number(request)
@@ -64,7 +64,7 @@ impl GrpcNodeClient {
     /// summary). Returns either checkpoint data or summary depending on the
     /// checkpoint type.
     fn deserialize_checkpoint(
-        checkpoint: &crate::node::Checkpoint,
+        checkpoint: &crate::checkpoint::Checkpoint,
     ) -> Result<CheckpointContent, Box<dyn std::error::Error + Send + Sync>> {
         let bcs_data = checkpoint
             .bcs_data

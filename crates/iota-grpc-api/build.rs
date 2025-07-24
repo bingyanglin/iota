@@ -4,6 +4,6 @@
 fn main() {
     tonic_build::configure()
         .protoc_arg("--experimental_allow_proto3_optional")
-        .compile_protos(&["proto/node.proto"], &["proto"])
+        .compile_protos(&["proto/checkpoint.proto"], &["proto"])
         .unwrap();
 }

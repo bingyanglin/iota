@@ -8,8 +8,8 @@ use std::{
 };
 
 use iota_grpc_api::{
-    NodeGrpcService,
-    node::{CheckpointStreamRequest, node_service_server::NodeService},
+    CheckpointGrpcService,
+    checkpoint::{CheckpointStreamRequest, checkpoint_service_server::CheckpointService},
 };
 use iota_grpc_types::{
     CertifiedCheckpointSummary as GrpcCertifiedCheckpointSummary,
@@ -372,14 +372,14 @@ impl RestStateReader for MockRestStateReader {
     }
 }
 
-async fn test_service() -> NodeGrpcService {
+async fn test_service() -> CheckpointGrpcService {
     let mock = Arc::new(MockRestStateReader::new_from_iter(0..=10));
     let config = iota_grpc_api::Config::default();
     let (grpc_checkpoint_summary_tx, _) =
         tokio::sync::broadcast::channel(config.checkpoint_broadcast_buffer_size);
     let (grpc_checkpoint_data_tx, _) =
         tokio::sync::broadcast::channel(config.checkpoint_broadcast_buffer_size);
-    NodeGrpcService::new(mock, grpc_checkpoint_summary_tx, grpc_checkpoint_data_tx)
+    CheckpointGrpcService::new(mock, grpc_checkpoint_summary_tx, grpc_checkpoint_data_tx)
 }
 
 // Helper function to spawn a background checkpoint sender for summaries and
@@ -609,7 +609,7 @@ async fn test_historical_to_live_gap_fill() {
     let mock = Arc::new(MockRestStateReader::new_from_iter(0..=150));
     let (grpc_checkpoint_summary_tx, _) = broadcast::channel(10);
     let (grpc_checkpoint_data_tx, _) = broadcast::channel(10);
-    let svc = NodeGrpcService::new(
+    let svc = CheckpointGrpcService::new(
         mock.clone(),
         grpc_checkpoint_summary_tx.clone(),
         grpc_checkpoint_data_tx.clone(),
@@ -658,7 +658,7 @@ async fn test_gap_fill_with_slow_client() {
     let checkpoints = mock.checkpoints.clone();
     let (grpc_checkpoint_summary_tx, _) = broadcast::channel(5);
     let (grpc_checkpoint_data_tx, _) = broadcast::channel(5);
-    let svc = NodeGrpcService::new(
+    let svc = CheckpointGrpcService::new(
         mock,
         grpc_checkpoint_summary_tx.clone(),
         grpc_checkpoint_data_tx.clone(),

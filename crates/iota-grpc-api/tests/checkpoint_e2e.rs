@@ -5,10 +5,10 @@ use std::time::Duration;
 
 use futures::StreamExt;
 use iota_config::local_ip_utils;
-use iota_grpc_api::client::GrpcNodeClient;
+use iota_grpc_api::client::GrpcCheckpointClient;
 use test_cluster::{TestCluster, TestClusterBuilder};
 
-async fn setup_test_cluster_and_client() -> (TestCluster, GrpcNodeClient) {
+async fn setup_test_cluster_and_client() -> (TestCluster, GrpcCheckpointClient) {
     let localhost = local_ip_utils::localhost_for_testing();
     let grpc_port = local_ip_utils::get_available_port(&localhost);
     let grpc_addr = format!("{localhost}:{grpc_port}");
@@ -21,7 +21,7 @@ async fn setup_test_cluster_and_client() -> (TestCluster, GrpcNodeClient) {
         .build()
         .await;
 
-    let client = GrpcNodeClient::connect(&format!("http://{grpc_addr}"))
+    let client = GrpcCheckpointClient::connect(&format!("http://{grpc_addr}"))
         .await
         .expect("connect gRPC");
 

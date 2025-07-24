@@ -5,7 +5,7 @@ syntax = "proto3";
 
 package iota.grpc;
 
-service NodeService {
+service CheckpointService {
   // Checkpoint operations
   rpc StreamCheckpoints (CheckpointStreamRequest) returns (stream Checkpoint);
   rpc GetEpochFirstCheckpointSequenceNumber (EpochRequest) returns (CheckpointSequenceNumberResponse);
