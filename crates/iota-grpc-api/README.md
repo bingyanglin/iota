@@ -15,7 +15,7 @@ The `NodeService` provides the following RPC endpoints:
 
 ## Usage
 
-The `iota-grpc-api` crate defines the gRPC service and its messages. The `iota-node` crate integrates and starts this gRPC server if `enable_grpc_api` is set to `true` and `grpc_api_config` is configured.
+The `iota-grpc-api` crate defines the gRPC service and its messages. The `iota-node` crate integrates and starts this gRPC server if `enable-grpc-api` is set to `true` and `grpc-api-config` is configured.
 
 A shared gRPC client (`GrpcNodeClient`) is provided by this crate and should be used by downstream consumers to connect and stream checkpoints. This ensures all consumers use the same, up-to-date protocol and data model.
 
@@ -23,10 +23,10 @@ A shared gRPC client (`GrpcNodeClient`) is provided by this crate and should be 
 
 ```toml
 # In your node config file (e.g., fullnode.yaml)
-enable_grpc_api: true
-grpc_api_config:
+enable-grpc-api: true
+grpc-api-config:
   address: "0.0.0.0:50051"
-  checkpoint_broadcast_buffer_size: 100
+  checkpoint-broadcast-buffer-size: 100
 ```
 
 **Client Example:**
