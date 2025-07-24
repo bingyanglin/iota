@@ -149,7 +149,9 @@ pub struct Reader {
 impl Reader {
     fn get_full_checkpoint_data(&self, seq: u64) -> Option<CheckpointData> {
         let summary = self.state_reader.get_checkpoint_by_sequence_number(seq)?;
-        let contents = self.state_reader.get_checkpoint_contents_by_sequence_number(seq)?;
+        let contents = self
+            .state_reader
+            .get_checkpoint_contents_by_sequence_number(seq)?;
         Some(self.state_reader.get_checkpoint_data(summary, contents))
     }
 

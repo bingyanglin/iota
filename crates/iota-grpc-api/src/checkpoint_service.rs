@@ -104,7 +104,11 @@ impl CheckpointService for CheckpointGrpcService {
             0
         } else {
             // Get the last checkpoint of the previous epoch
-            match self.reader.state_reader.get_epoch_last_checkpoint(epoch - 1) {
+            match self
+                .reader
+                .state_reader
+                .get_epoch_last_checkpoint(epoch - 1)
+            {
                 Ok(Some(last_checkpoint)) => {
                     // First checkpoint of current epoch is the next one
                     *last_checkpoint.sequence_number() + 1
