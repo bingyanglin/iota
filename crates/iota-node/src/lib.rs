@@ -2265,11 +2265,7 @@ async fn build_grpc_server(
     Option<GrpcCheckpointDataBroadcaster>,
 )> {
     // Validators do not expose gRPC APIs
-    if config.consensus_config().is_some() {
-        return Ok((None, None));
-    }
-
-    if !config.enable_grpc_api {
+    if config.consensus_config().is_some() || !config.enable_grpc_api {
         return Ok((None, None));
     }
 
