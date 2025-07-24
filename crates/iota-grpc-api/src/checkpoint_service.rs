@@ -47,8 +47,7 @@ impl CheckpointGrpcService {
     ) -> impl futures::Stream<Item = CheckpointStreamResult> + Send {
         let state_reader = self.state_reader.clone();
         let reader = Reader { state_reader };
-        create_checkpoint_stream(
-            reader,
+        reader.create_checkpoint_stream(
             self.checkpoint_data_tx.subscribe(),
             start_sequence_number,
             end_sequence_number,
@@ -63,8 +62,7 @@ impl CheckpointGrpcService {
     ) -> impl futures::Stream<Item = CheckpointStreamResult> + Send {
         let state_reader = self.state_reader.clone();
         let reader = Reader { state_reader };
-        create_checkpoint_stream(
-            reader,
+        reader.create_checkpoint_stream(
             self.checkpoint_summary_tx.subscribe(),
             start_sequence_number,
             end_sequence_number,
