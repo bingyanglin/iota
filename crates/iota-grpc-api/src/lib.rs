@@ -38,12 +38,12 @@ pub mod checkpoint {
 }
 
 // Modules
+pub mod checkpoint_service;
 pub mod client;
-pub mod service;
 pub mod types;
 
 // Re-export commonly used types and traits
-pub use service::CheckpointGrpcService;
+pub use checkpoint_service::CheckpointGrpcService;
 pub use types::{
     CheckpointDataBroadcaster, CheckpointSummaryBroadcaster, GrpcCheckpointDataBroadcaster,
     GrpcCheckpointSummaryBroadcaster,
