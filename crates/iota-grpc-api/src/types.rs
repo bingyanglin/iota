@@ -146,13 +146,12 @@ pub struct Reader {
     pub state_reader: Arc<dyn RestStateReader>,
 }
 
-fn get_full_checkpoint_data(
-    state_reader: &Arc<dyn RestStateReader>,
-    seq: u64,
-) -> Option<CheckpointData> {
-    let summary = state_reader.get_checkpoint_by_sequence_number(seq)?;
-    let contents = state_reader.get_checkpoint_contents_by_sequence_number(seq)?;
-    Some(state_reader.get_checkpoint_data(summary, contents))
+impl Reader {
+    fn get_full_checkpoint_data(&self, seq: u64) -> Option<CheckpointData> {
+        let summary = self.state_reader.get_checkpoint_by_sequence_number(seq)?;
+        let contents = self.state_reader.get_checkpoint_contents_by_sequence_number(seq)?;
+        Some(self.state_reader.get_checkpoint_data(summary, contents))
+    }
 }
 
 impl CheckpointReader<GrpcCheckpointData> for Reader {
@@ -160,7 +159,7 @@ impl CheckpointReader<GrpcCheckpointData> for Reader {
         item.sequence_number()
     }
     fn get_item(&self, ix: u64) -> Option<Arc<GrpcCheckpointData>> {
-        get_full_checkpoint_data(&self.state_reader, ix)
+        self.get_full_checkpoint_data(ix)
             .map(GrpcCheckpointData::from)
             .map(Arc::new)
     }
