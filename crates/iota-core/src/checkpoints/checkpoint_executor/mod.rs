@@ -81,6 +81,9 @@ pub mod metrics;
 #[cfg(test)]
 pub(crate) mod tests;
 
+type CheckpointSummarySender = Box<dyn Fn(&CertifiedCheckpointSummary) + Send + Sync>;
+type CheckpointDataSender = Box<dyn Fn(&CheckpointData) + Send + Sync>;
+
 type CheckpointExecutionBuffer = FuturesOrdered<
     JoinHandle<(
         VerifiedCheckpoint,
@@ -158,8 +161,8 @@ pub struct CheckpointExecutor {
     backpressure_manager: Arc<BackpressureManager>,
     config: CheckpointExecutorConfig,
     metrics: Arc<CheckpointExecutorMetrics>,
-    summary_sender: Option<Box<dyn Fn(&CertifiedCheckpointSummary) + Send + Sync>>,
-    data_sender: Option<Box<dyn Fn(&CheckpointData) + Send + Sync>>,
+    summary_sender: Option<CheckpointSummarySender>,
+    data_sender: Option<CheckpointDataSender>,
 }
 
 impl CheckpointExecutor {
@@ -171,8 +174,8 @@ impl CheckpointExecutor {
         backpressure_manager: Arc<BackpressureManager>,
         config: CheckpointExecutorConfig,
         metrics: Arc<CheckpointExecutorMetrics>,
-        summary_sender: Option<Box<dyn Fn(&CertifiedCheckpointSummary) + Send + Sync>>,
-        data_sender: Option<Box<dyn Fn(&CheckpointData) + Send + Sync>>,
+        summary_sender: Option<CheckpointSummarySender>,
+        data_sender: Option<CheckpointDataSender>,
     ) -> Self {
         Self {
             mailbox,
