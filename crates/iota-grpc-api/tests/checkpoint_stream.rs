@@ -406,8 +406,8 @@ async fn test_start_sequence_number_only() {
     let svc = test_service().await;
 
     spawn_checkpoint_sender(
-        svc.grpc_checkpoint_summary_tx.clone(),
-        svc.grpc_checkpoint_data_tx.clone(),
+        svc.checkpoint_summary_tx.clone(),
+        svc.checkpoint_data_tx.clone(),
         11,
     );
     let req = CheckpointStreamRequest {
@@ -448,8 +448,8 @@ async fn test_start_and_future_end_sequence_number() {
     let svc = test_service().await;
 
     spawn_checkpoint_sender(
-        svc.grpc_checkpoint_summary_tx.clone(),
-        svc.grpc_checkpoint_data_tx.clone(),
+        svc.checkpoint_summary_tx.clone(),
+        svc.checkpoint_data_tx.clone(),
         11,
     );
     let req = CheckpointStreamRequest {
@@ -520,8 +520,8 @@ async fn test_historical_end_sequence_number_only() {
 async fn test_future_end_sequence_number_only_full() {
     let svc = test_service().await;
     spawn_checkpoint_sender(
-        svc.grpc_checkpoint_summary_tx.clone(),
-        svc.grpc_checkpoint_data_tx.clone(),
+        svc.checkpoint_summary_tx.clone(),
+        svc.checkpoint_data_tx.clone(),
         11,
     );
 
@@ -579,8 +579,8 @@ async fn test_both_indices_omitted() {
 
     // Now send new checkpoints (live) after subscribing
     spawn_checkpoint_sender(
-        svc.grpc_checkpoint_summary_tx.clone(),
-        svc.grpc_checkpoint_data_tx.clone(),
+        svc.checkpoint_summary_tx.clone(),
+        svc.checkpoint_data_tx.clone(),
         11,
     );
 

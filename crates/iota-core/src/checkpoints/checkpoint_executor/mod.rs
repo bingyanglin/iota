@@ -31,7 +31,6 @@ use std::{
 use either::Either;
 use futures::stream::FuturesOrdered;
 use iota_config::node::{CheckpointExecutorConfig, RunWithRange};
-use iota_grpc_types as grpc;
 use iota_macros::{fail_point, fail_point_async};
 use iota_metrics::spawn_monitored_task;
 use iota_types::{
@@ -159,8 +158,8 @@ pub struct CheckpointExecutor {
     backpressure_manager: Arc<BackpressureManager>,
     config: CheckpointExecutorConfig,
     metrics: Arc<CheckpointExecutorMetrics>,
-    grpc_checkpoint_summary_tx: Option<broadcast::Sender<Arc<grpc::CertifiedCheckpointSummary>>>,
-    grpc_checkpoint_data_tx: Option<broadcast::Sender<Arc<grpc::CheckpointData>>>,
+    summary_sender: Option<Box<dyn Fn(&CertifiedCheckpointSummary) + Send + Sync>>,
+    data_sender: Option<Box<dyn Fn(&CheckpointData) + Send + Sync>>,
 }
 
 impl CheckpointExecutor {
@@ -172,10 +171,8 @@ impl CheckpointExecutor {
         backpressure_manager: Arc<BackpressureManager>,
         config: CheckpointExecutorConfig,
         metrics: Arc<CheckpointExecutorMetrics>,
-        grpc_checkpoint_summary_tx: Option<
-            broadcast::Sender<Arc<grpc::CertifiedCheckpointSummary>>,
-        >,
-        grpc_checkpoint_data_tx: Option<broadcast::Sender<Arc<grpc::CheckpointData>>>,
+        summary_sender: Option<Box<dyn Fn(&CertifiedCheckpointSummary) + Send + Sync>>,
+        data_sender: Option<Box<dyn Fn(&CheckpointData) + Send + Sync>>,
     ) -> Self {
         Self {
             mailbox,
@@ -188,8 +185,8 @@ impl CheckpointExecutor {
             backpressure_manager,
             config,
             metrics,
-            grpc_checkpoint_summary_tx,
-            grpc_checkpoint_data_tx,
+            summary_sender,
+            data_sender,
         }
     }
 
@@ -198,8 +195,8 @@ impl CheckpointExecutor {
         checkpoint_store: Arc<CheckpointStore>,
         state: Arc<AuthorityState>,
         accumulator: Arc<StateAccumulator>,
-    ) -> Self {
-        Self::new(
+    ) -> CheckpointExecutor {
+        CheckpointExecutor::new(
             mailbox,
             checkpoint_store.clone(),
             state,
@@ -207,8 +204,8 @@ impl CheckpointExecutor {
             BackpressureManager::new_from_checkpoint_store(&checkpoint_store),
             Default::default(),
             CheckpointExecutorMetrics::new_for_tests(),
-            None,
-            None,
+            None, // No callback for summary
+            None, // No callback for data
         )
     }
 
@@ -448,20 +445,19 @@ impl CheckpointExecutor {
         checkpoint.report_checkpoint_age(&self.metrics.last_executed_checkpoint_age);
     }
 
-    /// Helper to broadcast checkpoint summary and data over gRPC if the
+    /// Helper to broadcast checkpoint summary and data if the
     /// channels are set.
-    fn broadcast_grpc_checkpoint(
+    fn broadcast_checkpoint(
         &self,
         checkpoint: &VerifiedCheckpoint,
         all_tx_digests: &[TransactionDigest],
         checkpoint_data: Option<&CheckpointData>,
     ) {
-        if let Some(tx) = &self.grpc_checkpoint_summary_tx {
+        if let Some(summary_sender) = &self.summary_sender {
             let summary = CertifiedCheckpointSummary::from(checkpoint.clone());
-            let grpc_summary = Arc::new(grpc::CertifiedCheckpointSummary::from(summary));
-            let _ = tx.send(grpc_summary);
+            summary_sender(&summary);
         }
-        if let Some(data_tx) = &self.grpc_checkpoint_data_tx {
+        if let Some(data_sender) = &self.data_sender {
             let checkpoint_data = if let Some(data) = checkpoint_data {
                 data.clone()
             } else {
@@ -474,12 +470,11 @@ impl CheckpointExecutor {
                 )
                 .expect("Failed to load full CheckpointData")
             };
-            let grpc_data = Arc::new(grpc::CheckpointData::from(checkpoint_data));
-            let _ = data_tx.send(grpc_data);
+            data_sender(&checkpoint_data);
         }
 
         debug!(
-            "[gRPC][Fullnode] Full CheckpointData is available: seq={}",
+            "[Fullnode] Full CheckpointData is available: seq={}",
             checkpoint.sequence_number()
         );
     }
@@ -518,13 +513,9 @@ impl CheckpointExecutor {
                 .expect("Failed to accumulate running root");
             self.bump_highest_executed_checkpoint(checkpoint);
 
-            // `broadcast_grpc_checkpoint` for the last checkpoint of an epoch
+            // `broadcast_checkpoint` for the last checkpoint of an epoch
             // is handled specially in `check_epoch_last_checkpoint`
-            self.broadcast_grpc_checkpoint(
-                checkpoint,
-                all_tx_digests,
-                checkpoint_data_for_broadcast,
-            );
+            self.broadcast_checkpoint(checkpoint, all_tx_digests, checkpoint_data_for_broadcast);
         }
 
         if let Some(checkpoint_data) = checkpoint_data {
@@ -809,11 +800,7 @@ impl CheckpointExecutor {
 
                     self.bump_highest_executed_checkpoint(checkpoint);
 
-                    self.broadcast_grpc_checkpoint(
-                        checkpoint,
-                        &all_tx_digests,
-                        Some(&checkpoint_data),
-                    );
+                    self.broadcast_checkpoint(checkpoint, &all_tx_digests, Some(&checkpoint_data));
 
                     return true;
                 }

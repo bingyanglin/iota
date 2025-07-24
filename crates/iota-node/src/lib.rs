@@ -76,8 +76,10 @@ use iota_core::{
     transaction_orchestrator::TransactionOrchestrator,
     validator_tx_finalizer::ValidatorTxFinalizer,
 };
-use iota_grpc_api::{NodeGrpcService, node::node_service_server::NodeServiceServer};
-use iota_grpc_types::{CertifiedCheckpointSummary, CheckpointData};
+use iota_grpc_api::{
+    GrpcCheckpointDataBroadcaster, GrpcCheckpointSummaryBroadcaster, NodeGrpcService,
+    node::node_service_server::NodeServiceServer,
+};
 use iota_json_rpc::{
     JsonRpcServerBuilder, coin_api::CoinReadApi, governance_api::GovernanceReadApi,
     indexer_api::IndexerApi, move_utils::MoveUtils, read_api::ReadApi,
@@ -113,10 +115,12 @@ use iota_types::{
     error::{IotaError, IotaResult},
     executable_transaction::VerifiedExecutableTransaction,
     execution_config_utils::to_binary_config,
+    full_checkpoint_content::CheckpointData,
     iota_system_state::{
         IotaSystemState, IotaSystemStateTrait,
         epoch_start_iota_system_state::{EpochStartSystemState, EpochStartSystemStateTrait},
     },
+    messages_checkpoint::CertifiedCheckpointSummary,
     messages_consensus::{
         AuthorityCapabilitiesV1, ConsensusTransaction, ConsensusTransactionKind,
         check_total_jwk_size,
@@ -255,8 +259,8 @@ pub struct IotaNode {
     shutdown_channel_tx: broadcast::Sender<Option<RunWithRange>>,
 
     /// Broadcast channels for gRPC checkpoint streaming
-    grpc_checkpoint_summary_tx: Option<broadcast::Sender<Arc<CertifiedCheckpointSummary>>>,
-    grpc_checkpoint_data_tx: Option<broadcast::Sender<Arc<CheckpointData>>>,
+    grpc_checkpoint_summary_tx: Option<GrpcCheckpointSummaryBroadcaster>,
+    grpc_checkpoint_data_tx: Option<GrpcCheckpointDataBroadcaster>,
 
     /// AuthorityAggregator of the network, created at start and beginning of
     /// each epoch. Use ArcSwap so that we could mutate it without taking
@@ -1723,6 +1727,22 @@ impl IotaNode {
         loop {
             let mut accumulator_guard = self.accumulator.lock().await;
             let accumulator = accumulator_guard.take().unwrap();
+            // Create closures that handle gRPC type conversion
+            let summary_sender = self.grpc_checkpoint_summary_tx.as_ref().map(|tx| {
+                let tx = tx.clone();
+                Box::new(move |summary: &CertifiedCheckpointSummary| {
+                    use iota_grpc_api::CheckpointSummaryBroadcaster;
+                    tx.send(summary);
+                }) as Box<dyn Fn(&CertifiedCheckpointSummary) + Send + Sync>
+            });
+            let data_sender = self.grpc_checkpoint_data_tx.as_ref().map(|tx| {
+                let tx = tx.clone();
+                Box::new(move |data: &CheckpointData| {
+                    use iota_grpc_api::CheckpointDataBroadcaster;
+                    tx.send(data);
+                }) as Box<dyn Fn(&CheckpointData) + Send + Sync>
+            });
+
             let mut checkpoint_executor = CheckpointExecutor::new(
                 self.state_sync_handle.subscribe_to_synced_checkpoints(),
                 self.checkpoint_store.clone(),
@@ -1731,8 +1751,8 @@ impl IotaNode {
                 self.backpressure_manager.clone(),
                 self.config.checkpoint_executor_config.clone(),
                 checkpoint_executor_metrics.clone(),
-                self.grpc_checkpoint_summary_tx.clone(),
-                self.grpc_checkpoint_data_tx.clone(),
+                summary_sender,
+                data_sender,
             );
 
             let run_with_range = self.config.run_with_range;
@@ -2241,8 +2261,8 @@ async fn build_grpc_server(
     state: Arc<AuthorityState>,
     state_sync_store: RocksDbStore,
 ) -> Result<(
-    Option<broadcast::Sender<Arc<CertifiedCheckpointSummary>>>,
-    Option<broadcast::Sender<Arc<CheckpointData>>>,
+    Option<GrpcCheckpointSummaryBroadcaster>,
+    Option<GrpcCheckpointDataBroadcaster>,
 )> {
     // Validators do not expose gRPC APIs
     if config.consensus_config().is_some() {
@@ -2274,7 +2294,10 @@ async fn build_grpc_server(
             .expect("gRPC server failed");
     });
 
-    Ok((Some(summary_tx), Some(data_tx)))
+    Ok((
+        Some(GrpcCheckpointSummaryBroadcaster::new(summary_tx)),
+        Some(GrpcCheckpointDataBroadcaster::new(data_tx)),
+    ))
 }
 
 /// Builds and starts the HTTP server for the IOTA node, exposing JSON-RPC and

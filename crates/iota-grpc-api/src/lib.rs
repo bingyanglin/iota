@@ -53,6 +53,87 @@ use iota_types::{
 };
 use tracing::{debug, info};
 
+/// Trait for broadcasting checkpoint summaries
+pub trait CheckpointSummaryBroadcaster {
+    fn send(&self, summary: &CertifiedCheckpointSummary);
+}
+
+/// Trait for broadcasting checkpoint data
+pub trait CheckpointDataBroadcaster {
+    fn send(&self, data: &CheckpointData);
+}
+
+/// Wrapper that converts native CertifiedCheckpointSummary to gRPC type before
+/// broadcasting
+#[derive(Clone)]
+pub struct GrpcCheckpointSummaryBroadcaster {
+    sender: tokio::sync::broadcast::Sender<Arc<GrpcCertifiedCheckpointSummary>>,
+}
+
+impl GrpcCheckpointSummaryBroadcaster {
+    pub fn new(
+        sender: tokio::sync::broadcast::Sender<Arc<GrpcCertifiedCheckpointSummary>>,
+    ) -> Self {
+        Self { sender }
+    }
+}
+
+impl CheckpointSummaryBroadcaster for GrpcCheckpointSummaryBroadcaster {
+    fn send(&self, summary: &CertifiedCheckpointSummary) {
+        let grpc_summary = Arc::new(GrpcCertifiedCheckpointSummary::from(summary.clone()));
+        let _ = self.sender.send(grpc_summary);
+    }
+}
+
+/// Wrapper that converts native CheckpointData to gRPC type before broadcasting
+#[derive(Clone)]
+pub struct GrpcCheckpointDataBroadcaster {
+    sender: tokio::sync::broadcast::Sender<Arc<GrpcCheckpointData>>,
+}
+
+impl GrpcCheckpointDataBroadcaster {
+    pub fn new(sender: tokio::sync::broadcast::Sender<Arc<GrpcCheckpointData>>) -> Self {
+        Self { sender }
+    }
+}
+
+impl CheckpointDataBroadcaster for GrpcCheckpointDataBroadcaster {
+    fn send(&self, data: &CheckpointData) {
+        let grpc_data = Arc::new(GrpcCheckpointData::from(data.clone()));
+        let _ = self.sender.send(grpc_data);
+    }
+}
+
+// Standard implementations for common types
+
+/// Implementation for tokio broadcast sender
+impl CheckpointSummaryBroadcaster
+    for tokio::sync::broadcast::Sender<Arc<CertifiedCheckpointSummary>>
+{
+    fn send(&self, summary: &CertifiedCheckpointSummary) {
+        let _ = self.send(Arc::new(summary.clone()));
+    }
+}
+
+/// Implementation for tokio broadcast sender
+impl CheckpointDataBroadcaster for tokio::sync::broadcast::Sender<Arc<CheckpointData>> {
+    fn send(&self, data: &CheckpointData) {
+        let _ = self.send(Arc::new(data.clone()));
+    }
+}
+
+/// No-op implementation for unit type (used in tests and when broadcasting is
+/// disabled)
+impl CheckpointSummaryBroadcaster for () {
+    fn send(&self, _summary: &CertifiedCheckpointSummary) {}
+}
+
+/// No-op implementation for unit type (used in tests and when broadcasting is
+/// disabled)
+impl CheckpointDataBroadcaster for () {
+    fn send(&self, _data: &CheckpointData) {}
+}
+
 type Receiver<T> = tokio::sync::broadcast::Receiver<T>;
 
 impl BcsData {
@@ -74,23 +155,20 @@ impl BcsData {
 
 pub struct NodeGrpcService {
     pub state_reader: Arc<dyn RestStateReader>,
-    pub grpc_checkpoint_summary_tx:
-        tokio::sync::broadcast::Sender<Arc<GrpcCertifiedCheckpointSummary>>,
-    pub grpc_checkpoint_data_tx: tokio::sync::broadcast::Sender<Arc<GrpcCheckpointData>>,
+    pub checkpoint_summary_tx: tokio::sync::broadcast::Sender<Arc<GrpcCertifiedCheckpointSummary>>,
+    pub checkpoint_data_tx: tokio::sync::broadcast::Sender<Arc<GrpcCheckpointData>>,
 }
 
 impl NodeGrpcService {
     pub fn new(
         state_reader: Arc<dyn RestStateReader>,
-        grpc_checkpoint_summary_tx: tokio::sync::broadcast::Sender<
-            Arc<GrpcCertifiedCheckpointSummary>,
-        >,
-        grpc_checkpoint_data_tx: tokio::sync::broadcast::Sender<Arc<GrpcCheckpointData>>,
+        checkpoint_summary_tx: tokio::sync::broadcast::Sender<Arc<GrpcCertifiedCheckpointSummary>>,
+        checkpoint_data_tx: tokio::sync::broadcast::Sender<Arc<GrpcCheckpointData>>,
     ) -> Self {
         Self {
             state_reader,
-            grpc_checkpoint_summary_tx,
-            grpc_checkpoint_data_tx,
+            checkpoint_summary_tx,
+            checkpoint_data_tx,
         }
     }
 }
@@ -245,7 +323,7 @@ impl NodeGrpcService {
         let reader = Reader { state_reader };
         create_checkpoint_stream(
             reader,
-            self.grpc_checkpoint_data_tx.subscribe(),
+            self.checkpoint_data_tx.subscribe(),
             start_sequence_number,
             end_sequence_number,
             true,
@@ -261,7 +339,7 @@ impl NodeGrpcService {
         let reader = Reader { state_reader };
         create_checkpoint_stream(
             reader,
-            self.grpc_checkpoint_summary_tx.subscribe(),
+            self.checkpoint_summary_tx.subscribe(),
             start_sequence_number,
             end_sequence_number,
             false,
