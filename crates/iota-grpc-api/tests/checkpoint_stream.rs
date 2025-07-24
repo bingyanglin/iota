@@ -413,7 +413,7 @@ async fn test_start_sequence_number_only() {
     let req = CheckpointStreamRequest {
         start_sequence_number: Some(5),
         end_sequence_number: None,
-        full: Some(true),
+        full: true,
     };
     let mut stream = svc
         .stream_checkpoints(Request::new(req))
@@ -455,7 +455,7 @@ async fn test_start_and_future_end_sequence_number() {
     let req = CheckpointStreamRequest {
         start_sequence_number: Some(3),
         end_sequence_number: Some(15),
-        full: Some(false),
+        full: false,
     };
     let mut stream = svc
         .stream_checkpoints(Request::new(req))
@@ -492,7 +492,7 @@ async fn test_historical_end_sequence_number_only() {
     let req = CheckpointStreamRequest {
         start_sequence_number: None,
         end_sequence_number: Some(4),
-        full: Some(false),
+        full: false,
     };
     let mut stream = svc
         .stream_checkpoints(Request::new(req))
@@ -528,7 +528,7 @@ async fn test_future_end_sequence_number_only_full() {
     let req = CheckpointStreamRequest {
         start_sequence_number: None,
         end_sequence_number: Some(100),
-        full: Some(true),
+        full: true,
     };
     let mut stream = svc
         .stream_checkpoints(Request::new(req))
@@ -566,7 +566,7 @@ async fn test_both_indices_omitted() {
     let req = CheckpointStreamRequest {
         start_sequence_number: None,
         end_sequence_number: None,
-        full: Some(false),
+        full: false,
     };
 
     // Subscribe to the stream after buffer is pre-filled (0..=10)
@@ -625,7 +625,7 @@ async fn test_historical_to_live_gap_fill() {
     let req = CheckpointStreamRequest {
         start_sequence_number: Some(0),
         end_sequence_number: None,
-        full: Some(true),
+        full: true,
     };
     let mut stream = svc
         .stream_checkpoints(Request::new(req))
@@ -684,7 +684,7 @@ async fn test_gap_fill_with_slow_client() {
     let req = CheckpointStreamRequest {
         start_sequence_number: Some(0),
         end_sequence_number: None,
-        full: Some(true),
+        full: true,
     };
     let mut stream = svc
         .stream_checkpoints(Request::new(req))

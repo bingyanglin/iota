@@ -361,7 +361,7 @@ impl NodeService for NodeGrpcService {
         let end_sequence_number = req.end_sequence_number;
         let full = req.full;
 
-        let stream: Self::StreamCheckpointsStream = if full.unwrap_or(false) {
+        let stream: Self::StreamCheckpointsStream = if full {
             Box::pin(self.stream_checkpoint_data(start_sequence_number, end_sequence_number))
         } else {
             Box::pin(self.stream_checkpoint_summary(start_sequence_number, end_sequence_number))

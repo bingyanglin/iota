@@ -29,7 +29,7 @@ impl GrpcNodeClient {
         &mut self,
         start_sequence_number: Option<u64>,
         end_sequence_number: Option<u64>,
-        full: Option<bool>,
+        full: bool,
     ) -> Result<impl Stream<Item = Result<CheckpointContent, tonic::Status>>, tonic::Status> {
         let request = crate::node::CheckpointStreamRequest {
             start_sequence_number,

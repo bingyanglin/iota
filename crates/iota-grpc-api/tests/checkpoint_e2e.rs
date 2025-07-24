@@ -34,7 +34,7 @@ async fn e2e_stream_checkpoints() {
 
     // Request all checkpoints using the higher-level GrpcNodeClient API
     let mut stream = client
-        .stream_checkpoints(None, None, None)
+        .stream_checkpoints(None, None, false)
         .await
         .expect("gRPC call");
 
@@ -93,7 +93,7 @@ async fn test_get_epoch_first_checkpoint_sequence_number() {
 
     // List all checkpoints and their epochs using the gRPC stream
     let mut stream = client
-        .stream_checkpoints(Some(0), None, Some(false))
+        .stream_checkpoints(Some(0), None, false)
         .await
         .expect("gRPC stream");
     let mut all_indices = vec![];
@@ -149,7 +149,7 @@ async fn test_stream_full_checkpoint_data() {
     let (_cluster, mut client) = setup_test_cluster_and_client().await;
 
     let mut stream = client
-        .stream_checkpoints(None, Some(2), Some(true))
+        .stream_checkpoints(None, Some(2), true)
         .await
         .unwrap();
 
