@@ -6830,14 +6830,15 @@ dependencies = [
  "bin-version",
  "clap",
  "colored",
- "datatest-stable",
+ "const-str",
  "futures",
+ "git-version",
  "insta",
- "insta-cmd",
  "iota-macros",
  "iota-metrics",
  "iota-move-build",
  "iota-move-natives-latest",
+ "iota-package-management",
  "iota-protocol-config",
  "iota-types",
  "jemalloc-ctl",
@@ -6858,7 +6859,6 @@ dependencies = [
  "tempfile",
  "tokio",
  "tracing",
- "walkdir",
 ]
 
 [[package]]
@@ -7602,6 +7602,7 @@ dependencies = [
  "iota-metrics",
  "iota-move",
  "iota-move-build",
+ "iota-package-management",
  "iota-sdk 1.4.0-alpha",
  "iota-source-validation",
  "move-core-types",
