@@ -8,23 +8,38 @@ use tonic::transport::Channel;
 use crate::checkpoint::checkpoint_service_client::CheckpointServiceClient;
 
 /// Enum representing the content of a checkpoint, either full data or summary.
+#[derive(Debug, Clone)]
 pub enum CheckpointContent {
     Data(CheckpointData),
     Summary(CertifiedCheckpointSummary),
 }
 
-/// Shared gRPC client for IOTA checkpoint operations.
-pub struct GrpcCheckpointClient {
+/// Dedicated client for checkpoint-related gRPC operations.
+///
+/// This client handles all checkpoint service interactions including streaming
+/// checkpoints and querying epoch information.
+#[derive(Clone)]
+pub struct CheckpointClient {
     client: CheckpointServiceClient<Channel>,
 }
 
-impl GrpcCheckpointClient {
-    pub async fn connect(url: &str) -> Result<Self, tonic::transport::Error> {
-        let client = CheckpointServiceClient::connect(url.to_string()).await?;
-        Ok(Self { client })
+impl CheckpointClient {
+    /// Create a new CheckpointClient from a shared gRPC channel.
+    pub(super) fn new(channel: Channel) -> Self {
+        Self {
+            client: CheckpointServiceClient::new(channel),
+        }
     }
 
     /// Stream checkpoints with automatic deserialization.
+    ///
+    /// # Arguments
+    /// * `start_sequence_number` - Optional starting sequence number
+    /// * `end_sequence_number` - Optional ending sequence number
+    /// * `full` - Whether to stream full checkpoint data or just summaries
+    ///
+    /// # Returns
+    /// A stream of checkpoint content (either data or summaries)
     pub async fn stream_checkpoints(
         &mut self,
         start_sequence_number: Option<u64>,
@@ -59,6 +74,10 @@ impl GrpcCheckpointClient {
             .await?;
         Ok(response.into_inner().sequence_number)
     }
+
+    // ========================================
+    // Private Helper Methods
+    // ========================================
 
     /// Deserialize checkpoint data based on the checkpoint type (full or
     /// summary). Returns either checkpoint data or summary depending on the
