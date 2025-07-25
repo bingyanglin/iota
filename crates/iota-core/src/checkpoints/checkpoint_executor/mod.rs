@@ -43,7 +43,9 @@ use iota_types::{
     full_checkpoint_content::CheckpointData,
     inner_temporary_store::PackageStoreWithFallback,
     message_envelope::Message,
-    messages_checkpoint::{CheckpointSequenceNumber, VerifiedCheckpoint},
+    messages_checkpoint::{
+        CertifiedCheckpointSummary, CheckpointSequenceNumber, VerifiedCheckpoint,
+    },
     transaction::{TransactionDataAPI, TransactionKind, VerifiedTransaction},
 };
 use itertools::izip;
@@ -78,6 +80,9 @@ pub mod metrics;
 
 #[cfg(test)]
 pub(crate) mod tests;
+
+type CheckpointSummarySender = Box<dyn Fn(&CertifiedCheckpointSummary) + Send + Sync>;
+type CheckpointDataSender = Box<dyn Fn(&CheckpointData) + Send + Sync>;
 
 type CheckpointExecutionBuffer = FuturesOrdered<
     JoinHandle<(
@@ -157,6 +162,8 @@ pub struct CheckpointExecutor {
     backpressure_manager: Arc<BackpressureManager>,
     config: CheckpointExecutorConfig,
     metrics: Arc<CheckpointExecutorMetrics>,
+    summary_sender: Option<CheckpointSummarySender>,
+    data_sender: Option<CheckpointDataSender>,
 }
 
 impl CheckpointExecutor {
@@ -168,6 +175,8 @@ impl CheckpointExecutor {
         backpressure_manager: Arc<BackpressureManager>,
         config: CheckpointExecutorConfig,
         metrics: Arc<CheckpointExecutorMetrics>,
+        summary_sender: Option<CheckpointSummarySender>,
+        data_sender: Option<CheckpointDataSender>,
     ) -> Self {
         Self {
             mailbox,
@@ -180,6 +189,8 @@ impl CheckpointExecutor {
             backpressure_manager,
             config,
             metrics,
+            summary_sender,
+            data_sender,
         }
     }
 
@@ -197,6 +208,8 @@ impl CheckpointExecutor {
             BackpressureManager::new_from_checkpoint_store(&checkpoint_store),
             Default::default(),
             CheckpointExecutorMetrics::new_for_tests(),
+            None, // No callback for summary
+            None, // No callback for data
         )
     }
 
@@ -436,6 +449,40 @@ impl CheckpointExecutor {
         checkpoint.report_checkpoint_age(&self.metrics.last_executed_checkpoint_age);
     }
 
+    /// Helper to broadcast checkpoint summary and data if the
+    /// channels are set.
+    fn broadcast_checkpoint(
+        &self,
+        checkpoint: &VerifiedCheckpoint,
+        all_tx_digests: &[TransactionDigest],
+        checkpoint_data: Option<&CheckpointData>,
+    ) {
+        if let Some(summary_sender) = &self.summary_sender {
+            let summary = CertifiedCheckpointSummary::from(checkpoint.clone());
+            summary_sender(&summary);
+        }
+        if let Some(data_sender) = &self.data_sender {
+            let checkpoint_data = if let Some(data) = checkpoint_data {
+                data.clone()
+            } else {
+                load_checkpoint_data(
+                    checkpoint.clone(),
+                    self.object_cache_reader.as_ref(),
+                    self.transaction_cache_reader.as_ref(),
+                    self.checkpoint_store.clone(),
+                    all_tx_digests,
+                )
+                .expect("Failed to load full CheckpointData")
+            };
+            data_sender(&checkpoint_data);
+        }
+
+        debug!(
+            "[Fullnode] Full CheckpointData is available: seq={}",
+            checkpoint.sequence_number()
+        );
+    }
+
     /// Post processing and plumbing after we executed a checkpoint. This
     /// function is guaranteed to be called in the order of checkpoint
     /// sequence number.
@@ -477,17 +524,23 @@ impl CheckpointExecutor {
             }
         }
 
-        if let Some(checkpoint_data) = checkpoint_data {
-            self.commit_index_updates_and_enqueue_to_subscription_service(checkpoint_data)
-                .await;
-        }
-
         if !checkpoint.is_last_checkpoint_of_epoch() {
             self.accumulator
                 .accumulate_running_root(epoch_store, checkpoint.sequence_number, checkpoint_acc)
                 .await
                 .expect("Failed to accumulate running root");
             self.bump_highest_executed_checkpoint(checkpoint);
+
+            // `broadcast_checkpoint` for the last checkpoint of an epoch
+            // is handled specially in `check_epoch_last_checkpoint`
+            self.broadcast_checkpoint(checkpoint, all_tx_digests, checkpoint_data.as_ref());
+        }
+
+        // Commit the index updates here to avoid cloning the checkpoint_data because we
+        // need to broadcast_checkpoint
+        if let Some(checkpoint_data) = checkpoint_data {
+            self.commit_index_updates_and_enqueue_to_subscription_service(checkpoint_data)
+                .await;
         }
     }
 
@@ -758,13 +811,6 @@ impl CheckpointExecutor {
                     .await
                     .expect("Finalizing checkpoint cannot fail");
 
-                    if let Some(checkpoint_data) = checkpoint_data {
-                        self.commit_index_updates_and_enqueue_to_subscription_service(
-                            checkpoint_data,
-                        )
-                        .await;
-                    }
-
                     self.checkpoint_store
                         .insert_epoch_last_checkpoint(cur_epoch, checkpoint)
                         .expect("Failed to insert epoch last checkpoint");
@@ -778,6 +824,21 @@ impl CheckpointExecutor {
                         .expect("Accumulating epoch cannot fail");
 
                     self.bump_highest_executed_checkpoint(checkpoint);
+
+                    self.broadcast_checkpoint(
+                        checkpoint,
+                        &all_tx_digests,
+                        checkpoint_data.as_ref(),
+                    );
+
+                    // Commit the index updates here to avoid cloning the checkpoint_data because we
+                    // need to broadcast_checkpoint
+                    if let Some(checkpoint_data) = checkpoint_data {
+                        self.commit_index_updates_and_enqueue_to_subscription_service(
+                            checkpoint_data,
+                        )
+                        .await;
+                    }
 
                     return true;
                 }
