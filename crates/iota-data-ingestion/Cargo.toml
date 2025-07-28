@@ -27,7 +27,9 @@ serde_json.workspace = true
 serde_yaml.workspace = true
 tempfile.workspace = true
 tokio = { workspace = true, features = ["full"] }
+tokio-stream.workspace = true
 tokio-util.workspace = true
+tonic.workspace = true
 tracing.workspace = true
 url.workspace = true
 
@@ -35,6 +37,7 @@ url.workspace = true
 iota-archival.workspace = true
 iota-config.workspace = true
 iota-data-ingestion-core.workspace = true
+iota-grpc-api.workspace = true
 iota-kvstore.workspace = true
 iota-metrics.workspace = true
 iota-rest-api.workspace = true
@@ -43,5 +46,12 @@ iota-types.workspace = true
 telemetry-subscribers.workspace = true
 
 [dev-dependencies]
+# external dependencies
 rand.workspace = true
 tempfile.workspace = true
+
+# internal dependencies
+test-cluster.workspace = true
+
+[build-dependencies]
+tonic-build.workspace = true

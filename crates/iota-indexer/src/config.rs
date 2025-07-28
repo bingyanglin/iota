@@ -116,6 +116,9 @@ pub struct IngestionSources {
 
     #[arg(long)]
     pub rpc_client_url: Option<Url>,
+
+    #[arg(long)]
+    pub grpc_client_url: Option<Url>,
 }
 
 #[derive(Args, Debug, Clone)]
@@ -484,6 +487,7 @@ pub mod deprecated {
                                 url.parse().expect("Remote Store URL should be correct")
                             }),
                             rpc_client_url: Some(rpc_client_url_parsed),
+                            grpc_client_url: None,
                         },
                         checkpoint_download_queue_size: download_queue_size,
                         checkpoint_download_timeout: ingestion_reader_timeout_secs,
