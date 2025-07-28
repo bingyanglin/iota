@@ -67,6 +67,7 @@ pub const MAX_PROTOCOL_VERSION: u64 = 10;
 //             Enable batching in synchronizer for testnet
 //             Enable the gas price feedback mechanism in devnet.
 //             Enable Identifier input validation.
+//             Removes unnecessary child object mutations
 
 #[derive(Copy, Clone, Debug, Hash, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 pub struct ProtocolVersion(u64);
@@ -299,6 +300,11 @@ struct FeatureFlags {
     // Validate identifier inputs separately
     #[serde(skip_serializing_if = "is_false")]
     validate_identifier_inputs: bool,
+
+    // If true, enables the optimizations for child object mutations, removing unnecessary
+    // mutations
+    #[serde(skip_serializing_if = "is_false")]
+    minimize_child_object_mutations: bool,
 }
 
 fn is_true(b: &bool) -> bool {
@@ -1286,6 +1292,10 @@ impl ProtocolConfig {
     pub fn validate_identifier_inputs(&self) -> bool {
         self.feature_flags.validate_identifier_inputs
     }
+
+    pub fn minimize_child_object_mutations(&self) -> bool {
+        self.feature_flags.minimize_child_object_mutations
+    }
 }
 
 #[cfg(not(msim))]
@@ -2065,6 +2075,9 @@ impl ProtocolConfig {
                     // blocks within a window of ~4 seconds
                     // to be included before be considered garbage collected.
                     cfg.consensus_gc_depth = Some(60);
+
+                    // Enable minimized child object mutation counting.
+                    cfg.feature_flags.minimize_child_object_mutations = true;
 
                     if chain != Chain::Mainnet {
                         // Enable batched block sync in devnet and testnet.
