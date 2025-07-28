@@ -7,7 +7,6 @@ use iota_grpc_types::{
     CertifiedCheckpointSummary as GrpcCertifiedCheckpointSummary,
     CheckpointData as GrpcCheckpointData,
 };
-use iota_types::storage::RestStateReader;
 use tonic::{Request, Response, Status};
 use tracing::{debug, info};
 
@@ -20,19 +19,20 @@ use crate::{
 };
 
 pub struct CheckpointGrpcService {
-    pub reader: Reader,
+    pub reader: GrpcReader,
     pub checkpoint_summary_tx: tokio::sync::broadcast::Sender<Arc<GrpcCertifiedCheckpointSummary>>,
     pub checkpoint_data_tx: tokio::sync::broadcast::Sender<Arc<GrpcCheckpointData>>,
 }
 
 impl CheckpointGrpcService {
+    /// Create a new CheckpointGrpcService with a GrpcReader
     pub fn new(
-        state_reader: Arc<dyn RestStateReader>,
+        reader: GrpcReader,
         checkpoint_summary_tx: tokio::sync::broadcast::Sender<Arc<GrpcCertifiedCheckpointSummary>>,
         checkpoint_data_tx: tokio::sync::broadcast::Sender<Arc<GrpcCheckpointData>>,
     ) -> Self {
         Self {
-            reader: Reader { state_reader },
+            reader,
             checkpoint_summary_tx,
             checkpoint_data_tx,
         }
@@ -104,11 +104,7 @@ impl CheckpointService for CheckpointGrpcService {
             0
         } else {
             // Get the last checkpoint of the previous epoch
-            match self
-                .reader
-                .state_reader
-                .get_epoch_last_checkpoint(epoch - 1)
-            {
+            match self.reader.get_epoch_last_checkpoint(epoch - 1) {
                 Ok(Some(last_checkpoint)) => {
                     // First checkpoint of current epoch is the next one
                     *last_checkpoint.sequence_number() + 1

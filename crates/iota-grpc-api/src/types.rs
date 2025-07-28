@@ -145,8 +145,31 @@ impl BcsData {
 // Type aliases and utility types
 pub type CheckpointStreamResult = Result<Checkpoint, Status>;
 
+// Storage abstraction traits for gRPC access
+// These traits provide an abstraction layer over the storage backend,
+// making it easier to implement gRPC services with different storage types
+// (e.g., production database vs simulacrum for testing).
+
+/// Trait for reading checkpoint data from storage
+pub trait GrpcStateReader: Send + Sync + 'static {
+    /// Get the latest checkpoint sequence number
+    fn get_latest_checkpoint_sequence(&self) -> Option<u64>;
+
+    /// Get checkpoint summary by sequence number
+    fn get_checkpoint_summary(&self, seq: u64) -> Option<CertifiedCheckpointSummary>;
+
+    /// Get full checkpoint data by sequence number
+    fn get_checkpoint_data(&self, seq: u64) -> Option<CheckpointData>;
+
+    /// Get epoch's last checkpoint for epoch boundary calculations
+    fn get_epoch_last_checkpoint(
+        &self,
+        epoch: u64,
+    ) -> Result<Option<CertifiedCheckpointSummary>, Box<dyn std::error::Error + Send + Sync>>;
+}
+
 // Helper trait for getting checkpoint data and summaries,
-// intended as an abstraction for Arc<dyn RestStateReader>.
+// intended as an abstraction for checkpoint streaming operations.
 pub trait CheckpointReader<T>
 where
     T: Send + Sync + 'static + Serialize,
@@ -167,9 +190,174 @@ where
     }
 }
 
+/// Wrapper around RestStateReader that implements the GrpcStateReader trait
+#[derive(Clone)]
+pub struct GrpcReader {
+    state_reader: Arc<dyn GrpcStateReader>,
+}
+
+impl GrpcReader {
+    pub fn new(state_reader: Arc<dyn GrpcStateReader>) -> Self {
+        Self { state_reader }
+    }
+
+    pub fn from_rest_state_reader(state_reader: Arc<dyn RestStateReader>) -> Self {
+        Self {
+            state_reader: Arc::new(RestStateReaderAdapter {
+                inner: state_reader,
+            }),
+        }
+    }
+
+    pub fn get_epoch_last_checkpoint(
+        &self,
+        epoch: u64,
+    ) -> Result<Option<CertifiedCheckpointSummary>, Box<dyn std::error::Error + Send + Sync>> {
+        self.state_reader.get_epoch_last_checkpoint(epoch)
+    }
+}
+
+/// Adapter that implements GrpcStateReader for RestStateReader
+pub struct RestStateReaderAdapter {
+    inner: Arc<dyn RestStateReader>,
+}
+
+impl GrpcStateReader for RestStateReaderAdapter {
+    fn get_latest_checkpoint_sequence(&self) -> Option<u64> {
+        Some(*self.inner.get_latest_checkpoint().sequence_number())
+    }
+
+    fn get_checkpoint_summary(&self, seq: u64) -> Option<CertifiedCheckpointSummary> {
+        self.inner
+            .get_checkpoint_by_sequence_number(seq)
+            .map(CertifiedCheckpointSummary::from)
+    }
+
+    fn get_checkpoint_data(&self, seq: u64) -> Option<CheckpointData> {
+        let summary = self.inner.get_checkpoint_by_sequence_number(seq)?;
+        let contents = self.inner.get_checkpoint_contents_by_sequence_number(seq)?;
+        Some(self.inner.get_checkpoint_data(summary, contents))
+    }
+
+    fn get_epoch_last_checkpoint(
+        &self,
+        epoch: u64,
+    ) -> Result<Option<CertifiedCheckpointSummary>, Box<dyn std::error::Error + Send + Sync>> {
+        match self.inner.get_epoch_last_checkpoint(epoch) {
+            Ok(Some(checkpoint)) => Ok(Some(CertifiedCheckpointSummary::from(checkpoint))),
+            Ok(None) => Ok(None),
+            Err(e) => Err(Box::new(e) as Box<dyn std::error::Error + Send + Sync>),
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct Reader {
     pub state_reader: Arc<dyn RestStateReader>,
+}
+
+impl GrpcReader {
+    fn get_full_checkpoint_data(&self, seq: u64) -> Option<CheckpointData> {
+        self.state_reader.get_checkpoint_data(seq)
+    }
+
+    pub fn get_latest_checkpoint_sequence(&self) -> Option<u64> {
+        self.state_reader.get_latest_checkpoint_sequence()
+    }
+
+    pub fn create_checkpoint_stream<T>(
+        &self,
+        mut rx: Receiver<Arc<T>>,
+        start_sequence_number: Option<u64>,
+        end_sequence_number: Option<u64>,
+        is_full: bool,
+    ) -> impl futures::Stream<Item = CheckpointStreamResult> + Send
+    where
+        T: Send + Sync + 'static + Serialize,
+        Self: CheckpointReader<T> + Clone + Send + Sync + 'static,
+    {
+        let reader = self.clone();
+        async_stream::try_stream! {
+            let mut latest = reader.get_latest().unwrap_or(0);
+            tracing::debug!("[profile][grpc] Latest checkpoint index: {latest}.");
+            let (mut start, end) = match (start_sequence_number, end_sequence_number) {
+                (None, None) => (latest, u64::MAX),
+                (None, Some(end)) => (end, end),
+                (Some(start), None) => (start, u64::MAX),
+                (Some(start), Some(end)) => (start, end),
+            };
+            while start <= end {
+                if start <= latest {
+                    if let Some(item) = reader.get_item(start) {
+                        tracing::debug!("[profile][grpc] Fetched checkpoint data for index {start} from DB.");
+                        yield reader.create_checkpoint_response(&item, is_full)?;
+                        if start == end {
+                            break;
+                        }
+                        start += 1;
+                        continue;
+                    } else {
+                        Err(Status::internal(format!("Historical checkpoint data missing/pruned: index={start} latest={latest}.")))?;
+                    }
+                }
+                match rx.recv().await {
+                    Ok(item) => {
+                        tracing::debug!("[profile][grpc] Get checkpoint data for index {} from broadcast channel", reader.get_sequence_number(&item));
+                        let seq_number = reader.get_sequence_number(&item);
+                        if start == seq_number {
+                            yield reader.create_checkpoint_response(&item, is_full)?;
+                            if start == end {
+                                break;
+                            }
+                            start += 1;
+                            continue;
+                        }
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                        Err(Status::internal("Checkpoint data channel closed."))?;
+                        break;
+                    },
+                }
+                latest = reader.get_latest().unwrap_or(start);
+                tracing::debug!("[profile][grpc] Updating latest checkpoint index to {latest}.");
+            }
+        }
+    }
+}
+
+impl CheckpointReader<GrpcCheckpointData> for GrpcReader {
+    fn get_sequence_number(&self, item: &Arc<GrpcCheckpointData>) -> u64 {
+        item.sequence_number()
+    }
+
+    fn get_item(&self, ix: u64) -> Option<Arc<GrpcCheckpointData>> {
+        self.get_full_checkpoint_data(ix)
+            .map(GrpcCheckpointData::from)
+            .map(Arc::new)
+    }
+
+    fn get_latest(&self) -> Option<u64> {
+        self.state_reader.get_latest_checkpoint_sequence()
+    }
+}
+
+impl CheckpointReader<GrpcCertifiedCheckpointSummary> for GrpcReader {
+    fn get_sequence_number(&self, item: &Arc<GrpcCertifiedCheckpointSummary>) -> u64 {
+        item.sequence_number()
+    }
+
+    fn get_item(&self, ix: u64) -> Option<Arc<GrpcCertifiedCheckpointSummary>> {
+        self.state_reader
+            .get_checkpoint_summary(ix)
+            .map(GrpcCertifiedCheckpointSummary::from)
+            .map(Arc::new)
+    }
+
+    fn get_latest(&self) -> Option<u64> {
+        self.state_reader.get_latest_checkpoint_sequence()
+    }
 }
 
 impl Reader {

@@ -1,0 +1,22 @@
+[package]
+name = "simulacrum-grpc-example"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+
+[dependencies]
+# external dependencies
+anyhow = "1.0"
+async-trait = "0.1"
+futures = "0.3"
+tokio = { version = "1.46.1", features = ["full"] }
+tokio-stream = "0.1"
+tonic = "0.12"
+tracing = "0.1"
+tracing-subscriber = "0.3"
+
+# internal dependencies
+iota-grpc-api = { path = "../../../crates/iota-grpc-api" }
+iota-grpc-types = { path = "../../../crates/iota-grpc-types" }
+iota-types = { path = "../../../crates/iota-types" }
+simulacrum = { path = "../../../crates/simulacrum" }

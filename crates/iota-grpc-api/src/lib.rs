@@ -47,5 +47,5 @@ pub use checkpoint_service::CheckpointGrpcService;
 pub use client::{CheckpointClient, CheckpointContent, NodeClient};
 pub use types::{
     CheckpointDataBroadcaster, CheckpointSummaryBroadcaster, GrpcCheckpointDataBroadcaster,
-    GrpcCheckpointSummaryBroadcaster,
+    GrpcCheckpointSummaryBroadcaster, GrpcReader, GrpcStateReader, RestStateReaderAdapter,
 };
