@@ -6888,6 +6888,8 @@ version = "1.4.0-alpha"
 dependencies = [
  "bin-version",
  "clap",
+ "iota-move-build",
+ "iota-package-management",
  "move-analyzer",
 ]
 
