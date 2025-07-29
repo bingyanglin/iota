@@ -24,7 +24,6 @@ iota-types.workspace = true
 tonic-build.workspace = true
 
 [dev-dependencies]
-# internal dependencies
 iota-config.workspace = true
 move-core-types.workspace = true
 test-cluster.workspace = true
