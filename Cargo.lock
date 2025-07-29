@@ -6971,7 +6971,6 @@ name = "iota-network-stack"
 version = "1.4.0-alpha"
 dependencies = [
  "anemo",
- "async-stream",
  "bcs",
  "bytes",
  "eyre",
@@ -6980,6 +6979,7 @@ dependencies = [
  "http-body 1.0.1",
  "hyper-rustls 0.27.3",
  "hyper-util",
+ "iota-http",
  "multiaddr",
  "once_cell",
  "pin-project-lite",
@@ -7015,6 +7015,7 @@ dependencies = [
  "iota-common",
  "iota-config",
  "iota-core",
+ "iota-http",
  "iota-json-rpc",
  "iota-json-rpc-api",
  "iota-macros",
