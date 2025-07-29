@@ -305,11 +305,6 @@ impl GrpcStateReader for RestStateReaderAdapter {
     }
 }
 
-#[derive(Clone)]
-pub struct Reader {
-    pub state_reader: Arc<dyn RestStateReader>,
-}
-
 impl GrpcReader {
     fn get_full_checkpoint_data(&self, seq: u64) -> Option<CheckpointData> {
         self.state_reader.get_checkpoint_data(seq)
@@ -350,44 +345,5 @@ impl CheckpointReader<GrpcCertifiedCheckpointSummary> for GrpcReader {
 
     fn get_latest(&self) -> Option<u64> {
         self.state_reader.get_latest_checkpoint_sequence()
-    }
-}
-
-impl Reader {
-    fn get_full_checkpoint_data(&self, seq: u64) -> Option<CheckpointData> {
-        let summary = self.state_reader.get_checkpoint_by_sequence_number(seq)?;
-        let contents = self
-            .state_reader
-            .get_checkpoint_contents_by_sequence_number(seq)?;
-        Some(self.state_reader.get_checkpoint_data(summary, contents))
-    }
-}
-
-impl CheckpointReader<GrpcCheckpointData> for Reader {
-    fn get_sequence_number(&self, item: &Arc<GrpcCheckpointData>) -> u64 {
-        item.sequence_number()
-    }
-    fn get_item(&self, ix: u64) -> Option<Arc<GrpcCheckpointData>> {
-        self.get_full_checkpoint_data(ix)
-            .map(GrpcCheckpointData::from)
-            .map(Arc::new)
-    }
-    fn get_latest(&self) -> Option<u64> {
-        Some(*self.state_reader.get_latest_checkpoint().sequence_number())
-    }
-}
-
-impl CheckpointReader<GrpcCertifiedCheckpointSummary> for Reader {
-    fn get_sequence_number(&self, item: &Arc<GrpcCertifiedCheckpointSummary>) -> u64 {
-        item.sequence_number()
-    }
-    fn get_item(&self, ix: u64) -> Option<Arc<GrpcCertifiedCheckpointSummary>> {
-        self.state_reader
-            .get_checkpoint_by_sequence_number(ix)
-            .map(|v| GrpcCertifiedCheckpointSummary::from(CertifiedCheckpointSummary::from(v)))
-            .map(Arc::new)
-    }
-    fn get_latest(&self) -> Option<u64> {
-        Some(*self.state_reader.get_latest_checkpoint().sequence_number())
     }
 }
