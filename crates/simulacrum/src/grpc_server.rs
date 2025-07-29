@@ -173,7 +173,7 @@ impl<Store: SimulatorStore + Send + Sync + 'static> GrpcStateReader
     fn get_epoch_last_checkpoint(
         &self,
         epoch: u64,
-    ) -> Result<Option<CertifiedCheckpointSummary>, Box<dyn std::error::Error + Send + Sync>> {
+    ) -> anyhow::Result<Option<CertifiedCheckpointSummary>> {
         // Simple implementation for simulacrum - find the last checkpoint of the given
         // epoch
         let latest_seq = self.get_latest_checkpoint_sequence().unwrap_or(0);

@@ -3,6 +3,7 @@
 
 use std::sync::Arc;
 
+use anyhow::Result;
 use iota_grpc_types::{
     CertifiedCheckpointSummary as GrpcCertifiedCheckpointSummary,
     CheckpointData as GrpcCheckpointData,
@@ -18,15 +19,12 @@ use crate::checkpoint::{BcsData, Checkpoint};
 
 /// Trait for broadcasting checkpoint summaries
 pub trait CheckpointSummaryBroadcaster {
-    fn send(
-        &self,
-        summary: &CertifiedCheckpointSummary,
-    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>>;
+    fn send(&self, summary: &CertifiedCheckpointSummary) -> anyhow::Result<()>;
 }
 
 /// Trait for broadcasting checkpoint data
 pub trait CheckpointDataBroadcaster {
-    fn send(&self, data: &CheckpointData) -> Result<(), Box<dyn std::error::Error + Send + Sync>>;
+    fn send(&self, data: &CheckpointData) -> anyhow::Result<()>;
 }
 
 /// Wrapper that converts native CertifiedCheckpointSummary to gRPC type before
@@ -45,14 +43,9 @@ impl GrpcCheckpointSummaryBroadcaster {
 }
 
 impl CheckpointSummaryBroadcaster for GrpcCheckpointSummaryBroadcaster {
-    fn send(
-        &self,
-        summary: &CertifiedCheckpointSummary,
-    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    fn send(&self, summary: &CertifiedCheckpointSummary) -> anyhow::Result<()> {
         let grpc_summary = Arc::new(GrpcCertifiedCheckpointSummary::from(summary.clone()));
-        self.sender
-            .send(grpc_summary)
-            .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
+        self.sender.send(grpc_summary)?;
         Ok(())
     }
 }
@@ -70,11 +63,9 @@ impl GrpcCheckpointDataBroadcaster {
 }
 
 impl CheckpointDataBroadcaster for GrpcCheckpointDataBroadcaster {
-    fn send(&self, data: &CheckpointData) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    fn send(&self, data: &CheckpointData) -> anyhow::Result<()> {
         let grpc_data = Arc::new(GrpcCheckpointData::from(data.clone()));
-        self.sender
-            .send(grpc_data)
-            .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
+        self.sender.send(grpc_data)?;
         Ok(())
     }
 }
@@ -85,21 +76,16 @@ impl CheckpointDataBroadcaster for GrpcCheckpointDataBroadcaster {
 impl CheckpointSummaryBroadcaster
     for tokio::sync::broadcast::Sender<Arc<CertifiedCheckpointSummary>>
 {
-    fn send(
-        &self,
-        summary: &CertifiedCheckpointSummary,
-    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        self.send(Arc::new(summary.clone()))
-            .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
+    fn send(&self, summary: &CertifiedCheckpointSummary) -> anyhow::Result<()> {
+        self.send(Arc::new(summary.clone()))?;
         Ok(())
     }
 }
 
 /// Implementation for tokio broadcast sender
 impl CheckpointDataBroadcaster for tokio::sync::broadcast::Sender<Arc<CheckpointData>> {
-    fn send(&self, data: &CheckpointData) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        self.send(Arc::new(data.clone()))
-            .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
+    fn send(&self, data: &CheckpointData) -> anyhow::Result<()> {
+        self.send(Arc::new(data.clone()))?;
         Ok(())
     }
 }
@@ -107,10 +93,7 @@ impl CheckpointDataBroadcaster for tokio::sync::broadcast::Sender<Arc<Checkpoint
 /// No-op implementation for unit type (used in tests and when broadcasting is
 /// disabled)
 impl CheckpointSummaryBroadcaster for () {
-    fn send(
-        &self,
-        _summary: &CertifiedCheckpointSummary,
-    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    fn send(&self, _summary: &CertifiedCheckpointSummary) -> anyhow::Result<()> {
         Ok(())
     }
 }
@@ -118,7 +101,7 @@ impl CheckpointSummaryBroadcaster for () {
 /// No-op implementation for unit type (used in tests and when broadcasting is
 /// disabled)
 impl CheckpointDataBroadcaster for () {
-    fn send(&self, _data: &CheckpointData) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    fn send(&self, _data: &CheckpointData) -> anyhow::Result<()> {
         Ok(())
     }
 }
@@ -165,7 +148,7 @@ pub trait GrpcStateReader: Send + Sync + 'static {
     fn get_epoch_last_checkpoint(
         &self,
         epoch: u64,
-    ) -> Result<Option<CertifiedCheckpointSummary>, Box<dyn std::error::Error + Send + Sync>>;
+    ) -> anyhow::Result<Option<CertifiedCheckpointSummary>>;
 }
 
 // Helper trait for getting checkpoint data and summaries,
@@ -283,7 +266,7 @@ impl GrpcReader {
     pub fn get_epoch_last_checkpoint(
         &self,
         epoch: u64,
-    ) -> Result<Option<CertifiedCheckpointSummary>, Box<dyn std::error::Error + Send + Sync>> {
+    ) -> anyhow::Result<Option<CertifiedCheckpointSummary>> {
         self.state_reader.get_epoch_last_checkpoint(epoch)
     }
 }
@@ -313,11 +296,11 @@ impl GrpcStateReader for RestStateReaderAdapter {
     fn get_epoch_last_checkpoint(
         &self,
         epoch: u64,
-    ) -> Result<Option<CertifiedCheckpointSummary>, Box<dyn std::error::Error + Send + Sync>> {
+    ) -> anyhow::Result<Option<CertifiedCheckpointSummary>> {
         match self.inner.get_epoch_last_checkpoint(epoch) {
             Ok(Some(checkpoint)) => Ok(Some(CertifiedCheckpointSummary::from(checkpoint))),
             Ok(None) => Ok(None),
-            Err(e) => Err(Box::new(e) as Box<dyn std::error::Error + Send + Sync>),
+            Err(e) => Err(e.into()),
         }
     }
 }

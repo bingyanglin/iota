@@ -5,6 +5,7 @@ edition = "2021"
 
 [dependencies]
 # external dependencies
+anyhow.workspace = true
 async-stream = "0.3"
 bcs.workspace = true
 futures.workspace = true
@@ -23,9 +24,6 @@ iota-types.workspace = true
 tonic-build.workspace = true
 
 [dev-dependencies]
-# external dependencies
-anyhow.workspace = true
-
 # internal dependencies
 iota-config.workspace = true
 move-core-types.workspace = true
