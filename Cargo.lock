@@ -6394,7 +6394,6 @@ dependencies = [
  "move-core-types",
  "prost",
  "serde",
- "simulacrum",
  "test-cluster",
  "tokio",
  "tokio-stream",

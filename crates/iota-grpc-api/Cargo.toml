@@ -29,9 +29,4 @@ anyhow.workspace = true
 # internal dependencies
 iota-config.workspace = true
 move-core-types.workspace = true
-simulacrum.workspace = true
 test-cluster.workspace = true
-
-[[example]]
-name = "simulacrum_grpc_workflow"
-path = "../../examples/simulacrum/grpc/complete_grpc_workflow.rs"
