@@ -5458,6 +5458,7 @@ dependencies = [
  "move-core-types",
  "move-ir-types",
  "move-package",
+ "move-symbol-pool",
  "move-vm-profiler",
  "msim",
  "prometheus",
@@ -5477,6 +5478,7 @@ dependencies = [
  "test-cluster",
  "thiserror 1.0.64",
  "tokio",
+ "toml 0.7.8",
  "tracing",
  "url",
 ]
@@ -6024,7 +6026,6 @@ dependencies = [
  "futures",
  "indexmap 2.5.0",
  "insta",
- "iota",
  "iota-config",
  "iota-core",
  "iota-framework",
@@ -6092,6 +6093,7 @@ dependencies = [
  "move-trace-format",
  "move-vm-config",
  "move-vm-runtime",
+ "move-vm-types",
  "petgraph 0.6.5",
 ]
 
@@ -6828,14 +6830,15 @@ dependencies = [
  "bin-version",
  "clap",
  "colored",
- "datatest-stable",
+ "const-str",
  "futures",
+ "git-version",
  "insta",
- "insta-cmd",
  "iota-macros",
  "iota-metrics",
  "iota-move-build",
  "iota-move-natives-latest",
+ "iota-package-management",
  "iota-protocol-config",
  "iota-types",
  "jemalloc-ctl",
@@ -6856,7 +6859,6 @@ dependencies = [
  "tempfile",
  "tokio",
  "tracing",
- "walkdir",
 ]
 
 [[package]]
@@ -6886,6 +6888,8 @@ version = "1.4.0-alpha"
 dependencies = [
  "bin-version",
  "clap",
+ "iota-move-build",
+ "iota-package-management",
  "move-analyzer",
 ]
 
@@ -7454,7 +7458,9 @@ dependencies = [
  "iota-transaction-builder",
  "iota-types",
  "jsonrpsee",
+ "move-compiler",
  "move-core-types",
+ "move-package",
  "rand 0.8.5",
  "reqwest 0.12.7",
  "rustls 0.23.28",
@@ -7598,6 +7604,7 @@ dependencies = [
  "iota-metrics",
  "iota-move",
  "iota-move-build",
+ "iota-package-management",
  "iota-sdk 1.4.0-alpha",
  "iota-source-validation",
  "move-core-types",
@@ -7960,7 +7967,6 @@ dependencies = [
  "move-core-types",
  "move-vm-profiler",
  "move-vm-test-utils",
- "move-vm-types",
  "nonempty",
  "num-bigint 0.4.6",
  "num-rational",
@@ -9291,6 +9297,7 @@ dependencies = [
  "ref-cast",
  "serde",
  "serde_bytes",
+ "serde_with",
  "thiserror 1.0.64",
  "uint",
 ]

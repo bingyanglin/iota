@@ -1323,6 +1323,7 @@
                 "enable_poseidon": true,
                 "enable_vdf": true,
                 "hardened_otw_check": true,
+                "minimize_child_object_mutations": false,
                 "native_charging_v2": true,
                 "no_extraneous_module_bytes": true,
                 "passkey_auth": true,
@@ -1330,6 +1331,7 @@
                 "relocate_event_module": true,
                 "rethrow_serialization_type_layout_errors": true,
                 "uncompressed_g1_group_elements": true,
+                "validate_identifier_inputs": false,
                 "variant_nodes": false,
                 "zklogin_auth": false
               },
