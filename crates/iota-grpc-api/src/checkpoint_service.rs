@@ -19,7 +19,7 @@ use crate::{
 };
 
 pub struct CheckpointGrpcService {
-    pub reader: GrpcReader,
+    pub reader: Arc<GrpcReader>,
     pub checkpoint_summary_tx: tokio::sync::broadcast::Sender<Arc<GrpcCertifiedCheckpointSummary>>,
     pub checkpoint_data_tx: tokio::sync::broadcast::Sender<Arc<GrpcCheckpointData>>,
 }
@@ -32,7 +32,7 @@ impl CheckpointGrpcService {
         checkpoint_data_tx: tokio::sync::broadcast::Sender<Arc<GrpcCheckpointData>>,
     ) -> Self {
         Self {
-            reader,
+            reader: Arc::new(reader),
             checkpoint_summary_tx,
             checkpoint_data_tx,
         }
@@ -44,26 +44,20 @@ impl CheckpointGrpcService {
         &self,
         start_sequence_number: Option<u64>,
         end_sequence_number: Option<u64>,
-    ) -> impl futures::Stream<Item = CheckpointStreamResult> + Send {
-        self.reader.create_checkpoint_stream(
-            self.checkpoint_data_tx.subscribe(),
-            start_sequence_number,
-            end_sequence_number,
-            true,
-        )
+    ) -> impl futures::Stream<Item = CheckpointStreamResult> + Send + 'static {
+        let reader = (*self.reader).clone();
+        let rx = self.checkpoint_data_tx.subscribe();
+        reader.create_checkpoint_stream(rx, start_sequence_number, end_sequence_number, true)
     }
 
     fn stream_checkpoint_summary(
         &self,
         start_sequence_number: Option<u64>,
         end_sequence_number: Option<u64>,
-    ) -> impl futures::Stream<Item = CheckpointStreamResult> + Send {
-        self.reader.create_checkpoint_stream(
-            self.checkpoint_summary_tx.subscribe(),
-            start_sequence_number,
-            end_sequence_number,
-            false,
-        )
+    ) -> impl futures::Stream<Item = CheckpointStreamResult> + Send + 'static {
+        let reader = (*self.reader).clone();
+        let rx = self.checkpoint_summary_tx.subscribe();
+        reader.create_checkpoint_stream(rx, start_sequence_number, end_sequence_number, false)
     }
 }
 

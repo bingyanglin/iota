@@ -188,6 +188,77 @@ where
             })
             .map_err(|e| Status::internal(format!("BCS serialization error: {e}")))
     }
+
+    /// Create a checkpoint stream combining historical data from storage and
+    /// live data from broadcasts
+    fn create_checkpoint_stream(
+        self,
+        mut rx: Receiver<Arc<T>>,
+        start_sequence_number: Option<u64>,
+        end_sequence_number: Option<u64>,
+        is_full: bool,
+    ) -> impl futures::Stream<Item = CheckpointStreamResult> + Send + 'static
+    where
+        Self: Send + Sync + 'static + Sized,
+    {
+        let reader = self;
+        async_stream::try_stream! {
+            let mut latest = reader.get_latest().unwrap_or(0);
+            tracing::debug!("[profile][grpc] Latest checkpoint index: {latest}.");
+
+            let (mut start, end) = match (start_sequence_number, end_sequence_number) {
+                (None, None) => (latest, u64::MAX),
+                (None, Some(end)) => (end, end),
+                (Some(start), None) => (start, u64::MAX),
+                (Some(start), Some(end)) => (start, end),
+            };
+
+            while start <= end {
+                // Phase 1: Serve historical data from storage
+                if start <= latest {
+                    if let Some(item) = reader.get_item(start) {
+                        tracing::debug!("[profile][grpc] Fetched checkpoint data for index {start} from storage.");
+                        yield reader.create_checkpoint_response(&item, is_full)?;
+                        if start == end {
+                            break;
+                        }
+                        start += 1;
+                        continue;
+                    } else {
+                        Err(Status::internal(format!("Historical checkpoint data missing/pruned: index={start} latest={latest}.")))?;
+                    }
+                }
+
+                // Phase 2: Live streaming from broadcast channel
+                match rx.recv().await {
+                    Ok(item) => {
+                        tracing::debug!("[profile][grpc] Received checkpoint data for index {} from broadcast channel", reader.get_sequence_number(&item));
+                        let seq_number = reader.get_sequence_number(&item);
+                        if start == seq_number {
+                            yield reader.create_checkpoint_response(&item, is_full)?;
+                            if start == end {
+                                break;
+                            }
+                            start += 1;
+                            continue;
+                        }
+                        // Sequence number mismatch - drop item and continue waiting
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                        // Channel lagged - historical data should catch up via storage
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                        Err(Status::internal("Checkpoint data channel closed."))?;
+                        break;
+                    },
+                }
+
+                // Update latest checkpoint info
+                latest = reader.get_latest().unwrap_or(start);
+                tracing::debug!("[profile][grpc] Updated latest checkpoint index to {latest}.");
+            }
+        }
+    }
 }
 
 /// Wrapper around RestStateReader that implements the GrpcStateReader trait
@@ -264,67 +335,6 @@ impl GrpcReader {
     pub fn get_latest_checkpoint_sequence(&self) -> Option<u64> {
         self.state_reader.get_latest_checkpoint_sequence()
     }
-
-    pub fn create_checkpoint_stream<T>(
-        &self,
-        mut rx: Receiver<Arc<T>>,
-        start_sequence_number: Option<u64>,
-        end_sequence_number: Option<u64>,
-        is_full: bool,
-    ) -> impl futures::Stream<Item = CheckpointStreamResult> + Send
-    where
-        T: Send + Sync + 'static + Serialize,
-        Self: CheckpointReader<T> + Clone + Send + Sync + 'static,
-    {
-        let reader = self.clone();
-        async_stream::try_stream! {
-            let mut latest = reader.get_latest().unwrap_or(0);
-            tracing::debug!("[profile][grpc] Latest checkpoint index: {latest}.");
-            let (mut start, end) = match (start_sequence_number, end_sequence_number) {
-                (None, None) => (latest, u64::MAX),
-                (None, Some(end)) => (end, end),
-                (Some(start), None) => (start, u64::MAX),
-                (Some(start), Some(end)) => (start, end),
-            };
-            while start <= end {
-                if start <= latest {
-                    if let Some(item) = reader.get_item(start) {
-                        tracing::debug!("[profile][grpc] Fetched checkpoint data for index {start} from DB.");
-                        yield reader.create_checkpoint_response(&item, is_full)?;
-                        if start == end {
-                            break;
-                        }
-                        start += 1;
-                        continue;
-                    } else {
-                        Err(Status::internal(format!("Historical checkpoint data missing/pruned: index={start} latest={latest}.")))?;
-                    }
-                }
-                match rx.recv().await {
-                    Ok(item) => {
-                        tracing::debug!("[profile][grpc] Get checkpoint data for index {} from broadcast channel", reader.get_sequence_number(&item));
-                        let seq_number = reader.get_sequence_number(&item);
-                        if start == seq_number {
-                            yield reader.create_checkpoint_response(&item, is_full)?;
-                            if start == end {
-                                break;
-                            }
-                            start += 1;
-                            continue;
-                        }
-                    }
-                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
-                    }
-                    Err(tokio::sync::broadcast::error::RecvError::Closed) => {
-                        Err(Status::internal("Checkpoint data channel closed."))?;
-                        break;
-                    },
-                }
-                latest = reader.get_latest().unwrap_or(start);
-                tracing::debug!("[profile][grpc] Updating latest checkpoint index to {latest}.");
-            }
-        }
-    }
 }
 
 impl CheckpointReader<GrpcCheckpointData> for GrpcReader {
@@ -367,77 +377,6 @@ impl Reader {
             .state_reader
             .get_checkpoint_contents_by_sequence_number(seq)?;
         Some(self.state_reader.get_checkpoint_data(summary, contents))
-    }
-
-    pub fn create_checkpoint_stream<T>(
-        &self,
-        mut rx: Receiver<Arc<T>>,
-        start_sequence_number: Option<u64>,
-        end_sequence_number: Option<u64>,
-        is_full: bool,
-    ) -> impl futures::Stream<Item = CheckpointStreamResult> + Send
-    where
-        T: Send + Sync + 'static + Serialize,
-        Self: CheckpointReader<T> + Clone + Send + Sync + 'static,
-    {
-        let reader = self.clone();
-        async_stream::try_stream! {
-            // Link to issue (https://github.com/iotaledger/iota/issues/7943)
-            // TODO: Modify the latest checkpoint to start from 1.
-            // Note that we do not stream the Genesis checkpoint because its size
-            // can be very big. The genesis checkpoint should be imported directly.
-            let mut latest = reader.get_latest().unwrap_or(0);
-            tracing::debug!("[profile][grpc] Latest checkpoint index: {latest}.");
-            let (mut start, end) = match (start_sequence_number, end_sequence_number) {
-                (None, None) => (latest, u64::MAX),
-                (None, Some(end)) => (end, end),
-                (Some(start), None) => (start, u64::MAX),
-                (Some(start), Some(end)) => (start, end),
-            };
-            while start <= end {
-                // try fetching historical data from the DB first
-                if start <= latest {
-                    if let Some(item) = reader.get_item(start) {
-                        tracing::debug!("[profile][grpc] Fetched checkpoint data for index {start} from DB.");
-                        yield reader.create_checkpoint_response(&item, is_full)?;
-                        if start == end {
-                            break;
-                        }
-                        start += 1;
-                        continue;
-                    } else {
-                        Err(Status::internal(format!("Historical checkpoint data missing/pruned: index={start} latest={latest}.")))?;
-                    }
-                }
-                // latest < start, live phase
-                // wait for broadcast
-                match rx.recv().await {
-                    Ok(item) => {
-                        tracing::debug!("[profile][grpc] Get checkpoint data for index {} from broadcast channel", reader.get_sequence_number(&item));
-                        let seq_number = reader.get_sequence_number(&item);
-                        if start == seq_number {
-                            yield reader.create_checkpoint_response(&item, is_full)?;
-                            if start == end {
-                                break;
-                            }
-                            start += 1;
-                            continue;
-                        }
-                        // else item sequence doesn't match, drop it and continue
-                    }
-                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
-                        // continue, lagged item should be picked up from history DB
-                    }
-                    Err(tokio::sync::broadcast::error::RecvError::Closed) => {
-                        // report internal error to the stream and break
-                        Err(Status::internal("Checkpoint data channel closed."))?;
-                        break;
-                    },
-                }
-                latest = reader.get_latest().unwrap_or(start);
-                tracing::debug!("[profile][grpc] Updating latest checkpoint index to {latest}.");
-            }
-        }
     }
 }
 
