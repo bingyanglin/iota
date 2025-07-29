@@ -9,11 +9,25 @@ use tonic::{Request, Response, Status};
 /// Buffer size for broadcast channels used for checkpoint streaming.
 pub const CHECKPOINT_BROADCAST_BUFFER_SIZE: usize = 100;
 
+/// Buffer size for mpsc channels used for event streaming.
+pub const EVENT_STREAM_BUFFER_SIZE: usize = 100;
+
+/// Buffer size for broadcast channels used for event integration.
+pub const EVENT_INTEGRATION_BROADCAST_BUFFER_SIZE: usize = 1000;
+
 pub mod checkpoint {
-    tonic::include_proto!("iota.grpc");
+    tonic::include_proto!("iota.grpc.checkpoint");
 }
 
+pub mod events {
+    tonic::include_proto!("iota.grpc.events");
+}
+
+pub mod event_integration;
+pub mod event_service;
+
 use checkpoint::{BcsData, checkpoint_service_server::CheckpointService};
+pub use event_integration::{EventIntegration, EventIntegrationTrait};
 use iota_types::storage::RestStateReader;
 pub mod client;
 use iota_types::{

@@ -3,7 +3,7 @@
 
 syntax = "proto3";
 
-package iota.grpc;
+package iota.grpc.checkpoint;
 
 service CheckpointService {
   rpc StreamCheckpoints (CheckpointStreamRequest) returns (stream Checkpoint);

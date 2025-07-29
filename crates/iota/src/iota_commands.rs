@@ -18,7 +18,7 @@ use fastcrypto::traits::KeyPair;
 use iota_config::{
     Config, FULL_NODE_DB_PATH, IOTA_BENCHMARK_GENESIS_GAS_KEYSTORE_FILENAME, IOTA_CLIENT_CONFIG,
     IOTA_FULLNODE_CONFIG, IOTA_GENESIS_FILENAME, IOTA_KEYSTORE_FILENAME, IOTA_NETWORK_CONFIG,
-    PersistedConfig, genesis_blob_exists, iota_config_dir, node::Genesis, p2p::SeedPeer,
+    PersistedConfig, genesis_blob_exists, iota_config_dir, node::{Genesis, NodeConfig}, p2p::SeedPeer,
 };
 use iota_faucet::{AppState, FaucetConfig, SimpleFaucet, create_wallet_context, start_faucet};
 use iota_genesis_builder::{SnapshotSource, SnapshotUrl};
@@ -50,7 +50,7 @@ use move_analyzer::analyzer;
 use move_package::BuildConfig;
 use rand::rngs::OsRng;
 use tempfile::tempdir;
-use tracing::{self, info};
+use tracing::{self, info, warn};
 
 #[cfg(feature = "iota-names")]
 use crate::name_commands;
@@ -721,6 +721,29 @@ async fn start(
         swarm_builder = swarm_builder
             .with_fullnode_count(1)
             .with_fullnode_rpc_addr(fullnode_url);
+            
+        // Check if fullnode.yaml exists and read its gRPC API address
+        let fullnode_config_path = config_path.join("fullnode.yaml");
+            
+        if fullnode_config_path.exists() {
+            info!("🔍 Reading existing fullnode config from: {}", fullnode_config_path.display());
+            
+            match PersistedConfig::<NodeConfig>::read(&fullnode_config_path) {
+                Ok(fullnode_config) => {
+                    if let Some(grpc_addr) = fullnode_config.grpc_api_address {
+                        info!("🔗 Found gRPC API address in fullnode.yaml: {}", grpc_addr);
+                        swarm_builder = swarm_builder.with_fullnode_grpc_api_address(grpc_addr);
+                    } else {
+                        info!("📭 No gRPC API address configured in fullnode.yaml");
+                    }
+                }
+                Err(e) => {
+                    warn!("⚠️  Failed to read fullnode config from {}: {}", fullnode_config_path.display(), e);
+                }
+            }
+        } else {
+            info!("📄 No fullnode.yaml found at: {}", fullnode_config_path.display());
+        }
     }
 
     let mut swarm = tokio::task::spawn_blocking(move || swarm_builder.build()).await?;

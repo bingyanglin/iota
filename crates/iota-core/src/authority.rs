@@ -1463,6 +1463,9 @@ impl AuthorityState {
         _execution_guard: ExecutionLockReadGuard<'_>,
         epoch_store: &Arc<AuthorityPerEpochStore>,
     ) -> IotaResult {
+        let tx_digest = certificate.digest();
+        info!(?tx_digest, "AuthorityState::commit_certificate - Starting transaction commit");
+        
         let _scope: Option<iota_metrics::MonitoredScopeGuard> =
             monitored_scope("Execution::commit_certificate");
         let _metrics_guard = self.metrics.commit_certificate_latency.start_timer();
@@ -2579,11 +2582,14 @@ impl AuthorityState {
         inner_temporary_store: &InnerTemporaryStore,
         epoch_store: &Arc<AuthorityPerEpochStore>,
     ) -> IotaResult {
+        let tx_digest = certificate.digest();
+        info!(?tx_digest, "AuthorityState::post_process_one_tx - Starting post-processing");
+        
         if self.indexes.is_none() {
+            info!(?tx_digest, "AuthorityState::post_process_one_tx - No indexes configured, skipping");
             return Ok(());
         }
 
-        let tx_digest = certificate.digest();
         let timestamp_ms = Self::unixtime_now_ms();
         let events = &inner_temporary_store.events;
         let written = &inner_temporary_store.written;
@@ -2617,10 +2623,14 @@ impl AuthorityState {
                 epoch_store,
                 inner_temporary_store,
             )?;
+            
+            info!(?tx_digest, num_events = events.data.len(), "AuthorityState::post_process_one_tx - About to call subscription_handler.process_tx");
+            
             // Emit events
             self.subscription_handler
                 .process_tx(certificate.data().transaction_data(), &effects, &events)
                 .tap_ok(|_| {
+                    info!(?tx_digest, "AuthorityState::post_process_one_tx - subscription_handler.process_tx completed successfully");
                     self.metrics
                         .post_processing_total_tx_had_event_processed
                         .inc()
@@ -2822,6 +2832,7 @@ impl AuthorityState {
         indirect_objects_threshold: usize,
         archive_readers: ArchiveReaderBalancer,
         validator_tx_finalizer: Option<Arc<ValidatorTxFinalizer<NetworkAuthorityClient>>>,
+        grpc_event_broadcast_tx: Option<tokio::sync::broadcast::Sender<Arc<iota_json_rpc_types::IotaEvent>>>,
     ) -> Arc<Self> {
         Self::check_protocol_version(supported_protocol_versions, epoch_store.protocol_version());
 
@@ -2866,7 +2877,14 @@ impl AuthorityState {
             execution_cache_trait_pointers,
             indexes,
             rest_index,
-            subscription_handler: Arc::new(SubscriptionHandler::new(prometheus_registry)),
+            subscription_handler: {
+                info!("🟡 AuthorityState::new - Received gRPC event broadcast parameter: {}", 
+                      if grpc_event_broadcast_tx.is_some() { "Some(channel)" } else { "None" });
+                Arc::new(SubscriptionHandler::new_with_grpc_broadcast(
+                    prometheus_registry,
+                    grpc_event_broadcast_tx,
+                ))
+            },
             checkpoint_store,
             committee_store,
             transaction_manager,

@@ -76,9 +76,12 @@ use iota_core::{
     validator_tx_finalizer::ValidatorTxFinalizer,
 };
 use iota_grpc_api::{
-    CHECKPOINT_BROADCAST_BUFFER_SIZE, CheckpointGrpcService,
+    CHECKPOINT_BROADCAST_BUFFER_SIZE, EVENT_INTEGRATION_BROADCAST_BUFFER_SIZE, CheckpointGrpcService,
     checkpoint::checkpoint_service_server::CheckpointServiceServer,
+    event_integration::EventIntegration, event_service::EventService,
+    events::event_service_server::EventServiceServer,
 };
+use iota_json_rpc_types::IotaEvent;
 use iota_json_rpc::{
     JsonRpcServerBuilder, coin_api::CoinReadApi, governance_api::GovernanceReadApi,
     indexer_api::IndexerApi, move_utils::MoveUtils, read_api::ReadApi,
@@ -258,6 +261,8 @@ pub struct IotaNode {
     grpc_checkpoint_summary_tx:
         Option<tokio::sync::broadcast::Sender<Arc<CertifiedCheckpointSummary>>>,
     grpc_checkpoint_data_tx: Option<tokio::sync::broadcast::Sender<Arc<CheckpointData>>>,
+    /// Broadcast channel for gRPC event streaming
+    grpc_event_tx: Option<tokio::sync::broadcast::Sender<Arc<IotaEvent>>>,
 
     /// AuthorityAggregator of the network, created at start and beginning of
     /// each epoch. Use ArcSwap so that we could mutate it without taking
@@ -654,6 +659,25 @@ impl IotaNode {
         // configuration generation.
         let archive_readers =
             ArchiveReaderBalancer::new(config.archive_reader_config(), &prometheus_registry)?;
+
+        // Create gRPC event broadcast channel early for use in AuthorityState  
+        info!("🔍 Node startup config check - gRPC: {:?} | JSON-RPC: {:?} | DB path: {} | Network: {}", 
+              config.grpc_api_address, 
+              config.json_rpc_address,
+              config.db_path().display(),
+              config.network_address);
+              
+        let grpc_event_tx = if config.grpc_api_address.is_some() {
+            info!("🔵 Creating gRPC event broadcast channel - gRPC API address configured: {:?} | JSON-RPC: {:?}", 
+                  config.grpc_api_address, 
+                  config.json_rpc_address);
+            let (event_tx, _) = tokio::sync::broadcast::channel(EVENT_INTEGRATION_BROADCAST_BUFFER_SIZE);
+            Some(event_tx)
+        } else {
+            info!("🔴 NOT creating gRPC event broadcast channel - gRPC API address not configured | JSON-RPC: {:?}", 
+                  config.json_rpc_address);
+            None
+        };
         let (trusted_peer_change_tx, trusted_peer_change_rx) = watch::channel(Default::default());
         let (randomness_tx, randomness_rx) = mpsc::channel(
             config
@@ -735,6 +759,7 @@ impl IotaNode {
             config.indirect_objects_threshold,
             archive_readers,
             validator_tx_finalizer,
+            grpc_event_tx.clone(),
         )
         .await;
 
@@ -843,8 +868,7 @@ impl IotaNode {
         let iota_node_metrics =
             Arc::new(IotaNodeMetrics::new(&registry_service.default_registry()));
 
-        // --- Create shared checkpoint broadcast channel and buffer for gRPC and
-        // checkpoint logic ---
+        // --- Create shared broadcast channels for gRPC checkpoint streaming ---
         let (grpc_checkpoint_summary_tx, grpc_checkpoint_data_tx) = if let Some(grpc_api_address) =
             config.grpc_api_address
         {
@@ -859,10 +883,18 @@ impl IotaNode {
             // Use the shared broadcast channel and buffer for gRPC checkpoint streaming
             let grpc_service =
                 CheckpointGrpcService::new(rest_read_store, summary_tx.clone(), data_tx.clone());
+
+            // Create event service with shared broadcast channel
+            let event_integration = EventIntegration::new_with_broadcast_channel(
+                grpc_event_tx.clone().expect("grpc_event_tx should be Some when gRPC is enabled")
+            );
+            let event_service = EventService::new(event_integration);
+
             tokio::spawn(async move {
                 info!("Starting gRPC server on {grpc_api_address}");
                 tonic::transport::Server::builder()
                     .add_service(CheckpointServiceServer::new(grpc_service))
+                    .add_service(EventServiceServer::new(event_service))
                     .serve(grpc_api_address)
                     .await
                     .expect("gRPC server failed");
@@ -932,6 +964,7 @@ impl IotaNode {
 
             grpc_checkpoint_summary_tx,
             grpc_checkpoint_data_tx,
+            grpc_event_tx,
 
             auth_agg,
         };

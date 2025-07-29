@@ -10,17 +10,28 @@ bcs.workspace = true
 futures.workspace = true
 prost.workspace = true
 serde.workspace = true
+serde_json.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread"] }
 tokio-stream.workspace = true
 tonic.workspace = true
 tracing.workspace = true
 
 # internal dependencies
+iota-core.workspace = true
+iota-json-rpc-types.workspace = true
 iota-types.workspace = true
+move-core-types.workspace = true
 
 [build-dependencies]
 tonic-build.workspace = true
 
 [dev-dependencies]
-move-core-types.workspace = true
+# external dependencies
+hex.workspace = true
+tempfile.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
+
+# internal dependencies
+iota-move-build.workspace = true
+iota-test-transaction-builder.workspace = true
 test-cluster.workspace = true

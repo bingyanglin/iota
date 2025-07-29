@@ -12,7 +12,7 @@ use parking_lot::RwLock;
 use prometheus::Registry;
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
-use tracing::{debug, warn};
+use tracing::{debug, info, warn};
 
 use crate::subscription_handler::{EVENT_DISPATCH_BUFFER_SIZE, SubscriptionMetrics};
 
@@ -65,6 +65,10 @@ where
         let subscribers = streamer.subscribers.clone();
         spawn_monitored_task!(async move {
             while let Some(data) = rx.recv().await {
+                info!(
+                    metrics_label = metrics_label,
+                    "📤 Streamer received data for broadcasting to subscribers"
+                );
                 Self::send_to_all_subscribers(
                     subscribers.clone(),
                     data,
@@ -97,21 +101,29 @@ where
             let mut to_remove = vec![];
             let subscribers_snapshot = subscribers.read();
             subscriber_count.set(subscribers_snapshot.len() as i64);
+            
+            info!(
+                subscriber_count = subscribers_snapshot.len(),
+                metrics_label = metrics_label,
+                "📊 Broadcasting to {} active subscriber(s)",
+                subscribers_snapshot.len()
+            );
 
             for (id, (subscriber, filter)) in subscribers_snapshot.iter() {
                 if !(filter.matches(&data)) {
+                    debug!(subscription_id = id, "📭 Data does not match subscriber filter, skipping");
                     continue;
                 }
                 let data = data.clone();
                 match subscriber.try_send(data.into()) {
                     Ok(_) => {
-                        debug!(subscription_id = id, "Streaming data to subscriber.");
+                        info!(subscription_id = id, "✅ Successfully streamed data to subscriber");
                         success_counter.inc();
                     }
                     Err(e) => {
                         warn!(
                             subscription_id = id,
-                            "Error when streaming data, removing subscriber. Error: {e}"
+                            "❌ Error when streaming data, removing subscriber. Error: {e}"
                         );
                         // It does not matter what the error is - channel full or closed, we remove
                         // the subscriber. In the case of a full channel,
@@ -134,15 +146,32 @@ where
 
     /// Subscribe to the data stream filtered by the filter object.
     pub fn subscribe(&self, filter: F) -> impl Stream<Item = S> {
+        let subscription_id = ObjectID::random().to_string();
         let (tx, rx) = mpsc::channel::<S>(EVENT_DISPATCH_BUFFER_SIZE);
+        
+        info!(
+            subscription_id = subscription_id,
+            metrics_label = self.metrics_label,
+            "🔔 New subscriber registered in streamer"
+        );
+        
         self.subscribers
             .write()
-            .insert(ObjectID::random().to_string(), (tx, filter));
+            .insert(subscription_id, (tx, filter));
         ReceiverStream::new(rx)
     }
 
     pub fn try_send(&self, data: T) -> Result<(), IotaError> {
+        info!(
+            metrics_label = self.metrics_label,
+            "📨 Attempting to send data to streamer queue"
+        );
         self.streamer_queue.try_send(data).map_err(|e| {
+            warn!(
+                metrics_label = self.metrics_label,
+                error = %e,
+                "❌ Failed to send data to streamer queue"
+            );
             self.metrics
                 .dropped_submissions
                 .with_label_values(&[self.metrics_label])
@@ -151,6 +180,11 @@ where
             IotaError::FailedToDispatchSubscription {
                 error: e.to_string(),
             }
+        }).inspect(|_| {
+            info!(
+                metrics_label = self.metrics_label,
+                "✅ Successfully sent data to streamer queue"
+            );
         })
     }
 }

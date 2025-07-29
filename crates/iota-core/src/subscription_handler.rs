@@ -13,8 +13,9 @@ use prometheus::{
     IntCounterVec, IntGaugeVec, Registry, register_int_counter_vec_with_registry,
     register_int_gauge_vec_with_registry,
 };
+use tokio::sync::broadcast;
 use tokio_stream::Stream;
-use tracing::{error, instrument, trace};
+use tracing::{error, info, instrument, trace};
 
 use crate::streamer::Streamer;
 
@@ -70,6 +71,8 @@ pub struct SubscriptionHandler {
     event_streamer: Streamer<IotaEvent, IotaEvent, EventFilter>,
     transaction_streamer:
         Streamer<EffectsWithInput, IotaTransactionBlockEffects, TransactionFilter>,
+    // Optional broadcast channel for gRPC event streaming
+    grpc_event_broadcast_tx: Option<broadcast::Sender<Arc<IotaEvent>>>,
 }
 
 impl SubscriptionHandler {
@@ -78,6 +81,21 @@ impl SubscriptionHandler {
         Self {
             event_streamer: Streamer::spawn(EVENT_DISPATCH_BUFFER_SIZE, metrics.clone(), "event"),
             transaction_streamer: Streamer::spawn(EVENT_DISPATCH_BUFFER_SIZE, metrics, "tx"),
+            grpc_event_broadcast_tx: None,
+        }
+    }
+
+    pub fn new_with_grpc_broadcast(
+        registry: &Registry,
+        grpc_event_broadcast_tx: Option<broadcast::Sender<Arc<IotaEvent>>>,
+    ) -> Self {
+        info!("🟢 SubscriptionHandler::new_with_grpc_broadcast - Received gRPC broadcast parameter: {}", 
+              if grpc_event_broadcast_tx.is_some() { "Some(channel)" } else { "None" });
+        let metrics = Arc::new(SubscriptionMetrics::new(registry));
+        Self {
+            event_streamer: Streamer::spawn(EVENT_DISPATCH_BUFFER_SIZE, metrics.clone(), "event"),
+            transaction_streamer: Streamer::spawn(EVENT_DISPATCH_BUFFER_SIZE, metrics, "tx"),
+            grpc_event_broadcast_tx,
         }
     }
 }
@@ -90,6 +108,12 @@ impl SubscriptionHandler {
         effects: &IotaTransactionBlockEffects,
         events: &IotaTransactionBlockEvents,
     ) -> IotaResult {
+        info!(
+            num_events = events.data.len(),
+            tx_digest =? effects.transaction_digest(),
+            "SubscriptionHandler::process_tx - Processing transaction with events"
+        );
+        
         trace!(
             num_events = events.data.len(),
             tx_digest =? effects.transaction_digest(),
@@ -104,9 +128,51 @@ impl SubscriptionHandler {
         }
 
         // serially dispatch event processing to honor events' orders.
-        for event in events.data.clone() {
-            if let Err(e) = self.event_streamer.try_send(event) {
+        for (index, event) in events.data.clone().iter().enumerate() {
+            info!(
+                event_index = index,
+                event_type = event.type_.to_string(),
+                tx_digest =? effects.transaction_digest(),
+                grpc_channel_available = self.grpc_event_broadcast_tx.is_some(),
+                "SubscriptionHandler::process_tx - Dispatching event to event_streamer"
+            );
+            if let Err(e) = self.event_streamer.try_send(event.clone()) {
                 error!(error =? e, "Failed to send event to dispatch");
+            }
+
+            // Also send to gRPC broadcast channel if available
+            if let Some(ref grpc_tx) = self.grpc_event_broadcast_tx {
+                let event_arc = Arc::new(event.clone());
+                match grpc_tx.send(event_arc) {
+                    Ok(subscriber_count) => {
+                        info!(
+                            event_index = index,
+                            subscriber_count = subscriber_count,
+                            tx_digest =? effects.transaction_digest(),
+                            event_type = event.type_.to_string(),
+                            event_id =? event.id,
+                            "📡 SubscriptionHandler::process_tx - Broadcasted event to {} gRPC subscriber(s)",
+                            subscriber_count
+                        );
+                    }
+                    Err(_) => {
+                        info!(
+                            event_index = index,
+                            tx_digest =? effects.transaction_digest(),
+                            event_type = event.type_.to_string(),
+                            event_id =? event.id,
+                            "📭 SubscriptionHandler::process_tx - No gRPC subscribers for event broadcast"
+                        );
+                    }
+                }
+            } else {
+                info!(
+                    event_index = index,
+                    tx_digest =? effects.transaction_digest(),
+                    event_type = event.type_.to_string(),
+                    event_id =? event.id,
+                    "🚫 SubscriptionHandler::process_tx - No gRPC broadcast channel available for event"
+                );
             }
         }
         Ok(())
