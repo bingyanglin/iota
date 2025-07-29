@@ -49,7 +49,7 @@ while let Some(Ok(checkpoint)) = stream.next().await {
 }
 ```
 
-**Simularum Example:**
+**Simulacrum Example:**
 
 ```bash
 cd examples/simulacrum/grpc
