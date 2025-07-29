@@ -53,5 +53,5 @@ while let Some(Ok(checkpoint)) = stream.next().await {
 
 ```bash
 cd examples/simulacrum/grpc
-cargo run --bin complete_grpc_workflow     
+cargo run --bin complete_grpc_workflow
 ```
