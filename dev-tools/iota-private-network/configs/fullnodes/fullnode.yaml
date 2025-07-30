@@ -6,6 +6,9 @@ metrics-address: "0.0.0.0:9184"
 admin-interface-address: "127.0.0.1:1337"
 grpc-load-shed: ~
 grpc-concurrency-limit: ~
+enable-grpc-api: true
+grpc-api-config:
+  address: "127.0.0.1:50051"
 p2p-config:
   listen-address: "0.0.0.0:8084"
 genesis:

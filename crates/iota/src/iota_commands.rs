@@ -51,7 +51,7 @@ use move_analyzer::analyzer;
 use move_package::BuildConfig;
 use rand::rngs::OsRng;
 use tempfile::tempdir;
-use tracing::{self, info};
+use tracing::{self, info, warn};
 
 #[cfg(feature = "iota-names")]
 use crate::name_commands;
@@ -706,7 +706,10 @@ async fn start(
             );
 
             let NodeConfig {
-                iota_names_config, ..
+                iota_names_config,
+                enable_grpc_api,
+                grpc_api_config,
+                ..
             } = PersistedConfig::read(&fullnode_config_path).map_err(|err| {
                 err.context(format!(
                     "Cannot open fullnode config file at {fullnode_config_path:?}"
@@ -717,6 +720,18 @@ async fn start(
                 swarm_builder = swarm_builder
                     .dir(config_path.clone())
                     .with_iota_names_config(iota_names_config);
+            }
+
+            // Apply gRPC configuration from fullnode config
+            if enable_grpc_api {
+                if let Some(grpc_config) = grpc_api_config {
+                    info!("Applying gRPC config from fullnode.yaml: {:?}", grpc_config);
+                    swarm_builder = swarm_builder.with_fullnode_grpc_api_config(grpc_config);
+                } else {
+                    info!("WARNING: enable_grpc_api=true but no grpc_api_config provided");
+                }
+            } else {
+                info!("gRPC API disabled in fullnode config (enable_grpc_api=false)");
             }
         }
     }
@@ -743,6 +758,46 @@ async fn start(
         swarm_builder = swarm_builder
             .with_fullnode_count(1)
             .with_fullnode_rpc_addr(fullnode_url);
+
+        // Check if fullnode.yaml exists and read its gRPC API address
+        let fullnode_config_path = config_path.join("fullnode.yaml");
+
+        if fullnode_config_path.exists() {
+            info!(
+                "Reading existing fullnode config from: {}",
+                fullnode_config_path.display()
+            );
+
+            match PersistedConfig::<NodeConfig>::read(&fullnode_config_path) {
+                Ok(fullnode_config) => {
+                    if fullnode_config.enable_grpc_api {
+                        if let Some(grpc_config) = fullnode_config.grpc_api_config {
+                            info!("Found gRPC API config in fullnode.yaml: {:?}", grpc_config);
+                            swarm_builder =
+                                swarm_builder.with_fullnode_grpc_api_config(grpc_config);
+                        } else {
+                            info!(
+                                "gRPC API is enabled but no grpc_api_config provided in fullnode.yaml"
+                            );
+                        }
+                    } else {
+                        info!("gRPC API is disabled in fullnode.yaml");
+                    }
+                }
+                Err(e) => {
+                    warn!(
+                        "Failed to read fullnode config from {}: {}",
+                        fullnode_config_path.display(),
+                        e
+                    );
+                }
+            }
+        } else {
+            info!(
+                "No fullnode.yaml found at: {}",
+                fullnode_config_path.display()
+            );
+        }
     }
 
     let mut swarm = tokio::task::spawn_blocking(move || swarm_builder.build()).await?;

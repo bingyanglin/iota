@@ -348,6 +348,7 @@ impl<'a> TestAuthorityBuilder<'a> {
             usize::MAX,
             ArchiveReaderBalancer::default(),
             None,
+            None,
             chain_identifier,
         )
         .await;

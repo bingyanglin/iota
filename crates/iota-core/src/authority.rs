@@ -2860,6 +2860,9 @@ impl AuthorityState {
         indirect_objects_threshold: usize,
         archive_readers: ArchiveReaderBalancer,
         validator_tx_finalizer: Option<Arc<ValidatorTxFinalizer<NetworkAuthorityClient>>>,
+        grpc_event_broadcast_tx: Option<
+            tokio::sync::broadcast::Sender<Arc<iota_json_rpc_types::IotaEvent>>,
+        >,
         chain_identifier: ChainIdentifier,
     ) -> Arc<Self> {
         Self::check_protocol_version(supported_protocol_versions, epoch_store.protocol_version());
@@ -2905,7 +2908,10 @@ impl AuthorityState {
             execution_cache_trait_pointers,
             indexes,
             rest_index,
-            subscription_handler: Arc::new(SubscriptionHandler::new(prometheus_registry)),
+            subscription_handler: Arc::new(SubscriptionHandler::new(
+                prometheus_registry,
+                grpc_event_broadcast_tx,
+            )),
             checkpoint_store,
             committee_store,
             transaction_manager,
