@@ -253,9 +253,6 @@ pub struct IotaNode {
     backpressure_manager: Arc<BackpressureManager>,
 
     _db_checkpoint_handle: Option<tokio::sync::broadcast::Sender<()>>,
-    /// Broadcast channel for gRPC event streaming
-    #[allow(dead_code)]
-    grpc_event_tx: Option<tokio::sync::broadcast::Sender<Arc<IotaEvent>>>,
 
     #[cfg(msim)]
     sim_state: SimState,
@@ -952,7 +949,6 @@ impl IotaNode {
             backpressure_manager,
 
             _db_checkpoint_handle: db_checkpoint_handle,
-            grpc_event_tx,
 
             #[cfg(msim)]
             sim_state: Default::default(),

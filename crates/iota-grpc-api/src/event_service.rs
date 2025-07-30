@@ -167,10 +167,7 @@ impl EventServiceTrait for EventService {
 
         let event_filter = create_event_filter(&proto_filter)?;
 
-        debug!(
-            "New GRPC client subscribed to events with filter: {:?}",
-            event_filter
-        );
+        debug!("New GRPC client subscribed to events with filter: {event_filter:?}",);
 
         let (tx, rx) = mpsc::channel(EVENT_STREAM_BUFFER_SIZE);
         let mut receiver = self.event_integration.subscribe(event_filter).await?;

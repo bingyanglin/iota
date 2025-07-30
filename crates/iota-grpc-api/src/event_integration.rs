@@ -84,16 +84,14 @@ impl EventIntegrationTrait for EventIntegration {
                     match filtered_tx.send(event.clone()) {
                         Ok(subscriber_count) => {
                             debug!(
-                                subscriber_count = subscriber_count,
-                                tx_digest = %event.id.tx_digest,
-                                "EventIntegration forwarded filtered event to {} gRPC subscriber(s)",
-                                subscriber_count
+                                "EventIntegration forwarded filtered event to {subscriber_count} gRPC subscriber(s) - TX: {}",
+                                event.id.tx_digest
                             );
                         }
                         Err(_) => {
                             debug!(
-                                tx_digest = %event.id.tx_digest,
-                                "EventIntegration: No gRPC subscribers to forward filtered event to"
+                                "EventIntegration: No gRPC subscribers to forward filtered event to - TX: {}",
+                                event.id.tx_digest
                             );
                         }
                     }

@@ -51,7 +51,7 @@ use move_analyzer::analyzer;
 use move_package::BuildConfig;
 use rand::rngs::OsRng;
 use tempfile::tempdir;
-use tracing::{self, info, warn};
+use tracing::{self, error, info};
 
 #[cfg(feature = "iota-names")]
 use crate::name_commands;
@@ -725,7 +725,7 @@ async fn start(
             // Apply gRPC configuration from fullnode config
             if enable_grpc_api {
                 if let Some(grpc_config) = grpc_api_config {
-                    info!("Applying gRPC config from fullnode.yaml: {:?}", grpc_config);
+                    info!("Applying gRPC config from fullnode.yaml: {grpc_config:?}");
                     swarm_builder = swarm_builder.with_fullnode_grpc_api_config(grpc_config);
                 } else {
                     info!("WARNING: enable_grpc_api=true but no grpc_api_config provided");
@@ -772,11 +772,11 @@ async fn start(
                 Ok(fullnode_config) => {
                     if fullnode_config.enable_grpc_api {
                         if let Some(grpc_config) = fullnode_config.grpc_api_config {
-                            info!("Found gRPC API config in fullnode.yaml: {:?}", grpc_config);
+                            info!("Found gRPC API config in fullnode.yaml: {grpc_config:?}");
                             swarm_builder =
                                 swarm_builder.with_fullnode_grpc_api_config(grpc_config);
                         } else {
-                            info!(
+                            error!(
                                 "gRPC API is enabled but no grpc_api_config provided in fullnode.yaml"
                             );
                         }
@@ -785,10 +785,9 @@ async fn start(
                     }
                 }
                 Err(e) => {
-                    warn!(
-                        "Failed to read fullnode config from {}: {}",
+                    error!(
+                        "Failed to read fullnode config from {}: {e}",
                         fullnode_config_path.display(),
-                        e
                     );
                 }
             }
