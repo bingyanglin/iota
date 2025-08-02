@@ -1772,13 +1772,17 @@ impl IotaNode {
             let summary_sender = self.grpc_checkpoint_summary_tx.as_ref().map(|tx| {
                 let tx = tx.clone();
                 Box::new(move |summary: &CertifiedCheckpointSummary| {
-                    let _ = tx.send(summary);
+                    if tx.send(summary).is_err() {
+                        tracing::debug!("No gRPC clients connected for checkpoint summaries");
+                    }
                 }) as Box<dyn Fn(&CertifiedCheckpointSummary) + Send + Sync>
             });
             let data_sender = self.grpc_checkpoint_data_tx.as_ref().map(|tx| {
                 let tx = tx.clone();
                 Box::new(move |data: &CheckpointData| {
-                    let _ = tx.send(data);
+                    if tx.send(data).is_err() {
+                        tracing::debug!("No gRPC clients connected for checkpoint data");
+                    }
                 }) as Box<dyn Fn(&CheckpointData) + Send + Sync>
             });
 

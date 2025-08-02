@@ -49,6 +49,7 @@ pub mod events {
     tonic::include_proto!("iota.grpc.events");
 }
 
+pub mod bcs_event;
 pub mod event_integration;
 pub mod event_service;
 

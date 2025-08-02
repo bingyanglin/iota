@@ -16,6 +16,7 @@ use tracing::debug;
 
 use crate::{
     EVENT_STREAM_BUFFER_SIZE,
+    bcs_event::BcsIotaEvent,
     event_integration::EventIntegrationTrait,
     events::{
         Event, EventId, EventStreamRequest, event_service_server::EventService as EventServiceTrait,
@@ -182,8 +183,11 @@ impl EventServiceTrait for EventService {
                     event.timestamp_ms
                 );
 
+                // Convert to BCS-compatible structure
+                let bcs_event = BcsIotaEvent::from(event.clone());
+
                 let proto_event = Event {
-                    event_data: bcs::to_bytes(&event).unwrap(),
+                    event_data: bcs::to_bytes(&bcs_event).unwrap(),
                     event_id: Some(EventId {
                         tx_seq: event.id.event_seq,
                         event_seq: event.id.event_seq,
