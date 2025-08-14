@@ -6387,6 +6387,7 @@ dependencies = [
 name = "iota-grpc-api"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "async-stream",
  "bcs",
  "futures",
@@ -6399,6 +6400,7 @@ dependencies = [
  "test-cluster",
  "tokio",
  "tokio-stream",
+ "tokio-util 0.7.12",
  "tonic 0.13.1",
  "tonic-build",
  "tracing",
