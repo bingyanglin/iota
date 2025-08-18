@@ -78,8 +78,11 @@ use iota_core::{
 };
 use iota_grpc_api::{
     CheckpointDataBroadcaster, CheckpointGrpcService, CheckpointSummaryBroadcaster,
-    GrpcCheckpointDataBroadcaster, GrpcCheckpointSummaryBroadcaster, GrpcReader,
+    EVENT_INTEGRATION_BROADCAST_BUFFER_SIZE, GrpcCheckpointDataBroadcaster,
+    GrpcCheckpointSummaryBroadcaster, GrpcReader,
     checkpoint::checkpoint_service_server::CheckpointServiceServer,
+    event_integration::EventIntegration, event_service::EventService,
+    events::event_service_server::EventServiceServer,
 };
 use iota_json_rpc::{
     JsonRpcServerBuilder, coin_api::CoinReadApi, governance_api::GovernanceReadApi,
@@ -88,6 +91,7 @@ use iota_json_rpc::{
     transaction_execution_api::TransactionExecutionApi,
 };
 use iota_json_rpc_api::JsonRpcMetrics;
+use iota_json_rpc_types::IotaEvent;
 use iota_macros::{fail_point, fail_point_async, replay_log};
 use iota_metrics::{
     RegistryID, RegistryService,
@@ -726,6 +730,36 @@ impl IotaNode {
                     &prometheus_registry,
                 )));
 
+        // Create gRPC event broadcast channel early for use in AuthorityState
+        info!(
+            "DEBUG: Raw config values - enable_grpc_api: {}, grpc_api_config: {:?}",
+            config.enable_grpc_api, config.grpc_api_config
+        );
+        info!(
+            "Node startup config check - gRPC: {:?} | JSON-RPC: {:?} | DB path: {:?} | Network: {:?}",
+            config.grpc_api_config.as_ref().map(|c| c.address),
+            config.json_rpc_address,
+            config.db_path().display(),
+            config.network_address
+        );
+
+        let grpc_event_tx = if config.grpc_api_config.is_some() {
+            info!(
+                "Creating gRPC event broadcast channel - gRPC API address configured: {:?} | JSON-RPC: {:?}",
+                config.grpc_api_config.as_ref().map(|c| c.address),
+                config.json_rpc_address
+            );
+            let (event_tx, _) =
+                tokio::sync::broadcast::channel(EVENT_INTEGRATION_BROADCAST_BUFFER_SIZE);
+            Some(event_tx)
+        } else {
+            info!(
+                "NOT creating gRPC event broadcast channel - gRPC API address not configured | JSON-RPC: {:?}",
+                config.json_rpc_address
+            );
+            None
+        };
+
         info!("create authority state");
         let state = AuthorityState::new(
             authority_name,
@@ -745,6 +779,7 @@ impl IotaNode {
             config.indirect_objects_threshold,
             archive_readers,
             validator_tx_finalizer,
+            grpc_event_tx.clone(),
             chain_identifier,
         )
         .await;
@@ -854,8 +889,13 @@ impl IotaNode {
         let iota_node_metrics =
             Arc::new(IotaNodeMetrics::new(&registry_service.default_registry()));
 
-        let (grpc_checkpoint_summary_tx, grpc_checkpoint_data_tx) =
-            build_grpc_server(&config, state.clone(), state_sync_store.clone()).await?;
+        let (grpc_checkpoint_summary_tx, grpc_checkpoint_data_tx) = build_grpc_server(
+            &config,
+            state.clone(),
+            state_sync_store.clone(),
+            grpc_event_tx.clone(),
+        )
+        .await?;
         let validator_components = if state.is_validator(&epoch_store) {
             let (components, _) = futures::join!(
                 Self::construct_validator_components(
@@ -1732,16 +1772,16 @@ impl IotaNode {
             let summary_sender = self.grpc_checkpoint_summary_tx.as_ref().map(|tx| {
                 let tx = tx.clone();
                 Box::new(move |summary: &CertifiedCheckpointSummary| {
-                    if let Err(e) = tx.send(summary) {
-                        tracing::warn!("Failed to send checkpoint summary: {e}");
+                    if tx.send(summary).is_err() {
+                        tracing::debug!("No gRPC clients connected for checkpoint summaries");
                     }
                 }) as Box<dyn Fn(&CertifiedCheckpointSummary) + Send + Sync>
             });
             let data_sender = self.grpc_checkpoint_data_tx.as_ref().map(|tx| {
                 let tx = tx.clone();
                 Box::new(move |data: &CheckpointData| {
-                    if let Err(e) = tx.send(data) {
-                        tracing::warn!("Failed to send checkpoint data: {e}");
+                    if tx.send(data).is_err() {
+                        tracing::debug!("No gRPC clients connected for checkpoint data");
                     }
                 }) as Box<dyn Fn(&CheckpointData) + Send + Sync>
             });
@@ -2263,6 +2303,7 @@ async fn build_grpc_server(
     config: &NodeConfig,
     state: Arc<AuthorityState>,
     state_sync_store: RocksDbStore,
+    grpc_event_tx: Option<tokio::sync::broadcast::Sender<Arc<IotaEvent>>>,
 ) -> Result<(
     Option<GrpcCheckpointSummaryBroadcaster>,
     Option<GrpcCheckpointDataBroadcaster>,
@@ -2280,15 +2321,22 @@ async fn build_grpc_server(
     let (summary_tx, _) = broadcast::channel(grpc_config.checkpoint_broadcast_buffer_size);
     let (data_tx, _) = broadcast::channel(grpc_config.checkpoint_broadcast_buffer_size);
 
-    let rest_read_store = Arc::new(RestReadStore::new(state, state_sync_store));
+    let rest_read_store = Arc::new(RestReadStore::new(state.clone(), state_sync_store));
     let grpc_reader = GrpcReader::from_rest_state_reader(rest_read_store);
 
     let grpc_service = CheckpointGrpcService::new(grpc_reader, summary_tx.clone(), data_tx.clone());
+
+    // Create event service with shared broadcast channel
+    let event_integration = EventIntegration::new_with_broadcast_channel(
+        grpc_event_tx.expect("grpc_event_tx should be Some when gRPC is enabled"),
+    );
+    let event_service = EventService::new(event_integration);
 
     tokio::spawn(async move {
         info!("Starting gRPC server on {grpc_api_address}");
         tonic::transport::Server::builder()
             .add_service(CheckpointServiceServer::new(grpc_service))
+            .add_service(EventServiceServer::new(event_service))
             .serve(grpc_api_address)
             .await
             .expect("gRPC server failed");
