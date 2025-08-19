@@ -12,8 +12,10 @@ use tokio_util::sync::CancellationToken;
 use tonic::transport::Server;
 
 use crate::{
-    CheckpointGrpcService, GrpcCheckpointDataBroadcaster, GrpcCheckpointSummaryBroadcaster,
+    CheckpointGrpcService, EVENT_INTEGRATION_BROADCAST_BUFFER_SIZE, EventGrpcService,
+    GrpcCheckpointDataBroadcaster, GrpcCheckpointSummaryBroadcaster, GrpcEventBroadcaster,
     GrpcReader, checkpoint::checkpoint_service_server::CheckpointServiceServer,
+    events::event_service_server::EventServiceServer,
 };
 
 /// Handle to control a running gRPC server
@@ -26,6 +28,8 @@ pub struct GrpcServerHandle {
     pub checkpoint_summary_broadcaster: GrpcCheckpointSummaryBroadcaster,
     /// Broadcaster for checkpoint data
     pub checkpoint_data_broadcaster: GrpcCheckpointDataBroadcaster,
+    /// Broadcaster for events
+    pub event_broadcaster: GrpcEventBroadcaster,
     /// Actual server address (with resolved port)
     pub address: SocketAddr,
 }
@@ -54,37 +58,54 @@ impl GrpcServerHandle {
     pub fn checkpoint_data_broadcaster(&self) -> &GrpcCheckpointDataBroadcaster {
         &self.checkpoint_data_broadcaster
     }
+
+    /// Get a reference to the event broadcaster
+    pub fn event_broadcaster(&self) -> &GrpcEventBroadcaster {
+        &self.event_broadcaster
+    }
 }
 
-/// Start a gRPC server with checkpoint services
+/// Start a gRPC server with checkpoint and event services
 ///
 /// This function creates and starts a gRPC server that hosts checkpoint-related
-/// services. Currently includes the checkpoint streaming service, but can be
-/// extended to host additional services in the future.
+/// and event streaming services. Optionally accepts an existing event broadcast
+/// channel created upstream, enabling event broadcasting to start before the
+/// gRPC server is fully initialized.
 pub async fn start_grpc_server(
     grpc_reader: Arc<GrpcReader>,
     config: crate::Config,
+    event_tx: Option<tokio::sync::broadcast::Sender<Arc<iota_json_rpc_types::IotaEvent>>>,
 ) -> Result<GrpcServerHandle> {
     // Create broadcast channels
     let (checkpoint_summary_tx, _) = broadcast::channel(config.checkpoint_broadcast_buffer_size);
     let (checkpoint_data_tx, _) = broadcast::channel(config.checkpoint_broadcast_buffer_size);
 
+    // Use provided event channel or create new one
+    let event_tx = event_tx.unwrap_or_else(|| {
+        let (tx, _) = broadcast::channel(EVENT_INTEGRATION_BROADCAST_BUFFER_SIZE);
+        tx
+    });
+
     // Create broadcasters
     let checkpoint_summary_broadcaster =
         GrpcCheckpointSummaryBroadcaster::new(checkpoint_summary_tx);
     let checkpoint_data_broadcaster = GrpcCheckpointDataBroadcaster::new(checkpoint_data_tx);
+    let event_broadcaster = GrpcEventBroadcaster::new(event_tx.clone());
 
     let shutdown_token = grpc_reader.cancellation_token().clone();
 
     // Create the gRPC service using the provided grpc_reader
-    let service = CheckpointGrpcService::new(
+    let checkpoint_service = CheckpointGrpcService::new(
         grpc_reader.clone(),
         checkpoint_summary_broadcaster.clone(),
         checkpoint_data_broadcaster.clone(),
     );
+    let event_service = EventGrpcService::new(event_tx);
 
     // Create the server with proper address binding
-    let server_builder = Server::builder().add_service(CheckpointServiceServer::new(service));
+    let server_builder = Server::builder()
+        .add_service(CheckpointServiceServer::new(checkpoint_service))
+        .add_service(EventServiceServer::new(event_service));
 
     // Bind to the address to get the actual local address (especially important for
     // port 0)
@@ -92,7 +113,7 @@ pub async fn start_grpc_server(
     let actual_addr = listener.local_addr().unwrap_or(config.address);
 
     tracing::info!(
-        "Starting gRPC checkpoint server on {} (bound to {})",
+        "Starting gRPC server on {} (bound to {})",
         config.address,
         actual_addr
     );
@@ -115,6 +136,7 @@ pub async fn start_grpc_server(
         shutdown_token,
         checkpoint_summary_broadcaster,
         checkpoint_data_broadcaster,
+        event_broadcaster,
         address: actual_addr,
     })
 }
