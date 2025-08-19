@@ -95,7 +95,7 @@ pub async fn start_grpc_server(
         checkpoint_summary_broadcaster.clone(),
         checkpoint_data_broadcaster.clone(),
     );
-    let event_service = EventGrpcService::new(grpc_event_tx);
+    let event_service = EventGrpcService::new(event_broadcaster.clone());
 
     // Create the server with proper address binding
     let server_builder = Server::builder()

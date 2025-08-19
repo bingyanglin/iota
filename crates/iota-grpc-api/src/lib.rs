@@ -1,9 +1,6 @@
 // Copyright (c) 2025 IOTA Stiftung
 // SPDX-License-Identifier: Apache-2.0
 
-/// Buffer size for mpsc channels used for event streaming.
-pub const EVENT_STREAM_BUFFER_SIZE: usize = 100;
-
 // Generated protobuf code
 pub mod checkpoint {
     tonic::include_proto!("iota.grpc");

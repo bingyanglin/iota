@@ -38,5 +38,5 @@ fn default_checkpoint_broadcast_buffer_size() -> usize {
 }
 
 fn default_event_broadcast_buffer_size() -> usize {
-    1000 // Match current EVENT_INTEGRATION_BROADCAST_BUFFER_SIZE
+    1000
 }
