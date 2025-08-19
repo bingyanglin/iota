@@ -10,6 +10,7 @@ use iota_types::{
 };
 use move_core_types::{identifier::Identifier, language_storage::StructTag};
 use serde_json;
+use tokio_util::sync::CancellationToken;
 use tonic::{Request, Response, Status};
 use tracing::debug;
 
@@ -21,11 +22,18 @@ use crate::{
 
 pub struct EventGrpcService {
     pub event_broadcaster: GrpcEventBroadcaster,
+    pub cancellation_token: CancellationToken,
 }
 
 impl EventGrpcService {
-    pub fn new(event_broadcaster: GrpcEventBroadcaster) -> Self {
-        Self { event_broadcaster }
+    pub fn new(
+        event_broadcaster: GrpcEventBroadcaster,
+        cancellation_token: CancellationToken,
+    ) -> Self {
+        Self {
+            event_broadcaster,
+            cancellation_token,
+        }
     }
 }
 
@@ -46,27 +54,47 @@ impl EventService for EventGrpcService {
         let event_filter = create_event_filter(&proto_filter)?;
         debug!("New gRPC client subscribed with filter: {event_filter:?}");
 
-        // Create stream directly from broadcast receiver (like checkpoint service)
         let mut event_rx = self.event_broadcaster.subscribe();
+        let cancellation_token = self.cancellation_token.clone();
 
         let stream = async_stream::try_stream! {
-            while let Ok(event_arc) = event_rx.recv().await {
-                let event = &*event_arc;
+            loop {
+                let event_result = tokio::select! {
+                    recv_result = event_rx.recv() => Some(recv_result),
+                    _ = cancellation_token.cancelled() => {
+                        debug!("Event stream cancelled");
+                        None
+                    }
+                };
 
-                // Use existing filter matching logic
-                if event_filter.matches(event) {
-                    debug!(
-                        "Event matched filter: TX: {}, Type: {}, Sender: {}",
-                        event.id.tx_digest,
-                        event.type_.name.as_ident_str(),
-                        event.sender
-                    );
+                match event_result {
+                    Some(Ok(event_arc)) => {
+                        let event = &*event_arc;
 
-                    // Convert to protobuf Event
-                    let proto_event = Event::try_from(event)
-                        .map_err(|e| Status::internal(format!("Failed to convert event: {e}")))?;
+                        // Use existing filter matching logic
+                        if event_filter.matches(event) {
+                            debug!(
+                                "Event matched filter: TX: {}, Type: {}, Sender: {}",
+                                event.id.tx_digest,
+                                event.type_.name.as_ident_str(),
+                                event.sender
+                            );
 
-                    yield proto_event;
+                            // Convert to protobuf Event
+                            let proto_event = Event::try_from(event)
+                                .map_err(|e| Status::internal(format!("Failed to convert event: {e}")))?;
+
+                            yield proto_event;
+                        }
+                    }
+                    Some(Err(_)) => {
+                        debug!("Event broadcast channel closed");
+                        break;
+                    }
+                    None => {
+                        // Cancellation occurred
+                        break;
+                    }
                 }
             }
         };
