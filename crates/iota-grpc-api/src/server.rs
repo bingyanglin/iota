@@ -13,9 +13,9 @@ use tokio_util::sync::CancellationToken;
 use tonic::transport::Server;
 
 use crate::{
-    CheckpointGrpcService, EVENT_INTEGRATION_BROADCAST_BUFFER_SIZE, EventGrpcService,
-    GrpcCheckpointDataBroadcaster, GrpcCheckpointSummaryBroadcaster, GrpcEventBroadcaster,
-    GrpcReader, checkpoint::checkpoint_service_server::CheckpointServiceServer,
+    CheckpointGrpcService, EventGrpcService, GrpcCheckpointDataBroadcaster,
+    GrpcCheckpointSummaryBroadcaster, GrpcEventBroadcaster, GrpcReader,
+    checkpoint::checkpoint_service_server::CheckpointServiceServer,
     events::event_service_server::EventServiceServer,
 };
 
@@ -74,24 +74,18 @@ impl GrpcServerHandle {
 /// gRPC server is fully initialized.
 pub async fn start_grpc_server(
     grpc_reader: Arc<GrpcReader>,
-    grpc_event_tx: Option<broadcast::Sender<Arc<IotaEvent>>>,
+    grpc_event_tx: broadcast::Sender<Arc<IotaEvent>>,
     config: crate::Config,
 ) -> Result<GrpcServerHandle> {
     // Create broadcast channels
     let (checkpoint_summary_tx, _) = broadcast::channel(config.checkpoint_broadcast_buffer_size);
     let (checkpoint_data_tx, _) = broadcast::channel(config.checkpoint_broadcast_buffer_size);
 
-    // Use provided event channel or create new one
-    let event_tx = grpc_event_tx.unwrap_or_else(|| {
-        let (tx, _) = broadcast::channel(EVENT_INTEGRATION_BROADCAST_BUFFER_SIZE);
-        tx
-    });
-
     // Create broadcasters
     let checkpoint_summary_broadcaster =
         GrpcCheckpointSummaryBroadcaster::new(checkpoint_summary_tx);
     let checkpoint_data_broadcaster = GrpcCheckpointDataBroadcaster::new(checkpoint_data_tx);
-    let event_broadcaster = GrpcEventBroadcaster::new(event_tx.clone());
+    let event_broadcaster = GrpcEventBroadcaster::new(grpc_event_tx.clone());
 
     let shutdown_token = grpc_reader.cancellation_token().clone();
 
@@ -101,7 +95,7 @@ pub async fn start_grpc_server(
         checkpoint_summary_broadcaster.clone(),
         checkpoint_data_broadcaster.clone(),
     );
-    let event_service = EventGrpcService::new(event_tx);
+    let event_service = EventGrpcService::new(grpc_event_tx);
 
     // Create the server with proper address binding
     let server_builder = Server::builder()

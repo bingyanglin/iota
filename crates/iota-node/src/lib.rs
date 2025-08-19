@@ -79,8 +79,8 @@ use iota_core::{
     validator_tx_finalizer::ValidatorTxFinalizer,
 };
 use iota_grpc_api::{
-    CheckpointDataBroadcaster, CheckpointSummaryBroadcaster,
-    EVENT_INTEGRATION_BROADCAST_BUFFER_SIZE, GrpcReader, GrpcServerHandle, start_grpc_server,
+    CheckpointDataBroadcaster, CheckpointSummaryBroadcaster, GrpcReader, GrpcServerHandle,
+    start_grpc_server,
 };
 use iota_json_rpc::{
     JsonRpcServerBuilder, coin_api::CoinReadApi, governance_api::GovernanceReadApi,
@@ -750,7 +750,8 @@ impl IotaNode {
             && config.consensus_config().is_none()
         {
             info!("Creating gRPC event broadcast channel for fullnode");
-            let (tx, _) = broadcast::channel(EVENT_INTEGRATION_BROADCAST_BUFFER_SIZE);
+            let grpc_config = config.grpc_api_config.as_ref().unwrap();
+            let (tx, _) = broadcast::channel(grpc_config.event_broadcast_buffer_size);
             Some(tx)
         } else {
             None
@@ -2328,6 +2329,8 @@ async fn build_grpc_server(
 
     let rest_read_store = Arc::new(RestReadStore::new(state, state_sync_store));
     let grpc_reader = Arc::new(GrpcReader::from_rest_state_reader(rest_read_store));
+    let grpc_event_tx =
+        grpc_event_tx.expect("gRPC event channel should exist when gRPC is enabled");
     let handle = start_grpc_server(grpc_reader, grpc_event_tx, grpc_config.clone()).await?;
 
     Ok(Some(handle))

@@ -127,8 +127,7 @@ impl SubscriptionHandler {
                                 subscriber_count = subscriber_count,
                                 tx_digest =? effects.transaction_digest(),
                                 event_type = %event.type_.name,
-                                "Broadcasted event to {} gRPC subscriber(s)",
-                                subscriber_count
+                                "Broadcasted event to {subscriber_count} gRPC subscriber(s)"
                             );
                         }
                         Err(e) => {

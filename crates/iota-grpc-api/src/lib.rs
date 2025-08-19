@@ -4,9 +4,6 @@
 /// Buffer size for mpsc channels used for event streaming.
 pub const EVENT_STREAM_BUFFER_SIZE: usize = 100;
 
-/// Buffer size for broadcast channels used for event integration.
-pub const EVENT_INTEGRATION_BROADCAST_BUFFER_SIZE: usize = 1000;
-
 // Generated protobuf code
 pub mod checkpoint {
     tonic::include_proto!("iota.grpc");
