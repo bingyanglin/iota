@@ -17,23 +17,22 @@ use tracing::debug;
 
 use crate::{
     EVENT_STREAM_BUFFER_SIZE,
-    events::{
-        Event, EventId, EventStreamRequest, event_service_server::EventService as EventServiceTrait,
-    },
+    bcs_event::try_to_bcs_bytes,
+    events::{Event, EventId, EventStreamRequest, event_service_server::EventService},
 };
 
-pub struct EventService {
+pub struct EventGrpcService {
     event_sender: broadcast::Sender<Arc<IotaEvent>>,
 }
 
-impl EventService {
+impl EventGrpcService {
     pub fn new(event_sender: broadcast::Sender<Arc<IotaEvent>>) -> Self {
         Self { event_sender }
     }
 }
 
 #[tonic::async_trait]
-impl EventServiceTrait for EventService {
+impl EventService for EventGrpcService {
     type StreamEventsStream = ReceiverStream<Result<Event, Status>>;
 
     async fn stream_events(
@@ -65,9 +64,9 @@ impl EventServiceTrait for EventService {
                         event.sender
                     );
 
-                    // Direct BCS serialization - no conversion needed!
+                    // Convert to BCS bytes
                     let proto_event = Event {
-                        event_data: bcs::to_bytes(event).unwrap(),
+                        event_data: try_to_bcs_bytes(event).unwrap(),
                         event_id: Some(EventId {
                             tx_seq: event.id.event_seq,
                             event_seq: event.id.event_seq,

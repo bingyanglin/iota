@@ -12,7 +12,7 @@ use tokio_util::sync::CancellationToken;
 use tonic::transport::Server;
 
 use crate::{
-    CheckpointGrpcService, EVENT_INTEGRATION_BROADCAST_BUFFER_SIZE, EventService,
+    CheckpointGrpcService, EVENT_INTEGRATION_BROADCAST_BUFFER_SIZE, EventGrpcService,
     GrpcCheckpointDataBroadcaster, GrpcCheckpointSummaryBroadcaster, GrpcEventBroadcaster,
     GrpcReader, checkpoint::checkpoint_service_server::CheckpointServiceServer,
     events::event_service_server::EventServiceServer,
@@ -100,7 +100,7 @@ pub async fn start_grpc_server(
         checkpoint_summary_broadcaster.clone(),
         checkpoint_data_broadcaster.clone(),
     );
-    let event_service = EventService::new(event_tx);
+    let event_service = EventGrpcService::new(event_tx);
 
     // Create the server with proper address binding
     let server_builder = Server::builder()

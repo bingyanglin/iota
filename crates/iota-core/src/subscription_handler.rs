@@ -118,27 +118,36 @@ impl SubscriptionHandler {
 
             // Also send to gRPC broadcast channel if available
             if let Some(ref grpc_tx) = self.grpc_event_broadcast_tx {
-                let event_arc = Arc::new(event.clone());
-                match grpc_tx.send(event_arc) {
-                    Ok(subscriber_count) => {
-                        debug!(
-                            event_index = index,
-                            subscriber_count = subscriber_count,
-                            tx_digest =? effects.transaction_digest(),
-                            event_type = %event.type_.name,
-                            "Broadcasted event to {} gRPC subscriber(s)",
-                            subscriber_count
-                        );
+                if grpc_tx.receiver_count() > 0 {
+                    let event_arc = Arc::new(event.clone());
+                    match grpc_tx.send(event_arc) {
+                        Ok(subscriber_count) => {
+                            debug!(
+                                event_index = index,
+                                subscriber_count = subscriber_count,
+                                tx_digest =? effects.transaction_digest(),
+                                event_type = %event.type_.name,
+                                "Broadcasted event to {} gRPC subscriber(s)",
+                                subscriber_count
+                            );
+                        }
+                        Err(e) => {
+                            error!(
+                                error = ?e,
+                                event_index = index,
+                                tx_digest =? effects.transaction_digest(),
+                                event_type = %event.type_.name,
+                                "Failed to broadcast event to gRPC channel"
+                            );
+                        }
                     }
-                    Err(e) => {
-                        error!(
-                            error = ?e,
-                            event_index = index,
-                            tx_digest =? effects.transaction_digest(),
-                            event_type = %event.type_.name,
-                            "Failed to broadcast event to gRPC channel"
-                        );
-                    }
+                } else {
+                    debug!(
+                        event_index = index,
+                        tx_digest =? effects.transaction_digest(),
+                        event_type = %event.type_.name,
+                        "No gRPC subscribers, skipping broadcast"
+                    );
                 }
             }
         }

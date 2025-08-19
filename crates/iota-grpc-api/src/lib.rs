@@ -17,6 +17,7 @@ pub mod events {
 }
 
 // Modules
+pub mod bcs_event;
 pub mod checkpoint_service;
 pub mod client;
 pub mod config;
@@ -26,9 +27,9 @@ pub mod types;
 
 // Re-export commonly used types and traits
 pub use checkpoint_service::CheckpointGrpcService;
-pub use client::{CheckpointClient, CheckpointContent, NodeClient};
+pub use client::{CheckpointClient, CheckpointContent, EventClient, NodeClient};
 pub use config::Config;
-pub use event_service::EventService;
+pub use event_service::EventGrpcService;
 pub use server::{GrpcServerHandle, start_grpc_server};
 pub use types::{
     CheckpointDataBroadcaster, CheckpointSummaryBroadcaster, GrpcCheckpointDataBroadcaster,
