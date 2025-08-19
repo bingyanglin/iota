@@ -389,7 +389,7 @@ async fn test_server_and_client_setup<I: Iterator<Item = u64>>(
     };
     config_customizer(&mut config);
 
-    let server_handle = start_grpc_server(grpc_reader, config, None)
+    let server_handle = start_grpc_server(grpc_reader, None, config)
         .await
         .expect("Failed to start gRPC server");
 

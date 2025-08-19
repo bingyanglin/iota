@@ -89,6 +89,7 @@ use iota_json_rpc::{
     transaction_execution_api::TransactionExecutionApi,
 };
 use iota_json_rpc_api::JsonRpcMetrics;
+use iota_json_rpc_types::IotaEvent;
 use iota_macros::{fail_point, fail_point_async, replay_log};
 use iota_metrics::{
     RegistryID, RegistryService,
@@ -2314,7 +2315,7 @@ async fn build_grpc_server(
     config: &NodeConfig,
     state: Arc<AuthorityState>,
     state_sync_store: RocksDbStore,
-    event_tx: Option<tokio::sync::broadcast::Sender<Arc<iota_json_rpc_types::IotaEvent>>>,
+    grpc_event_tx: Option<broadcast::Sender<Arc<IotaEvent>>>,
 ) -> Result<Option<GrpcServerHandle>> {
     // Validators do not expose gRPC APIs
     if config.consensus_config().is_some() || !config.enable_grpc_api {
@@ -2327,7 +2328,7 @@ async fn build_grpc_server(
 
     let rest_read_store = Arc::new(RestReadStore::new(state, state_sync_store));
     let grpc_reader = Arc::new(GrpcReader::from_rest_state_reader(rest_read_store));
-    let handle = start_grpc_server(grpc_reader, grpc_config.clone(), event_tx).await?;
+    let handle = start_grpc_server(grpc_reader, grpc_event_tx, grpc_config.clone()).await?;
 
     Ok(Some(handle))
 }

@@ -6,6 +6,7 @@
 use std::{net::SocketAddr, sync::Arc};
 
 use anyhow::Result;
+use iota_json_rpc_types::IotaEvent;
 use tokio::sync::broadcast;
 use tokio_stream::wrappers::TcpListenerStream;
 use tokio_util::sync::CancellationToken;
@@ -73,15 +74,15 @@ impl GrpcServerHandle {
 /// gRPC server is fully initialized.
 pub async fn start_grpc_server(
     grpc_reader: Arc<GrpcReader>,
+    grpc_event_tx: Option<broadcast::Sender<Arc<IotaEvent>>>,
     config: crate::Config,
-    event_tx: Option<tokio::sync::broadcast::Sender<Arc<iota_json_rpc_types::IotaEvent>>>,
 ) -> Result<GrpcServerHandle> {
     // Create broadcast channels
     let (checkpoint_summary_tx, _) = broadcast::channel(config.checkpoint_broadcast_buffer_size);
     let (checkpoint_data_tx, _) = broadcast::channel(config.checkpoint_broadcast_buffer_size);
 
     // Use provided event channel or create new one
-    let event_tx = event_tx.unwrap_or_else(|| {
+    let event_tx = grpc_event_tx.unwrap_or_else(|| {
         let (tx, _) = broadcast::channel(EVENT_INTEGRATION_BROADCAST_BUFFER_SIZE);
         tx
     });
