@@ -39,6 +39,14 @@ pub trait EventSubscriber: Send + Sync {
         &self,
         filter: iota_json_rpc_types::EventFilter,
     ) -> Box<dyn futures::Stream<Item = IotaEvent> + Send + Unpin>;
+
+    /// Subscribe to transactions with the given filter
+    fn subscribe_transactions(
+        &self,
+        filter: iota_json_rpc_types::TransactionFilter,
+    ) -> Box<
+        dyn futures::Stream<Item = iota_json_rpc_types::IotaTransactionBlockEffects> + Send + Unpin,
+    >;
 }
 
 /// Wrapper that converts native CertifiedCheckpointSummary to gRPC type before
@@ -181,6 +189,15 @@ impl EventSubscriber for () {
         &self,
         _filter: EventFilter,
     ) -> Box<dyn futures::Stream<Item = IotaEvent> + Send + Unpin> {
+        Box::new(Box::pin(futures::stream::empty()))
+    }
+
+    fn subscribe_transactions(
+        &self,
+        _filter: iota_json_rpc_types::TransactionFilter,
+    ) -> Box<
+        dyn futures::Stream<Item = iota_json_rpc_types::IotaTransactionBlockEffects> + Send + Unpin,
+    > {
         Box::new(Box::pin(futures::stream::empty()))
     }
 }

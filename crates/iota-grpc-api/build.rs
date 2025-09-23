@@ -8,6 +8,7 @@ fn main() {
                 "proto/common.proto",
                 "proto/checkpoint.proto",
                 "proto/event.proto",
+                "proto/transaction.proto",
             ],
             &["proto/"],
         )

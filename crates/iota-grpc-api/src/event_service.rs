@@ -108,7 +108,7 @@ fn create_event_filter(proto_filter: &crate::events::EventFilter) -> Result<Even
     match &proto_filter.filter {
         Some(Filter::All(_)) => Ok(EventFilter::All(vec![])),
         Some(Filter::Sender(f)) => {
-            let sender = parse_iota_address(&f.sender, "Sender address")?;
+            let sender = parse_iota_address(&f.address, "Sender address")?;
             Ok(EventFilter::Sender(sender))
         }
         Some(Filter::Transaction(f)) => {

@@ -7,8 +7,8 @@ use futures::StreamExt;
 use iota_config::local_ip_utils;
 use iota_grpc_api::{
     client::{EventClient, NodeClient},
-    common::Address,
-    events::{AllFilter, EventFilter, MoveEventTypeFilter, SenderFilter, event_filter::Filter},
+    common::{Address, AddressFilter, AllFilter, MoveEventTypeFilter},
+    events::{EventFilter, event_filter::Filter},
 };
 use iota_types::{base_types::ObjectID, effects::TransactionEffectsAPI, transaction::CallArg};
 use test_cluster::{TestCluster, TestClusterBuilder};
@@ -113,8 +113,8 @@ async fn test_event_filtering_and_bcs_serialization() {
     // Client 2: SenderFilter - should receive only events from sender_1
     let mut sender_client = event_client.clone();
     let sender_filter = EventFilter {
-        filter: Some(Filter::Sender(SenderFilter {
-            sender: Some(Address {
+        filter: Some(Filter::Sender(AddressFilter {
+            address: Some(Address {
                 address: sender_1.to_vec(),
             }),
         })),

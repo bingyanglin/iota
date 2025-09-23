@@ -134,4 +134,11 @@ impl EventSubscriber for SubscriptionHandler {
     ) -> Box<dyn futures::Stream<Item = IotaEvent> + Send + Unpin> {
         Box::new(Box::pin(self.event_streamer.subscribe(filter)))
     }
+
+    fn subscribe_transactions(
+        &self,
+        filter: TransactionFilter,
+    ) -> Box<dyn futures::Stream<Item = IotaTransactionBlockEffects> + Send + Unpin> {
+        Box::new(Box::pin(self.transaction_streamer.subscribe(filter)))
+    }
 }

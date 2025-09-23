@@ -13,9 +13,10 @@ use tonic::transport::Server;
 
 use crate::{
     CheckpointGrpcService, EventGrpcService, GrpcCheckpointDataBroadcaster,
-    GrpcCheckpointSummaryBroadcaster, GrpcReader,
+    GrpcCheckpointSummaryBroadcaster, GrpcReader, TransactionGrpcService,
     checkpoint::checkpoint_service_server::CheckpointServiceServer,
     events::event_service_server::EventServiceServer,
+    transactions::transaction_service_server::TransactionServiceServer,
 };
 
 /// Handle to control a running gRPC server
@@ -58,11 +59,12 @@ impl GrpcServerHandle {
     }
 }
 
-/// Start a gRPC server with checkpoint and event services
+/// Start a gRPC server with checkpoint, event, and transaction services
 ///
-/// This function creates and starts a gRPC server that hosts checkpoint-related
-/// and event streaming services. Currently includes the checkpoint streaming
-/// and event streaming services, but can be extended to host additional
+/// This function creates and starts a gRPC server that hosts
+/// checkpoint-related, event streaming, and transaction streaming services.
+/// Currently includes the checkpoint streaming, event streaming, and
+/// transaction streaming services, but can be extended to host additional
 /// services in the future.
 pub async fn start_grpc_server(
     grpc_reader: Arc<GrpcReader>,
@@ -79,7 +81,7 @@ pub async fn start_grpc_server(
         GrpcCheckpointSummaryBroadcaster::new(checkpoint_summary_tx);
     let checkpoint_data_broadcaster = GrpcCheckpointDataBroadcaster::new(checkpoint_data_tx);
 
-    // Create the gRPC services - both get the cancellation token directly from
+    // Create the gRPC services - all get the cancellation token directly from
     // server level
     let checkpoint_service = CheckpointGrpcService::new(
         grpc_reader.clone(),
@@ -87,12 +89,14 @@ pub async fn start_grpc_server(
         checkpoint_data_broadcaster.clone(),
         shutdown_token.clone(),
     );
-    let event_service = EventGrpcService::new(event_subscriber, shutdown_token.clone());
+    let event_service = EventGrpcService::new(event_subscriber.clone(), shutdown_token.clone());
+    let transaction_service = TransactionGrpcService::new(event_subscriber, shutdown_token.clone());
 
     // Create the server with proper address binding
     let server_builder = Server::builder()
         .add_service(CheckpointServiceServer::new(checkpoint_service))
-        .add_service(EventServiceServer::new(event_service));
+        .add_service(EventServiceServer::new(event_service))
+        .add_service(TransactionServiceServer::new(transaction_service));
 
     // Bind to the address to get the actual local address (especially important for
     // port 0)
