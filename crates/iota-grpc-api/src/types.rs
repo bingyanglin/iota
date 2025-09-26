@@ -10,8 +10,10 @@ use iota_grpc_types::{
 };
 use iota_json_rpc_types::{EventFilter, IotaEvent};
 use iota_types::{
+    base_types::ObjectID,
     full_checkpoint_content::CheckpointData,
     messages_checkpoint::CertifiedCheckpointSummary,
+    object::Object,
     storage::{RestStateReader, error::Kind},
 };
 use serde::{Deserialize, Serialize};
@@ -20,7 +22,7 @@ use tokio_util::sync::CancellationToken;
 use tonic::Status;
 use tracing::debug;
 
-use crate::{checkpoint::Checkpoint, common::BcsData};
+use crate::{checkpoints::Checkpoint, common::BcsData};
 
 /// Trait for broadcasting checkpoint summaries
 pub trait CheckpointSummaryBroadcaster {
@@ -39,6 +41,14 @@ pub trait EventSubscriber: Send + Sync {
         &self,
         filter: iota_json_rpc_types::EventFilter,
     ) -> Box<dyn futures::Stream<Item = IotaEvent> + Send + Unpin>;
+
+    /// Subscribe to transactions with the given filter
+    fn subscribe_transactions(
+        &self,
+        filter: iota_json_rpc_types::TransactionFilter,
+    ) -> Box<
+        dyn futures::Stream<Item = iota_json_rpc_types::IotaTransactionBlockEffects> + Send + Unpin,
+    >;
 }
 
 /// Wrapper that converts native CertifiedCheckpointSummary to gRPC type before
@@ -183,6 +193,15 @@ impl EventSubscriber for () {
     ) -> Box<dyn futures::Stream<Item = IotaEvent> + Send + Unpin> {
         Box::new(Box::pin(futures::stream::empty()))
     }
+
+    fn subscribe_transactions(
+        &self,
+        _filter: iota_json_rpc_types::TransactionFilter,
+    ) -> Box<
+        dyn futures::Stream<Item = iota_json_rpc_types::IotaTransactionBlockEffects> + Send + Unpin,
+    > {
+        Box::new(Box::pin(futures::stream::empty()))
+    }
 }
 
 impl BcsData {
@@ -210,7 +229,7 @@ pub type CheckpointStreamResult = Result<Checkpoint, Status>;
 // making it easier to implement gRPC services with different storage types
 // (e.g., production database vs simulacrum for testing).
 
-/// Trait for reading checkpoint data from storage
+/// Trait for reading data from storage
 pub trait GrpcStateReader: Send + Sync + 'static {
     /// Get the latest checkpoint sequence number
     fn get_latest_checkpoint_sequence_number(&self) -> Option<u64>;
@@ -226,6 +245,9 @@ pub trait GrpcStateReader: Send + Sync + 'static {
         &self,
         epoch: u64,
     ) -> anyhow::Result<Option<CertifiedCheckpointSummary>>;
+
+    /// Get object data by object ID
+    fn get_object(&self, object_id: &ObjectID) -> anyhow::Result<Option<Object>>;
 }
 
 /// Adapter that implements GrpcStateReader for RestStateReader
@@ -269,6 +291,14 @@ impl GrpcStateReader for RestStateReaderAdapter {
             Err(e) => Err(e.into()),
         }
     }
+
+    fn get_object(&self, object_id: &ObjectID) -> anyhow::Result<Option<Object>> {
+        use iota_types::storage::ObjectStore;
+        match self.inner.try_get_object(object_id) {
+            Ok(object) => Ok(object),
+            Err(e) => Err(e.into()),
+        }
+    }
 }
 
 /// Central gRPC data reader that provides unified access to checkpoint data.
@@ -299,12 +329,20 @@ impl GrpcReader {
         self.state_reader.get_epoch_last_checkpoint(epoch)
     }
 
-    fn get_full_checkpoint_data(&self, seq: u64) -> Option<CheckpointData> {
+    pub fn get_full_checkpoint_data(&self, seq: u64) -> Option<CheckpointData> {
         self.state_reader.get_checkpoint_data(seq)
+    }
+
+    pub fn get_checkpoint_summary(&self, seq: u64) -> Option<CertifiedCheckpointSummary> {
+        self.state_reader.get_checkpoint_summary(seq)
     }
 
     pub fn get_latest_checkpoint_sequence_number(&self) -> Option<u64> {
         self.state_reader.get_latest_checkpoint_sequence_number()
+    }
+
+    pub fn get_object(&self, object_id: &ObjectID) -> anyhow::Result<Option<Object>> {
+        self.state_reader.get_object(object_id)
     }
 
     /// Generic checkpoint streaming implementation that works with checkpoint

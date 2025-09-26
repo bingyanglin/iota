@@ -78,7 +78,7 @@ use iota_core::{
     transaction_orchestrator::TransactionOrchestrator,
     validator_tx_finalizer::ValidatorTxFinalizer,
 };
-use iota_grpc_api::{GrpcReader, GrpcServerHandle, start_grpc_server};
+use iota_grpc_api::{EventSubscriber, GrpcReader, GrpcServerHandle, start_grpc_server};
 use iota_json_rpc::{
     JsonRpcServerBuilder, coin_api::CoinReadApi, governance_api::GovernanceReadApi,
     indexer_api::IndexerApi, move_utils::MoveUtils, read_api::ReadApi,
@@ -127,6 +127,7 @@ use iota_types::{
     quorum_driver_types::QuorumDriverEffectsQueueResult,
     supported_protocol_versions::SupportedProtocolVersions,
     transaction::{Transaction, VerifiedCertificate},
+    transaction_executor::TransactionExecutor,
 };
 use prometheus::Registry;
 #[cfg(msim)]
@@ -866,8 +867,13 @@ impl IotaNode {
         let iota_node_metrics =
             Arc::new(IotaNodeMetrics::new(&registry_service.default_registry()));
 
-        let grpc_server_handle =
-            build_grpc_server(&config, state.clone(), state_sync_store.clone()).await?;
+        let grpc_server_handle = build_grpc_server(
+            &config,
+            state.clone(),
+            state_sync_store.clone(),
+            &transaction_orchestrator,
+        )
+        .await?;
 
         let validator_components = if state.is_validator(&epoch_store) {
             let (components, _) = futures::join!(
@@ -2308,6 +2314,7 @@ async fn build_grpc_server(
     config: &NodeConfig,
     state: Arc<AuthorityState>,
     state_sync_store: RocksDbStore,
+    transaction_orchestrator: &Option<Arc<TransactionOrchestrator<NetworkAuthorityClient>>>,
 ) -> Result<Option<GrpcServerHandle>> {
     // Validators do not expose gRPC APIs
     if config.consensus_config().is_some() || !config.enable_grpc_api {
@@ -2327,14 +2334,21 @@ async fn build_grpc_server(
     let grpc_reader = Arc::new(GrpcReader::from_rest_state_reader(rest_read_store));
 
     // Get the subscription handler from the state for event streaming
-    let event_subscriber =
-        state.subscription_handler.clone() as Arc<dyn iota_grpc_api::EventSubscriber>;
+    let event_subscriber = state.subscription_handler.clone() as Arc<dyn EventSubscriber>;
 
-    // Pass the same token to both GrpcReader (already done above) and
-    // start_grpc_server
+    // Create TransactionExecutor if transaction orchestrator is available
+    let transaction_executor: Option<Arc<dyn TransactionExecutor>> =
+        if let Some(transaction_orchestrator) = transaction_orchestrator {
+            // TransactionOrchestrator already implements TransactionExecutor
+            Some(transaction_orchestrator.clone() as Arc<dyn TransactionExecutor>)
+        } else {
+            None
+        };
+
     let handle = start_grpc_server(
         grpc_reader,
         event_subscriber,
+        transaction_executor,
         grpc_config.clone(),
         shutdown_token,
     )

@@ -392,6 +392,7 @@ async fn test_server_and_client_setup<I: Iterator<Item = u64>>(
     let server_handle = start_grpc_server(
         grpc_reader,
         dummy_event_subscriber,
+        None, // No write API for tests
         config,
         cancellation_token,
     )

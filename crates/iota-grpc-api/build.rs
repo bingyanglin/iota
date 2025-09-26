@@ -6,8 +6,10 @@ fn main() {
         .compile_protos(
             &[
                 "proto/common.proto",
+                "proto/node.proto",
                 "proto/checkpoint.proto",
                 "proto/event.proto",
+                "proto/transaction.proto",
             ],
             &["proto/"],
         )

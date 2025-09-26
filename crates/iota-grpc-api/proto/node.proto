@@ -1,0 +1,160 @@
+// Copyright (c) 2025 IOTA Stiftung
+// SPDX-License-Identifier: Apache-2.0
+
+syntax = "proto3";
+
+package iota.grpc.node;
+
+import "common.proto";
+
+service NodeService {
+  rpc ExecuteTransaction (ExecuteTransactionRequest) returns (ExecuteTransactionResponse);
+  rpc GetObject (GetObjectRequest) returns (GetObjectResponse);
+}
+
+// ExecuteTransaction
+message ExecuteTransactionRequest {
+  // BCS serialized transaction data bytes
+  bytes tx_bytes = 1;
+  // List of signatures
+  repeated bytes signatures = 2;
+  // Options for specifying the content to be returned
+  optional TransactionResponseOptions options = 3;
+  // The request type
+  optional ExecuteTransactionRequestType request_type = 4;
+}
+
+message TransactionResponseOptions {
+  bool show_input = 1;
+  bool show_raw_input = 2;
+  bool show_effects = 3;
+  bool show_events = 4;
+  bool show_object_changes = 5;
+  bool show_balance_changes = 6;
+  bool show_raw_effects = 7;
+}
+
+enum ExecuteTransactionRequestType {
+  WAIT_FOR_EFFECTS_CERT = 0;
+  WAIT_FOR_LOCAL_EXECUTION = 1;
+}
+
+message ExecuteTransactionResponse {
+  // Transaction digest
+  iota.grpc.common.Digest digest = 1;
+  // Transaction data (if show_input or show_raw_input is true)
+  optional iota.grpc.common.BcsData transaction = 2;
+  // Raw transaction bytes (if show_raw_input is true)
+  optional bytes raw_transaction = 3;
+  // Transaction effects (if show_effects is true)
+  optional iota.grpc.common.BcsData effects = 4;
+  // Events (if show_events is true)
+  repeated iota.grpc.common.BcsData events = 5;
+  // Object changes (if show_object_changes is true)
+  repeated iota.grpc.common.BcsData object_changes = 6;
+  // Balance changes (if show_balance_changes is true)
+  repeated iota.grpc.common.BcsData balance_changes = 7;
+  // Timestamp when transaction was executed
+  optional uint64 timestamp_ms = 8;
+  // Whether the transaction was confirmed locally
+  optional bool confirmed_local_execution = 9;
+  // Checkpoint sequence number (if available)
+  optional uint64 checkpoint = 10;
+  // Error messages (if any)
+  repeated string errors = 11;
+  // Raw effects (if show_raw_effects is true)
+  optional bytes raw_effects = 12;
+}
+
+// GetObject - corresponds to REST API GetObject
+message GetObjectRequest {
+  // Object ID to retrieve
+  iota.grpc.common.Address object_id = 1;
+  // Options for specifying the content to be returned
+  optional ObjectDataOptions options = 2;
+}
+
+message ObjectDataOptions {
+  bool show_type = 1;
+  bool show_owner = 2;
+  bool show_previous_transaction = 3;
+  bool show_display = 4;
+  bool show_content = 5;
+  bool show_bcs = 6;
+  bool show_storage_rebate = 7;
+}
+
+message GetObjectResponse {
+  // Object data (if exists)
+  optional ObjectData data = 1;
+  // Error (if object doesn't exist or other error)
+  optional ObjectError error = 2;
+}
+
+message ObjectData {
+  // Object ID
+  iota.grpc.common.Address object_id = 1;
+  // Object version
+  uint64 version = 2;
+  // Object digest
+  iota.grpc.common.Digest digest = 3;
+  // Object type (if show_type is true)
+  optional string type = 4;
+  // Object owner (if show_owner is true)
+  optional string owner = 5;
+  // Previous transaction digest (if show_previous_transaction is true)
+  optional iota.grpc.common.Digest previous_transaction = 6;
+  // Storage rebate (if show_storage_rebate is true)
+  optional uint64 storage_rebate = 7;
+  // Display fields (if show_display is true)
+  optional iota.grpc.common.BcsData display = 8;
+  // Parsed content data (if show_content is true)
+  optional iota.grpc.common.BcsData content = 9;
+  // BCS raw data (if show_bcs is true)
+  optional iota.grpc.common.BcsData bcs = 10;
+}
+
+message ObjectError {
+  oneof error {
+    NotExistsError not_exists = 1;
+    DynamicFieldNotFoundError dynamic_field_not_found = 2;
+    DeletedError deleted = 3;
+    UnknownError unknown = 4;
+    DisplayError display = 5;
+    VersionNotFoundError version_not_found = 6;
+    VersionTooHighError version_too_high = 7;
+  }
+}
+
+message NotExistsError {
+  iota.grpc.common.Address object_id = 1;
+}
+
+message DynamicFieldNotFoundError {
+  iota.grpc.common.Address parent_object_id = 1;
+}
+
+message DeletedError {
+  iota.grpc.common.Address object_id = 1;
+  uint64 version = 2;
+  iota.grpc.common.Digest digest = 3;
+}
+
+message UnknownError {
+  optional string error_message = 1;
+}
+
+message DisplayError {
+  string error_message = 1;
+}
+
+message VersionNotFoundError {
+  iota.grpc.common.Address object_id = 1;
+  uint64 asked_version = 2;
+}
+
+message VersionTooHighError {
+  iota.grpc.common.Address object_id = 1;
+  uint64 asked_version = 2;
+  uint64 latest_version = 3;
+}

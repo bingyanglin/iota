@@ -6,7 +6,9 @@
 mod checkpoint;
 mod event;
 mod node_client;
+mod transaction;
 
 pub use checkpoint::{CheckpointClient, CheckpointContent};
 pub use event::EventClient;
 pub use node_client::NodeClient;
+pub use transaction::TransactionClient;

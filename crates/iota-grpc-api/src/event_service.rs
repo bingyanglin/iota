@@ -15,6 +15,7 @@ use tonic::{Request, Response, Status};
 use tracing::debug;
 
 use crate::{
+    common::{Address, BcsData, Digest},
     events::{Event, EventId, EventStreamRequest, event_service_server::EventService},
     types::EventSubscriber,
 };
@@ -108,7 +109,7 @@ fn create_event_filter(proto_filter: &crate::events::EventFilter) -> Result<Even
     match &proto_filter.filter {
         Some(Filter::All(_)) => Ok(EventFilter::All(vec![])),
         Some(Filter::Sender(f)) => {
-            let sender = parse_iota_address(&f.sender, "Sender address")?;
+            let sender = parse_iota_address(&f.address, "Sender address")?;
             Ok(EventFilter::Sender(sender))
         }
         Some(Filter::Transaction(f)) => {
@@ -148,10 +149,7 @@ fn create_event_filter(proto_filter: &crate::events::EventFilter) -> Result<Even
 }
 
 // Helper functions to reduce repetition and improve error messages
-fn parse_object_id(
-    address: &Option<crate::common::Address>,
-    field_name: &str,
-) -> Result<ObjectID, Status> {
+fn parse_object_id(address: &Option<Address>, field_name: &str) -> Result<ObjectID, Status> {
     let address = address
         .as_ref()
         .ok_or_else(|| Status::invalid_argument(format!("{field_name} is required")))?;
@@ -164,10 +162,7 @@ fn parse_identifier(id_str: &str, field_name: &str) -> Result<Identifier, Status
         .map_err(|e| Status::invalid_argument(format!("Invalid {field_name} '{id_str}': {e}")))
 }
 
-fn parse_iota_address(
-    address: &Option<crate::common::Address>,
-    field_name: &str,
-) -> Result<IotaAddress, Status> {
+fn parse_iota_address(address: &Option<Address>, field_name: &str) -> Result<IotaAddress, Status> {
     let address = address
         .as_ref()
         .ok_or_else(|| Status::invalid_argument(format!("{field_name} is required")))?;
@@ -175,10 +170,7 @@ fn parse_iota_address(
         .map_err(|e| Status::invalid_argument(format!("Invalid {field_name}: {e}")))
 }
 
-fn parse_tx_digest(
-    digest: &Option<crate::common::TransactionDigest>,
-    field_name: &str,
-) -> Result<TransactionDigest, Status> {
+fn parse_tx_digest(digest: &Option<Digest>, field_name: &str) -> Result<TransactionDigest, Status> {
     let digest = digest
         .as_ref()
         .ok_or_else(|| Status::invalid_argument(format!("{field_name} is required")))?;
@@ -192,21 +184,21 @@ impl From<&IotaEvent> for Event {
         Event {
             event_id: Some(EventId {
                 event_seq: event.id.event_seq,
-                tx_digest: Some(crate::common::TransactionDigest {
+                tx_digest: Some(Digest {
                     digest: event.id.tx_digest.into_inner().to_vec(),
                 }),
             }),
-            package_id: Some(crate::common::Address {
+            package_id: Some(Address {
                 address: event.package_id.to_vec(),
             }),
             transaction_module: event.transaction_module.to_string(),
-            sender: Some(crate::common::Address {
+            sender: Some(Address {
                 address: event.sender.to_vec(),
             }),
             type_name: event.type_.to_string(),
             parsed_json: event.parsed_json.to_string(),
             timestamp_ms: event.timestamp_ms,
-            event_data: Some(crate::common::BcsData {
+            event_data: Some(BcsData {
                 data: event.bcs.bytes().to_vec(),
             }),
         }

@@ -6395,6 +6395,7 @@ dependencies = [
  "anyhow",
  "async-stream",
  "bcs",
+ "fastcrypto",
  "futures",
  "iota-config",
  "iota-grpc-types",
