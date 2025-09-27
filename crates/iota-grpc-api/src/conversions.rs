@@ -11,8 +11,7 @@ use iota_types::{
 
 use crate::node::{
     DeletedError, DisplayError, DynamicFieldNotFoundError, NotExistsError, ObjectError,
-    UnknownError, VersionNotFoundError, VersionTooHighError,
-    object_error::Error as ObjectErrorVariant,
+    UnknownError, object_error::Error as ObjectErrorVariant,
 };
 
 /// Convert ObjectID to gRPC Address
@@ -76,9 +75,7 @@ pub fn iota_object_response_error_to_grpc(error: IotaObjectResponseError) -> Obj
             version: version.value(),
             digest: Some(object_digest_to_grpc_digest(digest)),
         }),
-        IotaObjectResponseError::Unknown => ObjectErrorVariant::Unknown(UnknownError {
-            error_message: Some("Unknown error".to_string()),
-        }),
+        IotaObjectResponseError::Unknown => ObjectErrorVariant::Unknown(UnknownError {}),
         IotaObjectResponseError::Display { error } => ObjectErrorVariant::Display(DisplayError {
             error_message: error,
         }),
@@ -92,35 +89,19 @@ pub fn iota_object_response_error_to_grpc(error: IotaObjectResponseError) -> Obj
 /// Convert UserInputError to gRPC ObjectError
 pub fn user_input_error_to_grpc(error: UserInputError) -> ObjectError {
     let error_variant = match error {
-        UserInputError::ObjectNotFound { object_id, version } => {
-            if let Some(version) = version {
-                ObjectErrorVariant::VersionNotFound(VersionNotFoundError {
-                    object_id: Some(object_id_to_grpc_address(object_id)),
-                    asked_version: version.value(),
-                })
-            } else {
-                ObjectErrorVariant::NotExists(NotExistsError {
-                    object_id: Some(object_id_to_grpc_address(object_id)),
-                })
-            }
+        UserInputError::ObjectNotFound { object_id, .. } => {
+            // For GetObject API, we always convert ObjectNotFound to NotExists
+            // since we don't support version parameters
+            ObjectErrorVariant::NotExists(NotExistsError {
+                object_id: Some(object_id_to_grpc_address(object_id)),
+            })
         }
         UserInputError::ObjectDeleted { object_ref } => ObjectErrorVariant::Deleted(DeletedError {
             object_id: Some(object_id_to_grpc_address(object_ref.0)),
             version: object_ref.1.value(),
             digest: Some(object_digest_to_grpc_digest(object_ref.2)),
         }),
-        UserInputError::ObjectSequenceNumberTooHigh {
-            object_id,
-            asked_version,
-            latest_version,
-        } => ObjectErrorVariant::VersionTooHigh(VersionTooHighError {
-            object_id: Some(object_id_to_grpc_address(object_id)),
-            asked_version: asked_version.value(),
-            latest_version: latest_version.value(),
-        }),
-        other => ObjectErrorVariant::Unknown(UnknownError {
-            error_message: Some(other.to_string()),
-        }),
+        _ => ObjectErrorVariant::Unknown(UnknownError {}),
     };
 
     ObjectError {
@@ -133,10 +114,8 @@ pub fn iota_error_to_grpc(error: IotaError) -> ObjectError {
     match error {
         IotaError::IotaObjectResponse { error } => iota_object_response_error_to_grpc(error),
         IotaError::UserInput { error } => user_input_error_to_grpc(error),
-        other => ObjectError {
-            error: Some(ObjectErrorVariant::Unknown(UnknownError {
-                error_message: Some(other.to_string()),
-            })),
+        _ => ObjectError {
+            error: Some(ObjectErrorVariant::Unknown(UnknownError {})),
         },
     }
 }
@@ -172,17 +151,5 @@ pub fn grpc_to_iota_object_response_error(
         ObjectErrorVariant::Display(display) => Ok(IotaObjectResponseError::Display {
             error: display.error_message,
         }),
-        ObjectErrorVariant::VersionNotFound(version_not_found) => {
-            // Convert back to NotExists since VersionNotFound is not in
-            // IotaObjectResponseError
-            let object_id = grpc_address_to_object_id(version_not_found.object_id)?;
-            Ok(IotaObjectResponseError::NotExists { object_id })
-        }
-        ObjectErrorVariant::VersionTooHigh(version_too_high) => {
-            // Convert back to NotExists since VersionTooHigh is not in
-            // IotaObjectResponseError
-            let object_id = grpc_address_to_object_id(version_too_high.object_id)?;
-            Ok(IotaObjectResponseError::NotExists { object_id })
-        }
     }
 }

@@ -25,12 +25,19 @@ message ExecuteTransactionRequest {
 }
 
 message TransactionResponseOptions {
+  ///Whether to show transaction input data
   bool show_input = 1;
+  /// Whether to show bcs-encoded transaction input data
   bool show_raw_input = 2;
+  // Whether to show transaction effects
   bool show_effects = 3;
+  // Whether to show transaction events
   bool show_events = 4;
+  // Whether to show object changes
   bool show_object_changes = 5;
+  // Whether to show balance changes
   bool show_balance_changes = 6;
+  // Whether to show raw transaction effects
   bool show_raw_effects = 7;
 }
 
@@ -40,35 +47,34 @@ enum ExecuteTransactionRequestType {
 }
 
 message ExecuteTransactionResponse {
-  // Transaction digest
   iota.grpc.common.Digest digest = 1;
-  // Transaction data (if show_input or show_raw_input is true)
+  // Transaction input data
   optional iota.grpc.common.BcsData transaction = 2;
-  // Raw transaction bytes (if show_raw_input is true)
+  // Raw transaction bytes
   optional bytes raw_transaction = 3;
-  // Transaction effects (if show_effects is true)
+  // Transaction effects
   optional iota.grpc.common.BcsData effects = 4;
-  // Events (if show_events is true)
+  // Transaction events
   repeated iota.grpc.common.BcsData events = 5;
-  // Object changes (if show_object_changes is true)
+  // Object changes
   repeated iota.grpc.common.BcsData object_changes = 6;
-  // Balance changes (if show_balance_changes is true)
+  // Balance changes
   repeated iota.grpc.common.BcsData balance_changes = 7;
   // Timestamp when transaction was executed
   optional uint64 timestamp_ms = 8;
   // Whether the transaction was confirmed locally
   optional bool confirmed_local_execution = 9;
-  // Checkpoint sequence number (if available)
+  // Checkpoint sequence number
   optional uint64 checkpoint = 10;
-  // Error messages (if any)
+  // Error messages
   repeated string errors = 11;
-  // Raw effects (if show_raw_effects is true)
+  // Raw transaction effects
   optional bytes raw_effects = 12;
 }
 
-// GetObject - corresponds to REST API GetObject
+// GetObject
 message GetObjectRequest {
-  // Object ID to retrieve
+  // The ID of the queried object
   iota.grpc.common.Address object_id = 1;
   // Options for specifying the content to be returned
   optional ObjectDataOptions options = 2;
@@ -104,11 +110,13 @@ message ObjectData {
   optional string owner = 5;
   // Previous transaction digest (if show_previous_transaction is true)
   optional iota.grpc.common.Digest previous_transaction = 6;
-  // Storage rebate (if show_storage_rebate is true)
+  // The amount of IOTA we would rebate if this object gets deleted.
+  // This number is re-calculated each time the object is mutated based on
+  // the present storage gas price (if show_storage_rebate is true)
   optional uint64 storage_rebate = 7;
-  // Display fields (if show_display is true)
+  // The Display metadata for frontend UI rendering (if show_display is true)
   optional iota.grpc.common.BcsData display = 8;
-  // Parsed content data (if show_content is true)
+  // Parsed Move object content or package content (if show_content is true)
   optional iota.grpc.common.BcsData content = 9;
   // BCS raw data (if show_bcs is true)
   optional iota.grpc.common.BcsData bcs = 10;
@@ -121,8 +129,6 @@ message ObjectError {
     DeletedError deleted = 3;
     UnknownError unknown = 4;
     DisplayError display = 5;
-    VersionNotFoundError version_not_found = 6;
-    VersionTooHighError version_too_high = 7;
   }
 }
 
@@ -141,20 +147,9 @@ message DeletedError {
 }
 
 message UnknownError {
-  optional string error_message = 1;
+  // No fields - matches JSON RPC IotaObjectResponseError::Unknown
 }
 
 message DisplayError {
   string error_message = 1;
-}
-
-message VersionNotFoundError {
-  iota.grpc.common.Address object_id = 1;
-  uint64 asked_version = 2;
-}
-
-message VersionTooHighError {
-  iota.grpc.common.Address object_id = 1;
-  uint64 asked_version = 2;
-  uint64 latest_version = 3;
 }
