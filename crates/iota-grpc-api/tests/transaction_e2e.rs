@@ -10,6 +10,7 @@ use iota_grpc_api::{
     common::{AddressFilter, AllFilter},
     transactions::{TransactionFilter, transaction_filter::Filter},
 };
+use iota_json_rpc_types::IotaTransactionBlockEffectsAPI;
 use test_cluster::{TestCluster, TestClusterBuilder};
 use tokio::time::timeout;
 
@@ -115,7 +116,7 @@ async fn test_transaction_filtering_and_bcs_serialization() {
                 match transaction_result {
                     Ok(transaction) => {
                         // Verify transaction data integrity
-                        assert!(transaction.transaction_digest.is_some());
+                        assert!(!transaction.transaction_digest().to_string().is_empty());
 
                         all_transactions.push(transaction);
 
@@ -144,7 +145,7 @@ async fn test_transaction_filtering_and_bcs_serialization() {
                 match transaction_result {
                     Ok(transaction) => {
                         // Verify transaction data integrity
-                        assert!(transaction.transaction_digest.is_some());
+                        assert!(!transaction.transaction_digest().to_string().is_empty());
 
                         sender_transactions.push(transaction);
 
@@ -235,7 +236,7 @@ async fn test_transaction_kind_filtering() {
             if let Some(transaction_result) = kind_stream.next().await {
                 match transaction_result {
                     Ok(transaction) => {
-                        assert!(transaction.transaction_digest.is_some());
+                        assert!(!transaction.transaction_digest().to_string().is_empty());
                         transactions.push(transaction);
                     }
                     Err(e) => panic!("TransactionKind filter error: {e}"),

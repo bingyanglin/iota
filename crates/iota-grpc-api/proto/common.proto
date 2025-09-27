@@ -59,3 +59,10 @@ message MoveFunctionFilter {
   optional string module = 2;     // Module name (optional)
   optional string function = 3;   // Function name (optional)
 }
+
+// Object reference (ID + version + digest)
+message ObjectRef {
+  Address object_id = 1;
+  uint64 version = 2;
+  Digest digest = 3;
+}

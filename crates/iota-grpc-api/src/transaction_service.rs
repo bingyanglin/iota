@@ -271,16 +271,160 @@ fn parse_iota_address(
         .map_err(|e| Status::invalid_argument(format!("Invalid {field_name}: {e}")))
 }
 
+// Versioned conversion from native IOTA types to gRPC protobuf
 impl From<&iota_json_rpc_types::IotaTransactionBlockEffects> for Transaction {
     fn from(effects: &iota_json_rpc_types::IotaTransactionBlockEffects) -> Self {
-        Transaction {
-            transaction_digest: Some(crate::common::Digest {
-                digest: effects.transaction_digest().inner().to_vec(),
-            }),
-            effects: Some(crate::common::BcsData {
-                data: bcs::to_bytes(effects).unwrap_or_default(),
-            }),
-            effects_json: serde_json::to_string(effects).unwrap_or_default(),
+        match effects {
+            iota_json_rpc_types::IotaTransactionBlockEffects::V1(v1_effects) => Transaction {
+                message_version: "v1".to_string(),
+                effects: Some(crate::transactions::transaction::Effects::V1(
+                    convert_v1_effects(v1_effects),
+                )),
+            }, /* Future versions can be added here:
+                * IotaTransactionBlockEffects::V2(v2_effects) => { ... } */
         }
+    }
+}
+
+// Convert V1 effects to proto format
+fn convert_v1_effects(
+    effects: &iota_json_rpc_types::IotaTransactionBlockEffectsV1,
+) -> crate::transactions::TransactionEffectsV1 {
+    crate::transactions::TransactionEffectsV1 {
+        transaction_digest: Some(crate::common::Digest {
+            digest: effects.transaction_digest.inner().to_vec(),
+        }),
+        status: Some(convert_execution_status(&effects.status)),
+        executed_epoch: effects.executed_epoch,
+        gas_used: Some(convert_gas_cost_summary(&effects.gas_used)),
+        created: effects
+            .created
+            .iter()
+            .map(convert_owned_object_ref)
+            .collect(),
+        mutated: effects
+            .mutated
+            .iter()
+            .map(convert_owned_object_ref)
+            .collect(),
+        unwrapped: effects
+            .unwrapped
+            .iter()
+            .map(convert_owned_object_ref)
+            .collect(),
+        deleted: effects.deleted.iter().map(convert_object_ref).collect(),
+        unwrapped_then_deleted: effects
+            .unwrapped_then_deleted
+            .iter()
+            .map(convert_object_ref)
+            .collect(),
+        wrapped: effects.wrapped.iter().map(convert_object_ref).collect(),
+        gas_object: Some(convert_owned_object_ref(&effects.gas_object)),
+        shared_objects: effects
+            .shared_objects
+            .iter()
+            .map(convert_object_ref)
+            .collect(),
+        dependencies: effects
+            .dependencies
+            .iter()
+            .map(|digest| crate::common::Digest {
+                digest: digest.into_inner().to_vec(),
+            })
+            .collect(),
+        modified_at_versions: effects
+            .modified_at_versions()
+            .iter()
+            .map(
+                |(object_id, sequence_number)| crate::transactions::ModifiedAtVersions {
+                    object_id: Some(crate::common::Address {
+                        address: object_id.into_bytes().to_vec(),
+                    }),
+                    sequence_number: sequence_number.value(),
+                },
+            )
+            .collect(),
+        events_digest: effects.events_digest.map(|digest| crate::common::Digest {
+            digest: digest.into_inner().to_vec(),
+        }),
+    }
+}
+
+fn convert_execution_status(
+    status: &iota_json_rpc_types::IotaExecutionStatus,
+) -> crate::transactions::ExecutionStatus {
+    let status_variant = match status {
+        iota_json_rpc_types::IotaExecutionStatus::Success => {
+            crate::transactions::execution_status::Status::Success(crate::transactions::Success {})
+        }
+        iota_json_rpc_types::IotaExecutionStatus::Failure { error } => {
+            crate::transactions::execution_status::Status::Failure(crate::transactions::Failure {
+                error: error.clone(),
+            })
+        }
+    };
+    crate::transactions::ExecutionStatus {
+        status: Some(status_variant),
+    }
+}
+
+fn convert_gas_cost_summary(
+    gas: &iota_types::gas::GasCostSummary,
+) -> crate::transactions::GasCostSummary {
+    crate::transactions::GasCostSummary {
+        computation_cost: gas.computation_cost,
+        computation_cost_burned: gas.computation_cost_burned,
+        storage_cost: gas.storage_cost,
+        storage_rebate: gas.storage_rebate,
+        non_refundable_storage_fee: gas.non_refundable_storage_fee,
+    }
+}
+
+fn convert_owned_object_ref(
+    obj_ref: &iota_json_rpc_types::OwnedObjectRef,
+) -> crate::transactions::OwnedObjectRef {
+    crate::transactions::OwnedObjectRef {
+        reference: Some(convert_object_ref(&obj_ref.reference)),
+        owner: Some(convert_owner(&obj_ref.owner)),
+    }
+}
+
+fn convert_object_ref(obj_ref: &iota_json_rpc_types::IotaObjectRef) -> crate::common::ObjectRef {
+    crate::common::ObjectRef {
+        object_id: Some(crate::common::Address {
+            address: obj_ref.object_id.into_bytes().to_vec(),
+        }),
+        version: obj_ref.version.value(),
+        digest: Some(crate::common::Digest {
+            digest: obj_ref.digest.into_inner().to_vec(),
+        }),
+    }
+}
+
+fn convert_owner(owner: &iota_types::object::Owner) -> crate::transactions::Owner {
+    let owner_variant = match owner {
+        iota_types::object::Owner::AddressOwner(addr) => {
+            crate::transactions::owner::Owner::AddressOwner(crate::common::Address {
+                address: addr.as_ref().to_vec(),
+            })
+        }
+        iota_types::object::Owner::ObjectOwner(addr) => {
+            crate::transactions::owner::Owner::ObjectOwner(crate::transactions::ObjectOwner {
+                address: Some(crate::common::Address {
+                    address: addr.as_ref().to_vec(),
+                }),
+            })
+        }
+        iota_types::object::Owner::Shared {
+            initial_shared_version,
+        } => crate::transactions::owner::Owner::Shared(crate::transactions::Shared {
+            initial_shared_version: initial_shared_version.value(),
+        }),
+        iota_types::object::Owner::Immutable => {
+            crate::transactions::owner::Owner::Immutable(crate::transactions::Immutable {})
+        }
+    };
+    crate::transactions::Owner {
+        owner: Some(owner_variant),
     }
 }

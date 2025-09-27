@@ -147,7 +147,7 @@ message DeletedError {
 }
 
 message UnknownError {
-  // No fields - matches JSON RPC IotaObjectResponseError::Unknown
+  // No fields
 }
 
 message DisplayError {
