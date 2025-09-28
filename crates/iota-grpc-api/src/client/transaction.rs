@@ -78,7 +78,7 @@ impl TransactionClient {
             }
             // Future versions:
             // "v2" => { ... }
-            version => Err(anyhow!("Unsupported message version: {}", version)),
+            version => Err(anyhow!("Unsupported message version: {version}")),
         }
     }
 
