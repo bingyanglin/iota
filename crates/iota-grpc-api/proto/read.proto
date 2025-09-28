@@ -3,73 +3,12 @@
 
 syntax = "proto3";
 
-package iota.grpc.node;
+package iota.grpc.read;
 
 import "common.proto";
 
-service NodeService {
-  rpc ExecuteTransaction (ExecuteTransactionRequest) returns (ExecuteTransactionResponse);
+service ReadService {
   rpc GetObject (GetObjectRequest) returns (GetObjectResponse);
-}
-
-// ExecuteTransaction
-message ExecuteTransactionRequest {
-  // BCS serialized transaction data bytes
-  bytes tx_bytes = 1;
-  // List of signatures
-  repeated bytes signatures = 2;
-  // Options for specifying the content to be returned
-  optional TransactionResponseOptions options = 3;
-  // The request type
-  optional ExecuteTransactionRequestType request_type = 4;
-}
-
-message TransactionResponseOptions {
-  ///Whether to show transaction input data
-  bool show_input = 1;
-  /// Whether to show bcs-encoded transaction input data
-  bool show_raw_input = 2;
-  // Whether to show transaction effects
-  bool show_effects = 3;
-  // Whether to show transaction events
-  bool show_events = 4;
-  // Whether to show object changes
-  bool show_object_changes = 5;
-  // Whether to show balance changes
-  bool show_balance_changes = 6;
-  // Whether to show raw transaction effects
-  bool show_raw_effects = 7;
-}
-
-enum ExecuteTransactionRequestType {
-  WAIT_FOR_EFFECTS_CERT = 0;
-  WAIT_FOR_LOCAL_EXECUTION = 1;
-}
-
-message ExecuteTransactionResponse {
-  iota.grpc.common.Digest digest = 1;
-  // Transaction input data
-  optional iota.grpc.common.BcsData transaction = 2;
-  // Raw transaction bytes
-  optional bytes raw_transaction = 3;
-  // Transaction effects
-  optional iota.grpc.common.BcsData effects = 4;
-  // Transaction events
-  repeated iota.grpc.common.BcsData events = 5;
-  // Object changes
-  repeated iota.grpc.common.BcsData object_changes = 6;
-  // Balance changes
-  repeated iota.grpc.common.BcsData balance_changes = 7;
-  // Timestamp when transaction was executed
-  optional uint64 timestamp_ms = 8;
-  // Whether the transaction was confirmed locally
-  optional bool confirmed_local_execution = 9;
-  // Checkpoint sequence number
-  optional uint64 checkpoint = 10;
-  // Error messages
-  repeated string errors = 11;
-  // Raw transaction effects
-  optional bytes raw_effects = 12;
 }
 
 // GetObject
@@ -105,7 +44,7 @@ message ObjectData {
   // Object digest
   iota.grpc.common.Digest digest = 3;
   // Object type (if show_type is true)
-  optional string type = 4;
+  optional string object_type = 4;
   // Object owner (if show_owner is true)
   optional string owner = 5;
   // Previous transaction digest (if show_previous_transaction is true)
@@ -147,7 +86,7 @@ message DeletedError {
 }
 
 message UnknownError {
-  // No fields
+  // No fields - matches JSON RPC IotaObjectResponseError::Unknown
 }
 
 message DisplayError {

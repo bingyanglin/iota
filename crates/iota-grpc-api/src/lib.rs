@@ -6,8 +6,12 @@ pub mod common {
     tonic::include_proto!("iota.grpc.common");
 }
 
-pub mod node {
-    tonic::include_proto!("iota.grpc.node");
+pub mod read {
+    tonic::include_proto!("iota.grpc.read");
+}
+
+pub mod write {
+    tonic::include_proto!("iota.grpc.write");
 }
 
 pub mod checkpoints {
@@ -28,17 +32,21 @@ pub mod client;
 pub mod config;
 pub mod conversions;
 pub mod event_service;
-pub mod node_service;
+pub mod read_service;
 pub mod server;
 pub mod transaction_service;
 pub mod types;
+pub mod write_service;
 
 // Re-export commonly used types and traits
 pub use checkpoint_service::CheckpointGrpcService;
-pub use client::{CheckpointClient, CheckpointContent, EventClient, NodeClient};
+pub use client::{
+    CheckpointClient, CheckpointContent, EventClient, NodeClient, ReadClient, TransactionClient,
+    WriteClient,
+};
 pub use config::Config;
 pub use event_service::EventGrpcService;
-pub use node_service::NodeGrpcService;
+pub use read_service::ReadGrpcService;
 pub use server::{GrpcServerHandle, start_grpc_server};
 pub use transaction_service::TransactionGrpcService;
 pub use types::{
@@ -46,3 +54,4 @@ pub use types::{
     GrpcCheckpointDataBroadcaster, GrpcCheckpointSummaryBroadcaster, GrpcReader, GrpcStateReader,
     RestStateReaderAdapter,
 };
+pub use write_service::WriteGrpcService;

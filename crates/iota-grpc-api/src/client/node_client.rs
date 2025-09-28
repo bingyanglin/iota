@@ -5,7 +5,10 @@ use std::sync::OnceLock;
 
 use tonic::transport::Channel;
 
-use super::{checkpoint::CheckpointClient, event::EventClient, transaction::TransactionClient};
+use super::{
+    checkpoint::CheckpointClient, event::EventClient, read::ReadClient,
+    transaction::TransactionClient, write::WriteClient,
+};
 
 /// gRPC client factory for IOTA node operations.
 pub struct NodeClient {
@@ -17,6 +20,10 @@ pub struct NodeClient {
     event_client: OnceLock<EventClient>,
     /// Cached transaction client (singleton)
     transaction_client: OnceLock<TransactionClient>,
+    /// Cached read client (singleton)
+    read_client: OnceLock<ReadClient>,
+    /// Cached write client (singleton)
+    write_client: OnceLock<WriteClient>,
 }
 
 impl NodeClient {
@@ -29,6 +36,8 @@ impl NodeClient {
             checkpoint_client: OnceLock::new(),
             event_client: OnceLock::new(),
             transaction_client: OnceLock::new(),
+            read_client: OnceLock::new(),
+            write_client: OnceLock::new(),
         })
     }
 
@@ -85,6 +94,36 @@ impl NodeClient {
         Some(
             self.transaction_client
                 .get_or_init(|| TransactionClient::new(self.channel.clone()))
+                .clone(),
+        )
+    }
+
+    /// Get a read service client.
+    ///
+    /// Returns `Some(ReadClient)` if the node supports read operations,
+    /// `None` otherwise. The client is created only once and cached for
+    /// subsequent calls.
+    pub fn read_client(&self) -> Option<ReadClient> {
+        // For now, always return Some since read service is always available
+        // In the future, this could check node capabilities first
+        Some(
+            self.read_client
+                .get_or_init(|| ReadClient::new(self.channel.clone()))
+                .clone(),
+        )
+    }
+
+    /// Get a write service client.
+    ///
+    /// Returns `Some(WriteClient)` if the node supports write operations,
+    /// `None` otherwise. The client is created only once and cached for
+    /// subsequent calls.
+    pub fn write_client(&self) -> Option<WriteClient> {
+        // For now, always return Some since write service is always available
+        // In the future, this could check node capabilities first
+        Some(
+            self.write_client
+                .get_or_init(|| WriteClient::new(self.channel.clone()))
                 .clone(),
         )
     }

@@ -14,10 +14,11 @@ use tonic::transport::Server;
 
 use crate::{
     CheckpointGrpcService, EventGrpcService, GrpcCheckpointDataBroadcaster,
-    GrpcCheckpointSummaryBroadcaster, GrpcReader, NodeGrpcService, TransactionGrpcService,
-    checkpoints::checkpoint_service_server::CheckpointServiceServer,
-    events::event_service_server::EventServiceServer, node::node_service_server::NodeServiceServer,
+    GrpcCheckpointSummaryBroadcaster, GrpcReader, ReadGrpcService, TransactionGrpcService,
+    WriteGrpcService, checkpoints::checkpoint_service_server::CheckpointServiceServer,
+    events::event_service_server::EventServiceServer, read::read_service_server::ReadServiceServer,
     transactions::transaction_service_server::TransactionServiceServer,
+    write::write_service_server::WriteServiceServer,
 };
 
 /// Handle to control a running gRPC server
@@ -88,12 +89,14 @@ pub async fn start_grpc_server(
     let event_service = EventGrpcService::new(event_subscriber.clone(), shutdown_token.clone());
     let transaction_service = TransactionGrpcService::new(event_subscriber, shutdown_token.clone());
 
-    // Create IOTA API service
-    let api_service = NodeGrpcService::new(grpc_reader.clone(), transaction_executor);
+    // Create new read and write services
+    let read_service = ReadGrpcService::new(grpc_reader.clone());
+    let write_service = WriteGrpcService::new(transaction_executor);
 
     // Create the server with proper address binding
     let server_builder = Server::builder()
-        .add_service(NodeServiceServer::new(api_service))
+        .add_service(ReadServiceServer::new(read_service))
+        .add_service(WriteServiceServer::new(write_service))
         .add_service(CheckpointServiceServer::new(checkpoint_service))
         .add_service(EventServiceServer::new(event_service))
         .add_service(TransactionServiceServer::new(transaction_service));
