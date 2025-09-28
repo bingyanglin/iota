@@ -4,27 +4,25 @@
 use std::sync::Arc;
 
 use futures::StreamExt;
+use iota_core::subscription_handler::SubscriptionHandler;
 use iota_json_rpc_types::{IotaTransactionBlockEffectsAPI, IotaTransactionKind, TransactionFilter};
 use iota_types::base_types::{IotaAddress, ObjectID};
 use tokio_util::sync::CancellationToken;
 use tonic::{Request, Response, Status};
 use tracing::debug;
 
-use crate::{
-    transactions::{
-        Transaction, TransactionStreamRequest, transaction_service_server::TransactionService,
-    },
-    types::EventSubscriber,
+use crate::transactions::{
+    Transaction, TransactionStreamRequest, transaction_service_server::TransactionService,
 };
 
 pub struct TransactionGrpcService {
-    pub event_subscriber: Arc<dyn EventSubscriber>,
+    pub event_subscriber: Arc<SubscriptionHandler>,
     pub cancellation_token: CancellationToken,
 }
 
 impl TransactionGrpcService {
     pub fn new(
-        event_subscriber: Arc<dyn EventSubscriber>,
+        event_subscriber: Arc<SubscriptionHandler>,
         cancellation_token: CancellationToken,
     ) -> Self {
         Self {

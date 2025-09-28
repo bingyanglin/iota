@@ -6,7 +6,10 @@
 use std::{net::SocketAddr, sync::Arc};
 
 use anyhow::Result;
-use iota_types::transaction_executor::TransactionExecutor;
+use iota_core::{
+    authority_client::NetworkAuthorityClient, subscription_handler::SubscriptionHandler,
+    transaction_orchestrator::TransactionOrchestrator,
+};
 use tokio::sync::broadcast;
 use tokio_stream::wrappers::TcpListenerStream;
 use tokio_util::sync::CancellationToken;
@@ -64,9 +67,9 @@ impl GrpcServerHandle {
 /// Start a gRPC server with services
 pub async fn start_grpc_server(
     grpc_reader: Arc<GrpcReader>,
-    event_subscriber: Arc<dyn crate::EventSubscriber>,
-    transaction_executor: Option<Arc<dyn TransactionExecutor>>,
-    config: crate::Config,
+    event_subscriber: Arc<SubscriptionHandler>,
+    transaction_orchestrator: Option<Arc<TransactionOrchestrator<NetworkAuthorityClient>>>,
+    config: iota_config::node::GrpcApiConfig,
     shutdown_token: CancellationToken,
 ) -> Result<GrpcServerHandle> {
     // Create broadcast channels
@@ -91,7 +94,7 @@ pub async fn start_grpc_server(
 
     // Create new read and write services
     let read_service = ReadGrpcService::new(grpc_reader.clone());
-    let write_service = WriteGrpcService::new(transaction_executor);
+    let write_service = WriteGrpcService::new(transaction_orchestrator, grpc_reader.clone());
 
     // Create the server with proper address binding
     let server_builder = Server::builder()

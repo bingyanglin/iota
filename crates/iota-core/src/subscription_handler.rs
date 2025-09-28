@@ -4,7 +4,6 @@
 
 use std::sync::Arc;
 
-use iota_grpc_api::EventSubscriber;
 use iota_json_rpc_types::{
     EffectsWithInput, EventFilter, IotaEvent, IotaTransactionBlockEffects,
     IotaTransactionBlockEffectsAPI, IotaTransactionBlockEvents, TransactionFilter,
@@ -14,7 +13,6 @@ use prometheus::{
     IntCounterVec, IntGaugeVec, Registry, register_int_counter_vec_with_registry,
     register_int_gauge_vec_with_registry,
 };
-use tokio_stream::Stream;
 use tracing::{error, instrument, trace};
 
 use crate::streamer::Streamer;
@@ -113,29 +111,17 @@ impl SubscriptionHandler {
         }
         Ok(())
     }
-
-    pub fn subscribe_events(&self, filter: EventFilter) -> impl Stream<Item = IotaEvent> {
-        self.event_streamer.subscribe(filter)
-    }
-
-    pub fn subscribe_transactions(
-        &self,
-        filter: TransactionFilter,
-    ) -> impl Stream<Item = IotaTransactionBlockEffects> {
-        self.transaction_streamer.subscribe(filter)
-    }
 }
 
-// Implement EventSubscriber trait for gRPC integration
-impl EventSubscriber for SubscriptionHandler {
-    fn subscribe_events(
+impl SubscriptionHandler {
+    pub fn subscribe_events(
         &self,
         filter: EventFilter,
     ) -> Box<dyn futures::Stream<Item = IotaEvent> + Send + Unpin> {
         Box::new(Box::pin(self.event_streamer.subscribe(filter)))
     }
 
-    fn subscribe_transactions(
+    pub fn subscribe_transactions(
         &self,
         filter: TransactionFilter,
     ) -> Box<dyn futures::Stream<Item = IotaTransactionBlockEffects> + Send + Unpin> {

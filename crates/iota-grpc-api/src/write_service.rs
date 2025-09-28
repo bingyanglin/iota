@@ -1,36 +1,273 @@
 // Copyright (c) 2025 IOTA Stiftung
 // SPDX-License-Identifier: Apache-2.0
 
-use std::{collections::HashMap, sync::Arc};
+use std::sync::Arc;
 
-use iota_json_rpc_types::{BalanceChange, ObjectChange};
+use fastcrypto::traits::ToFromBytes;
+use iota_core::{
+    authority_client::NetworkAuthorityClient, transaction_orchestrator::TransactionOrchestrator,
+};
+use iota_json_rpc_types::{BalanceChange, IotaTransactionBlock, ObjectChange};
 use iota_types::{
     base_types::{IotaAddress, ObjectID, ObjectRef, SequenceNumber},
     effects::{ObjectRemoveKind, TransactionEffectsAPI},
     object::{Object, Owner},
-    quorum_driver_types::ExecuteTransactionRequestV1,
+    quorum_driver_types::{
+        ExecuteTransactionRequestType, ExecuteTransactionRequestV1, ExecuteTransactionResponseV1,
+        IsTransactionExecutedLocally,
+    },
+    signature::GenericSignature,
     storage::WriteKind,
-    transaction::{Transaction, TransactionDataAPI},
-    transaction_executor::TransactionExecutor,
+    transaction::{InputObjectKind, Transaction, TransactionData, TransactionDataAPI},
 };
 use move_core_types::language_storage::TypeTag;
 use tonic::{Request, Response, Status};
-use tracing::{debug, warn};
+use tracing::debug;
 
-use crate::write::{
-    ExecuteTransactionRequest, ExecuteTransactionResponse, TransactionResponseOptions,
-    write_service_server::WriteService,
+use crate::{
+    GrpcReader,
+    write::{
+        ExecuteTransactionRequest, ExecuteTransactionResponse, TransactionResponseOptions,
+        write_service_server::WriteService,
+    },
 };
 
 pub struct WriteGrpcService {
-    pub transaction_executor: Option<Arc<dyn TransactionExecutor>>,
+    /// Transaction orchestrator
+    pub transaction_orchestrator: Option<Arc<TransactionOrchestrator<NetworkAuthorityClient>>>,
+    /// GrpcReader for data access including epoch store when available
+    pub grpc_reader: Arc<GrpcReader>,
 }
 
 impl WriteGrpcService {
-    pub fn new(transaction_executor: Option<Arc<dyn TransactionExecutor>>) -> Self {
+    pub fn new(
+        transaction_orchestrator: Option<Arc<TransactionOrchestrator<NetworkAuthorityClient>>>,
+        grpc_reader: Arc<GrpcReader>,
+    ) -> Self {
         Self {
-            transaction_executor,
+            transaction_orchestrator,
+            grpc_reader,
         }
+    }
+
+    /// Convert bytes to any deserializable type
+    fn convert_bytes<T: serde::de::DeserializeOwned>(&self, tx_bytes: &[u8]) -> Result<T, Status> {
+        bcs::from_bytes(tx_bytes)
+            .map_err(|e| Status::invalid_argument(format!("Failed to deserialize: {e}")))
+    }
+
+    /// Prepare transaction request
+    #[expect(clippy::type_complexity)]
+    fn prepare_execute_transaction_request(
+        &self,
+        tx_bytes: Vec<u8>,
+        signatures: Vec<Vec<u8>>,
+        opts: Option<TransactionResponseOptions>,
+    ) -> Result<
+        (
+            ExecuteTransactionRequestV1,
+            TransactionResponseOptions,
+            IotaAddress,
+            Vec<InputObjectKind>,
+            Transaction,
+            Option<Vec<u8>>,
+            Vec<u8>,
+        ),
+        Status,
+    > {
+        let opts = opts.unwrap_or_default();
+        let tx_data: TransactionData = self.convert_bytes(&tx_bytes)?;
+        let sender = tx_data.sender();
+        let input_objs = tx_data.input_objects().unwrap_or_default();
+
+        let mut sigs = Vec::new();
+        for sig in signatures {
+            let signature = GenericSignature::from_bytes(&sig)
+                .map_err(|e| Status::invalid_argument(format!("Invalid signature: {e}")))?;
+            sigs.push(signature);
+        }
+        let txn = Transaction::from_generic_sig_data(tx_data, sigs);
+        let raw_transaction = if opts.show_raw_input {
+            bcs::to_bytes(txn.data()).map_err(|e| {
+                Status::internal(format!("Raw transaction serialization failed: {e}"))
+            })?
+        } else {
+            vec![]
+        };
+
+        let transaction_block = if opts.show_input {
+            if let Some(epoch_store) = self.grpc_reader.load_epoch_store_one_call_per_task() {
+                debug!("Creating IotaTransactionBlock with epoch store and module cache");
+                match IotaTransactionBlock::try_from(
+                    txn.data().clone(),
+                    epoch_store.module_cache(),
+                    *txn.digest(),
+                ) {
+                    Ok(iota_tx_block) => {
+                        match bcs::to_bytes(&iota_tx_block) {
+                            Ok(serialized) => Some(serialized),
+                            Err(e) => {
+                                debug!(
+                                    "Failed to serialize IotaTransactionBlock, falling back to basic serialization: {e}"
+                                );
+                                // Fallback to basic transaction data serialization
+                                Some(bcs::to_bytes(txn.data()).map_err(|e| {
+                                    Status::internal(format!(
+                                        "Transaction serialization failed: {e}"
+                                    ))
+                                })?)
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        debug!(
+                            "Failed to create IotaTransactionBlock, falling back to basic serialization: {e}"
+                        );
+                        // Fallback to basic transaction data serialization
+                        Some(bcs::to_bytes(txn.data()).map_err(|e| {
+                            Status::internal(format!("Transaction serialization failed: {e}"))
+                        })?)
+                    }
+                }
+            } else {
+                // Graceful fallback: No epoch store available, use basic transaction data
+                debug!("No epoch store available, using basic transaction data serialization");
+                Some(bcs::to_bytes(txn.data()).map_err(|e| {
+                    Status::internal(format!("Transaction serialization failed: {e}"))
+                })?)
+            }
+        } else {
+            None
+        };
+
+        let request = ExecuteTransactionRequestV1 {
+            transaction: txn.clone(),
+            include_events: opts.show_events,
+            include_input_objects: opts.show_balance_changes || opts.show_object_changes,
+            include_output_objects: opts.show_balance_changes
+                || opts.show_object_changes
+                || opts.show_events, // Include for events too!
+            include_auxiliary_data: false,
+        };
+
+        Ok((
+            request,
+            opts,
+            sender,
+            input_objs,
+            txn,
+            transaction_block,
+            raw_transaction,
+        ))
+    }
+
+    async fn handle_post_orchestration(
+        &self,
+        response: ExecuteTransactionResponseV1,
+        is_executed_locally: IsTransactionExecutedLocally,
+        opts: TransactionResponseOptions,
+        digest: iota_types::base_types::TransactionDigest,
+        _input_objs: Vec<InputObjectKind>,
+        transaction_block: Option<Vec<u8>>,
+        raw_transaction: Vec<u8>,
+        sender: IotaAddress,
+    ) -> Result<Response<ExecuteTransactionResponse>, Status> {
+        let events = if opts.show_events {
+            if let Some(ref tx_events) = response.events {
+                serialize_collection_to_bcs(tx_events.data.iter(), "Event")?
+            } else {
+                vec![]
+            }
+        } else {
+            vec![]
+        };
+
+        let (object_changes, balance_changes) =
+            if opts.show_object_changes || opts.show_balance_changes {
+                match (&response.input_objects, &response.output_objects) {
+                    (Some(input_objects), Some(output_objects)) => {
+                        let object_changes = if opts.show_object_changes {
+                            let changes = compute_object_changes(
+                                sender,
+                                response.effects.effects.modified_at_versions(),
+                                response.effects.effects.all_changed_objects(),
+                                response.effects.effects.all_removed_objects(),
+                                input_objects,
+                                output_objects,
+                            );
+                            serialize_collection_to_bcs(changes.into_iter(), "Object change")?
+                        } else {
+                            vec![]
+                        };
+
+                        let balance_changes = if opts.show_balance_changes {
+                            let changes = derive_balance_changes(input_objects, output_objects);
+                            serialize_collection_to_bcs(changes.into_iter(), "Balance change")?
+                        } else {
+                            vec![]
+                        };
+
+                        (object_changes, balance_changes)
+                    }
+                    _ => {
+                        debug!(
+                            "Cannot compute object/balance changes: missing input or output objects"
+                        );
+                        (vec![], vec![])
+                    }
+                }
+            } else {
+                (vec![], vec![])
+            };
+
+        let transaction = if opts.show_input {
+            transaction_block.map(|data| crate::common::BcsData { data })
+        } else {
+            None
+        };
+
+        let raw_transaction = if opts.show_raw_input {
+            Some(raw_transaction)
+        } else {
+            None
+        };
+
+        let effects = if opts.show_effects {
+            Some(serialize_to_bcs(&response.effects.effects, "Effects")?)
+        } else {
+            None
+        };
+
+        let raw_effects =
+            if opts.show_raw_effects {
+                Some(bcs::to_bytes(&response.effects.effects).map_err(|e| {
+                    Status::internal(format!("Raw effects serialization failed: {e}"))
+                })?)
+            } else {
+                None
+            };
+
+        let timestamp_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64;
+
+        Ok(Response::new(ExecuteTransactionResponse {
+            digest: Some(crate::common::Digest {
+                digest: digest.into_inner().to_vec(),
+            }),
+            transaction,
+            raw_transaction,
+            effects,
+            events,
+            object_changes,
+            balance_changes,
+            timestamp_ms: Some(timestamp_ms),
+            confirmed_local_execution: Some(is_executed_locally),
+            checkpoint: None, // Same as JSON RPC execution API
+            errors: vec![],
+            raw_effects,
+        }))
     }
 }
 
@@ -44,144 +281,36 @@ impl WriteService for WriteGrpcService {
         request: Request<ExecuteTransactionRequest>,
     ) -> Result<Response<ExecuteTransactionResponse>, Status> {
         let req = request.into_inner();
-        debug!("execute_transaction called");
 
-        // Deserialize transaction data directly from bytes
-        let tx_data: Transaction = bcs::from_bytes(&req.tx_bytes).map_err(|e| {
-            Status::invalid_argument(format!("Failed to deserialize transaction data: {e}"))
-        })?;
+        // Phase 1: Request Preparation
+        let (execute_request, opts, sender, input_objs, txn, transaction_block, raw_transaction) =
+            self.prepare_execute_transaction_request(req.tx_bytes, req.signatures, req.options)?;
 
-        // Determine what data to include from options
-        let options = req.options.as_ref();
-        let show_events = is_option_enabled(options, |o| o.show_events);
-        let show_effects = is_option_enabled(options, |o| o.show_effects);
-        let show_object_changes = is_option_enabled(options, |o| o.show_object_changes);
-        let show_balance_changes = is_option_enabled(options, |o| o.show_balance_changes);
+        let digest = *txn.digest();
 
-        // Extract sender address before moving tx_data
-        let sender_address = tx_data.data().intent_message().value.sender();
-
-        // Create ExecuteTransactionRequestV1 (IOTA native type)
-        let execute_request = ExecuteTransactionRequestV1 {
-            transaction: tx_data,
-            include_events: show_events,
-            include_input_objects: show_balance_changes || show_object_changes,
-            include_output_objects: show_balance_changes || show_object_changes || show_effects,
-            include_auxiliary_data: false,
-        };
-
-        // Call TransactionExecutor directly
-        let executor = self
-            .transaction_executor
+        let orchestrator = self
+            .transaction_orchestrator
             .as_ref()
             .ok_or_else(|| Status::unimplemented("Transaction execution not available"))?;
 
-        let response = executor
-            .execute_transaction(execute_request, None)
+        debug!("Executing transaction: {}", digest);
+        let request_type = ExecuteTransactionRequestType::WaitForEffectsCert;
+        let (response, is_executed_locally) = orchestrator
+            .execute_transaction_block(execute_request, request_type, None)
             .await
             .map_err(|e| Status::internal(format!("Transaction execution failed: {e}")))?;
 
-        // Convert IOTA native response to gRPC protobuf
-        let digest = *response.effects.effects.transaction_digest();
-        // Note: TransactionEffects doesn't have timestamp_ms, we'll use current time as
-        // placeholder
-        let timestamp_ms = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_millis() as u64;
-
-        // Convert optional fields based on request options
-        let transaction = if is_option_enabled(options, |o| o.show_input) {
-            Some(serialize_to_bcs(&response.effects.effects, "Transaction")?)
-        } else {
-            None
-        };
-
-        let raw_transaction = if is_option_enabled(options, |o| o.show_raw_input) {
-            Some(req.tx_bytes)
-        } else {
-            None
-        };
-
-        let effects = if is_option_enabled(options, |o| o.show_effects) {
-            Some(serialize_to_bcs(&response.effects.effects, "Effects")?)
-        } else {
-            None
-        };
-
-        let raw_effects =
-            if is_option_enabled(options, |o| o.show_raw_effects) {
-                Some(bcs::to_bytes(&response.effects.effects).map_err(|e| {
-                    Status::internal(format!("Raw effects serialization failed: {e}"))
-                })?)
-            } else {
-                None
-            };
-
-        let events = if show_events {
-            // Events are available in the response.events field, not
-            // response.effects.events
-            if let Some(ref tx_events) = response.events {
-                serialize_collection_to_bcs(tx_events.data.iter(), "Event")?
-            } else {
-                vec![]
-            }
-        } else {
-            vec![]
-        };
-
-        let object_changes = if show_object_changes {
-            match (&response.input_objects, &response.output_objects) {
-                (Some(input_objects), Some(output_objects)) => {
-                    let changes = compute_object_changes(
-                        sender_address,
-                        response.effects.effects.modified_at_versions(),
-                        response.effects.effects.all_changed_objects(),
-                        response.effects.effects.all_removed_objects(),
-                        input_objects,
-                        output_objects,
-                    );
-                    serialize_collection_to_bcs(changes.into_iter(), "Object change")?
-                }
-                _ => {
-                    warn!("Cannot compute object changes: missing input or output objects");
-                    vec![]
-                }
-            }
-        } else {
-            vec![]
-        };
-
-        let balance_changes = if show_balance_changes {
-            match (&response.input_objects, &response.output_objects) {
-                (Some(input_objects), Some(output_objects)) => {
-                    let changes = derive_balance_changes(input_objects, output_objects);
-                    serialize_collection_to_bcs(changes.into_iter(), "Balance change")?
-                }
-                _ => vec![],
-            }
-        } else {
-            vec![]
-        };
-
-        debug!("Transaction executed successfully via direct TransactionExecutor");
-
-        Ok(Response::new(ExecuteTransactionResponse {
-            digest: Some(crate::common::Digest {
-                digest: digest.into_inner().to_vec(),
-            }),
-            transaction,
+        self.handle_post_orchestration(
+            response,
+            is_executed_locally,
+            opts,
+            digest,
+            input_objs,
+            transaction_block,
             raw_transaction,
-            effects,
-            events,
-            object_changes,
-            balance_changes,
-            timestamp_ms: Some(timestamp_ms),
-            confirmed_local_execution: Some(true),
-            checkpoint: None, // Not available yet
-            errors: vec![],
-            raw_effects,
-        }))
+            sender,
+        )
+        .await
     }
 }
 
@@ -204,30 +333,7 @@ fn serialize_collection_to_bcs<T: serde::Serialize>(
         .collect::<Result<Vec<_>, _>>()
 }
 
-/// Helper function to check if an option is enabled with default false
-fn is_option_enabled<F>(options: Option<&TransactionResponseOptions>, getter: F) -> bool
-where
-    F: FnOnce(&TransactionResponseOptions) -> bool,
-{
-    options.map(getter).unwrap_or(false)
-}
-
-// NOTE: The following implementations (coins, derive_balance_changes,
-// compute_object_changes) are custom versions for the gRPC API. We cannot
-// directly reuse the JSON-RPC implementations due to circular dependency
-// issues:
-// - iota-grpc-api would need to depend on iota-json-rpc
-// - But iota-json-rpc depends on iota-config
-// - And iota-config depends on iota-grpc-api (because NodeConfig contains an
-//   `iota_grpc_node::Config` field to configure the gRPC service settings like
-//   bind address, buffer sizes, etc. as part of the unified node configuration)
-// This creates a circular dependency that prevents us from importing the
-// JSON-RPC functions.
-//
-// These implementations follow similar logic to the JSON-RPC versions but work
-// directly with the objects available in the transaction execution response.
-
-/// Extract coins from objects for balance change calculation
+/// Extract coins from objects
 fn coins(objects: &[Object]) -> impl Iterator<Item = (&IotaAddress, (TypeTag, u64))> + '_ {
     objects.iter().filter_map(|object| {
         let address = match object.owner() {
@@ -236,7 +342,6 @@ fn coins(objects: &[Object]) -> impl Iterator<Item = (&IotaAddress, (TypeTag, u6
             Owner::Shared { .. } | Owner::Immutable => return None,
         };
 
-        // Extract coin data if this is a coin object
         if let Some(coin) = object.as_coin_maybe() {
             if let Some(coin_type) = object.coin_type_maybe() {
                 return Some((address, (coin_type, coin.value())));
@@ -246,14 +351,11 @@ fn coins(objects: &[Object]) -> impl Iterator<Item = (&IotaAddress, (TypeTag, u6
     })
 }
 
-/// Derive balance changes directly from input and output objects
-/// This follows the same logic as the JSON-RPC version but works with objects
-/// directly
+/// Derive balance changes
 fn derive_balance_changes(
     input_objects: &[Object],
     output_objects: &[Object],
 ) -> Vec<BalanceChange> {
-    // 1. subtract all input coins
     let balances = coins(input_objects).fold(
         std::collections::BTreeMap::<_, i128>::new(),
         |mut acc, (address, (coin_type, amount))| {
@@ -262,7 +364,6 @@ fn derive_balance_changes(
         },
     );
 
-    // 2. add all output coins
     let balances =
         coins(output_objects).fold(balances, |mut acc, (address, (coin_type, amount))| {
             *acc.entry((address, coin_type.clone())).or_default() += amount as i128;
@@ -275,7 +376,6 @@ fn derive_balance_changes(
             if amount == 0 {
                 return None;
             }
-
             Some(BalanceChange {
                 owner: Owner::AddressOwner(*address),
                 coin_type,
@@ -285,9 +385,7 @@ fn derive_balance_changes(
         .collect()
 }
 
-/// Compute object changes directly from available objects
-/// This follows the same logic as the JSON-RPC version but works with objects
-/// directly
+/// Compute object changes
 fn compute_object_changes(
     sender: IotaAddress,
     modified_at_versions: Vec<(ObjectID, SequenceNumber)>,
@@ -297,15 +395,15 @@ fn compute_object_changes(
     output_objects: &[Object],
 ) -> Vec<ObjectChange> {
     let mut object_changes = vec![];
-    let modify_at_version = modified_at_versions.into_iter().collect::<HashMap<_, _>>();
+    let modify_at_version = modified_at_versions
+        .into_iter()
+        .collect::<std::collections::HashMap<_, _>>();
 
-    // Create a lookup map for all available objects
-    let mut all_objects = HashMap::new();
+    let mut all_objects = std::collections::HashMap::new();
     for obj in input_objects.iter().chain(output_objects.iter()) {
         all_objects.insert((obj.id(), obj.version()), obj);
     }
 
-    // Process changed objects
     for ((object_id, version, digest), owner, kind) in all_changed_objects {
         if let Some(obj) = all_objects.get(&(object_id, version)) {
             if let Some(type_) = obj.type_() {
@@ -347,9 +445,7 @@ fn compute_object_changes(
         }
     }
 
-    // Process removed objects
     for ((id, version, _), kind) in all_removed_objects {
-        // Look for the object in our available objects (best-effort)
         if let Some(obj) = all_objects.get(&(id, version)) {
             if let Some(type_) = obj.type_() {
                 let object_type = type_.clone().into();

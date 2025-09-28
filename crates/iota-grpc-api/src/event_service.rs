@@ -4,6 +4,7 @@
 use std::{str::FromStr, sync::Arc};
 
 use futures::StreamExt;
+use iota_core::subscription_handler::SubscriptionHandler;
 use iota_json_rpc_types::{EventFilter, IotaEvent};
 use iota_types::{
     base_types::{IotaAddress, ObjectID},
@@ -17,17 +18,16 @@ use tracing::debug;
 use crate::{
     common::{Address, BcsData, Digest},
     events::{Event, EventId, EventStreamRequest, event_service_server::EventService},
-    types::EventSubscriber,
 };
 
 pub struct EventGrpcService {
-    pub event_subscriber: Arc<dyn EventSubscriber>,
+    pub event_subscriber: Arc<SubscriptionHandler>,
     pub cancellation_token: CancellationToken,
 }
 
 impl EventGrpcService {
     pub fn new(
-        event_subscriber: Arc<dyn EventSubscriber>,
+        event_subscriber: Arc<SubscriptionHandler>,
         cancellation_token: CancellationToken,
     ) -> Self {
         Self {

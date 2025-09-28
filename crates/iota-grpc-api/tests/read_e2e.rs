@@ -169,7 +169,7 @@ async fn test_read_service_nonexistent_object() {
             );
         }
         other_error => {
-            panic!("Expected NotExists error, got: {:?}", other_error);
+            panic!("Expected NotExists error, got: {other_error:?}");
         }
     }
 }

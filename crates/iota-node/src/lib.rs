@@ -78,7 +78,7 @@ use iota_core::{
     transaction_orchestrator::TransactionOrchestrator,
     validator_tx_finalizer::ValidatorTxFinalizer,
 };
-use iota_grpc_api::{EventSubscriber, GrpcReader, GrpcServerHandle, start_grpc_server};
+use iota_grpc_api::{GrpcReader, GrpcServerHandle, start_grpc_server};
 use iota_json_rpc::{
     JsonRpcServerBuilder, coin_api::CoinReadApi, governance_api::GovernanceReadApi,
     indexer_api::IndexerApi, move_utils::MoveUtils, read_api::ReadApi,
@@ -127,7 +127,6 @@ use iota_types::{
     quorum_driver_types::QuorumDriverEffectsQueueResult,
     supported_protocol_versions::SupportedProtocolVersions,
     transaction::{Transaction, VerifiedCertificate},
-    transaction_executor::TransactionExecutor,
 };
 use prometheus::Registry;
 #[cfg(msim)]
@@ -826,6 +825,9 @@ impl IotaNode {
             None
         };
 
+        // Create transaction key-value store early for both HTTP and gRPC servers
+        let kv_store = build_kv_store(&state, &config, &prometheus_registry)?;
+
         let http_server = build_http_server(
             state.clone(),
             state_sync_store.clone(),
@@ -834,6 +836,7 @@ impl IotaNode {
             &prometheus_registry,
             custom_rpc_runtime,
             software_version,
+            kv_store.clone(),
         )
         .await?;
 
@@ -872,6 +875,7 @@ impl IotaNode {
             state.clone(),
             state_sync_store.clone(),
             &transaction_orchestrator,
+            kv_store.clone(),
         )
         .await?;
 
@@ -2315,6 +2319,7 @@ async fn build_grpc_server(
     state: Arc<AuthorityState>,
     state_sync_store: RocksDbStore,
     transaction_orchestrator: &Option<Arc<TransactionOrchestrator<NetworkAuthorityClient>>>,
+    transaction_kv_store: Arc<TransactionKeyValueStore>,
 ) -> Result<Option<GrpcServerHandle>> {
     // Validators do not expose gRPC APIs
     if config.consensus_config().is_some() || !config.enable_grpc_api {
@@ -2330,25 +2335,21 @@ async fn build_grpc_server(
     // Create cancellation token for proper shutdown hierarchy
     let shutdown_token = CancellationToken::new();
 
-    // Create GrpcReader
-    let grpc_reader = Arc::new(GrpcReader::from_rest_state_reader(rest_read_store));
+    // Create GrpcReader with AuthorityState and TransactionKeyValueStore for full
+    // functionality
+    let grpc_reader = Arc::new(GrpcReader::from_rest_state_reader(
+        rest_read_store,
+        Some(state.clone()),
+        Some(transaction_kv_store),
+    ));
 
     // Get the subscription handler from the state for event streaming
-    let event_subscriber = state.subscription_handler.clone() as Arc<dyn EventSubscriber>;
-
-    // Create TransactionExecutor if transaction orchestrator is available
-    let transaction_executor: Option<Arc<dyn TransactionExecutor>> =
-        if let Some(transaction_orchestrator) = transaction_orchestrator {
-            // TransactionOrchestrator already implements TransactionExecutor
-            Some(transaction_orchestrator.clone() as Arc<dyn TransactionExecutor>)
-        } else {
-            None
-        };
+    let event_subscriber = state.subscription_handler.clone();
 
     let handle = start_grpc_server(
         grpc_reader,
         event_subscriber,
-        transaction_executor,
+        transaction_orchestrator.clone(),
         grpc_config.clone(),
         shutdown_token,
     )
@@ -2381,6 +2382,7 @@ pub async fn build_http_server(
     prometheus_registry: &Registry,
     _custom_runtime: Option<Handle>,
     software_version: &'static str,
+    kv_store: Arc<TransactionKeyValueStore>,
 ) -> Result<Option<iota_http::ServerHandle>> {
     // Validators do not expose these APIs
     if config.consensus_config().is_some() {
@@ -2396,8 +2398,6 @@ pub async fn build_http_server(
             config.policy_config.clone(),
             config.firewall_config.clone(),
         );
-
-        let kv_store = build_kv_store(&state, config, prometheus_registry)?;
 
         let metrics = Arc::new(JsonRpcMetrics::new(prometheus_registry));
         server.register_module(ReadApi::new(

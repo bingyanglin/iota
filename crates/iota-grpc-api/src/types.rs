@@ -4,16 +4,17 @@
 use std::sync::Arc;
 
 use anyhow::Result;
+use iota_core::authority::{AuthorityState, authority_per_epoch_store::AuthorityPerEpochStore};
 use iota_grpc_types::{
     CertifiedCheckpointSummary as GrpcCertifiedCheckpointSummary,
     CheckpointData as GrpcCheckpointData,
 };
-use iota_json_rpc_types::{EventFilter, IotaEvent};
+use iota_storage::key_value_store::TransactionKeyValueStore;
 use iota_types::{
     base_types::ObjectID,
     full_checkpoint_content::CheckpointData,
     messages_checkpoint::CertifiedCheckpointSummary,
-    object::Object,
+    object::{Object, ObjectRead},
     storage::{RestStateReader, error::Kind},
 };
 use serde::{Deserialize, Serialize};
@@ -32,23 +33,6 @@ pub trait CheckpointSummaryBroadcaster {
 /// Trait for broadcasting checkpoint data
 pub trait CheckpointDataBroadcaster {
     fn send(&self, data: &CheckpointData) -> anyhow::Result<()>;
-}
-
-/// Trait for subscribing to event streams (used by gRPC service)
-pub trait EventSubscriber: Send + Sync {
-    /// Subscribe to events with the given filter
-    fn subscribe_events(
-        &self,
-        filter: iota_json_rpc_types::EventFilter,
-    ) -> Box<dyn futures::Stream<Item = IotaEvent> + Send + Unpin>;
-
-    /// Subscribe to transactions with the given filter
-    fn subscribe_transactions(
-        &self,
-        filter: iota_json_rpc_types::TransactionFilter,
-    ) -> Box<
-        dyn futures::Stream<Item = iota_json_rpc_types::IotaTransactionBlockEffects> + Send + Unpin,
-    >;
 }
 
 /// Wrapper that converts native CertifiedCheckpointSummary to gRPC type before
@@ -184,26 +168,6 @@ impl CheckpointDataBroadcaster for () {
     }
 }
 
-/// No-op implementation for unit type (used in tests and when event
-/// subscription is not needed)
-impl EventSubscriber for () {
-    fn subscribe_events(
-        &self,
-        _filter: EventFilter,
-    ) -> Box<dyn futures::Stream<Item = IotaEvent> + Send + Unpin> {
-        Box::new(Box::pin(futures::stream::empty()))
-    }
-
-    fn subscribe_transactions(
-        &self,
-        _filter: iota_json_rpc_types::TransactionFilter,
-    ) -> Box<
-        dyn futures::Stream<Item = iota_json_rpc_types::IotaTransactionBlockEffects> + Send + Unpin,
-    > {
-        Box::new(Box::pin(futures::stream::empty()))
-    }
-}
-
 impl BcsData {
     pub fn serialize_from<T>(data: &T) -> Result<Self, bcs::Error>
     where
@@ -307,19 +271,39 @@ impl GrpcStateReader for RestStateReaderAdapter {
 #[derive(Clone)]
 pub struct GrpcReader {
     state_reader: Arc<dyn GrpcStateReader>,
+    authority_state: Option<Arc<AuthorityState>>,
+    transaction_kv_store: Option<Arc<TransactionKeyValueStore>>,
 }
 
 impl GrpcReader {
     pub fn new(state_reader: Arc<dyn GrpcStateReader>) -> Self {
-        Self { state_reader }
+        Self {
+            state_reader,
+            authority_state: None,
+            transaction_kv_store: None,
+        }
     }
 
-    pub fn from_rest_state_reader(state_reader: Arc<dyn RestStateReader>) -> Self {
+    pub fn from_rest_state_reader(
+        state_reader: Arc<dyn RestStateReader>,
+        authority_state: Option<Arc<AuthorityState>>,
+        transaction_kv_store: Option<Arc<TransactionKeyValueStore>>,
+    ) -> Self {
         Self {
             state_reader: Arc::new(RestStateReaderAdapter {
                 inner: state_reader,
             }),
+            authority_state,
+            transaction_kv_store,
         }
+    }
+
+    /// Load epoch store for transaction processing with graceful fallback
+    pub fn load_epoch_store_one_call_per_task(&self) -> Option<Arc<AuthorityPerEpochStore>> {
+        self.authority_state.as_ref().map(|state| {
+            let guard = state.load_epoch_store_one_call_per_task();
+            (*guard).clone()
+        })
     }
 
     pub fn get_epoch_last_checkpoint(
@@ -343,6 +327,37 @@ impl GrpcReader {
 
     pub fn get_object(&self, object_id: &ObjectID) -> anyhow::Result<Option<Object>> {
         self.state_reader.get_object(object_id)
+    }
+
+    /// Access to authority_state for display fields computation
+    pub fn authority_state(&self) -> &Option<Arc<AuthorityState>> {
+        &self.authority_state
+    }
+
+    /// Access to transaction_kv_store for display fields computation
+    pub fn transaction_kv_store(&self) -> &Option<Arc<TransactionKeyValueStore>> {
+        &self.transaction_kv_store
+    }
+
+    /// Get object with layout information like JSON RPC (when AuthorityState is
+    /// available)
+    pub fn get_object_read(&self, object_id: &ObjectID) -> anyhow::Result<ObjectRead> {
+        match &self.authority_state {
+            Some(state) => {
+                // Use AuthorityState.get_object_read() for full ObjectRead with layout
+                state.get_object_read(object_id).map_err(Into::into)
+            }
+            None => {
+                // Fallback: use basic object access and construct ObjectRead manually
+                match self.state_reader.get_object(object_id)? {
+                    Some(object) => {
+                        let object_ref = object.compute_object_reference();
+                        Ok(ObjectRead::Exists(object_ref, object, None)) // No layout available
+                    }
+                    None => Ok(ObjectRead::NotExists(*object_id)),
+                }
+            }
+        }
     }
 
     /// Generic checkpoint streaming implementation that works with checkpoint

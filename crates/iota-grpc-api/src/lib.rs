@@ -29,7 +29,6 @@ pub mod transactions {
 // Modules
 pub mod checkpoint_service;
 pub mod client;
-pub mod config;
 pub mod conversions;
 pub mod event_service;
 pub mod read_service;
@@ -44,14 +43,12 @@ pub use client::{
     CheckpointClient, CheckpointContent, EventClient, NodeClient, ReadClient, TransactionClient,
     WriteClient,
 };
-pub use config::Config;
 pub use event_service::EventGrpcService;
 pub use read_service::ReadGrpcService;
 pub use server::{GrpcServerHandle, start_grpc_server};
 pub use transaction_service::TransactionGrpcService;
 pub use types::{
-    CheckpointDataBroadcaster, CheckpointSummaryBroadcaster, EventSubscriber,
-    GrpcCheckpointDataBroadcaster, GrpcCheckpointSummaryBroadcaster, GrpcReader, GrpcStateReader,
-    RestStateReaderAdapter,
+    CheckpointDataBroadcaster, CheckpointSummaryBroadcaster, GrpcCheckpointDataBroadcaster,
+    GrpcCheckpointSummaryBroadcaster, GrpcReader, GrpcStateReader, RestStateReaderAdapter,
 };
 pub use write_service::WriteGrpcService;
