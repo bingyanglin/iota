@@ -6,6 +6,7 @@ use std::sync::Arc;
 use iota_json_rpc_types::{
     DisplayFieldsResponse, EventFilter, IotaObjectData, IotaObjectDataOptions,
 };
+use iota_metrics::spawn_monitored_task;
 use iota_types::{
     base_types::ObjectID,
     display::DisplayVersionUpdatedEvent,
@@ -14,11 +15,11 @@ use iota_types::{
 };
 use move_core_types::annotated_value::MoveStructLayout;
 use tonic::{Request, Response, Status};
-use tracing::debug;
+use tracing::{debug, instrument, warn};
 
 use crate::{
+    GrpcReader,
     read::{GetObjectRequest, GetObjectResponse, read_service_server::ReadService},
-    types::GrpcReader,
 };
 
 pub struct ReadGrpcService {
@@ -36,6 +37,7 @@ impl ReadGrpcService {
 // service must implement.
 #[tonic::async_trait]
 impl ReadService for ReadGrpcService {
+    #[instrument(skip(self))]
     async fn get_object(
         &self,
         request: Request<GetObjectRequest>,
@@ -72,44 +74,80 @@ impl ReadService for ReadGrpcService {
             show_storage_rebate: opts.show_storage_rebate,
         });
 
-        let object_read_result = self.grpc_reader.get_object_read(&object_id);
+        let grpc_reader = self.grpc_reader.clone();
+        let object_read = spawn_monitored_task!(async move {
+            grpc_reader.get_object_read(&object_id).map_err(|e| {
+                warn!(?object_id, "Failed to get object: {:?}", e);
+                Status::internal(format!("Failed to read object from storage: {e}"))
+            })
+        })
+        .await
+        .map_err(|e| Status::internal(format!("Task execution failed: {e}")))??;
 
-        // Handle ObjectRead following JSON-RPC pattern (line 499-537)
-        let grpc_response = match object_read_result {
-            Ok(object_read) => match object_read {
-                ObjectRead::NotExists(id) => {
-                    // Object not found - return error
-                    let error = IotaObjectResponseError::NotExists { object_id: id };
-                    serialize_error_to_json(error)?
-                }
-                ObjectRead::Deleted(object_ref) => {
-                    // Object was deleted - return error
-                    let error = IotaObjectResponseError::Deleted {
-                        object_id: object_ref.0,
-                        version: object_ref.1,
-                        digest: object_ref.2,
-                    };
-                    serialize_error_to_json(error)?
-                }
-                ObjectRead::Exists(object_ref, object, layout) => {
-                    // Object exists - create IotaObjectData
-                    match create_iota_object_data(
-                        &self.grpc_reader,
-                        object_ref,
-                        object,
-                        layout,
-                        options,
-                    )
-                    .await
-                    {
-                        Ok(data) => serialize_data_to_json(data)?,
-                        Err(display_error) => serialize_error_to_json(display_error)?,
+        let grpc_response = match object_read {
+            ObjectRead::NotExists(id) => {
+                // Object not found - return error
+                let error = IotaObjectResponseError::NotExists { object_id: id };
+                serialize_error_to_json(error)?
+            }
+            ObjectRead::Exists(object_ref, object, layout) => {
+                // Object exists
+                let mut display_fields = None;
+                if options.as_ref().map(|o| o.show_display).unwrap_or(false) {
+                    match get_display_fields(&self.grpc_reader, &object, &layout).await {
+                        Ok(rendered_fields) => display_fields = Some(rendered_fields),
+                        Err(_e) => {
+                            // Return error response with display error, like JSON-RPC
+                            let data = IotaObjectData::new(
+                                object_ref,
+                                object,
+                                layout,
+                                options.unwrap_or_default(),
+                                None,
+                            )
+                            .map_err(|e| {
+                                Status::internal(format!("Failed to create object data: {e}"))
+                            })?;
+
+                            return Ok(Response::new(GetObjectResponse {
+                                json_data: Some(crate::common::JsonData {
+                                    data: serde_json::to_vec(&data).map_err(|e| {
+                                        Status::internal(format!(
+                                            "Failed to serialize object data: {e}"
+                                        ))
+                                    })?,
+                                }),
+                                json_error: Some(crate::common::JsonData {
+                                    data: serde_json::to_vec(&IotaObjectResponseError::Display {
+                                        error: "Failed to compute display fields".to_string(),
+                                    })
+                                    .map_err(|e| {
+                                        Status::internal(format!("Failed to serialize error: {e}"))
+                                    })?,
+                                }),
+                            }));
+                        }
                     }
                 }
-            },
-            Err(_e) => {
-                // Convert storage/access errors to appropriate IotaObjectResponseError
-                let error = IotaObjectResponseError::Unknown;
+
+                let data = IotaObjectData::new(
+                    object_ref,
+                    object,
+                    layout,
+                    options.unwrap_or_default(),
+                    display_fields,
+                )
+                .map_err(|e| Status::internal(format!("Failed to create object data: {e}")))?;
+
+                serialize_data_to_json(data)?
+            }
+            ObjectRead::Deleted(object_ref) => {
+                // Object was deleted - return error
+                let error = IotaObjectResponseError::Deleted {
+                    object_id: object_ref.0,
+                    version: object_ref.1,
+                    digest: object_ref.2,
+                };
                 serialize_error_to_json(error)?
             }
         };
@@ -141,43 +179,9 @@ fn serialize_error_to_json(error: IotaObjectResponseError) -> Result<GetObjectRe
     })
 }
 
-/// Create IotaObjectData from ObjectRead::Exists case
-async fn create_iota_object_data(
-    grpc_reader: &Arc<crate::types::GrpcReader>,
-    object_ref: iota_types::base_types::ObjectRef,
-    object: Object,
-    layout: Option<MoveStructLayout>,
-    options: Option<IotaObjectDataOptions>,
-) -> Result<IotaObjectData, IotaObjectResponseError> {
-    // Handle display fields computation with proper error handling
-    let display_fields = if options.as_ref().map(|o| o.show_display).unwrap_or(false) {
-        match get_display_fields(grpc_reader, &object, &layout).await {
-            Ok(rendered_fields) => Some(rendered_fields),
-            Err(_) => {
-                // Display error: return it as an error
-                return Err(IotaObjectResponseError::Display {
-                    error: "Failed to compute display fields".to_string(),
-                });
-            }
-        }
-    } else {
-        None
-    };
-
-    // Create IotaObjectData using the same logic as JSON RPC
-    IotaObjectData::new(
-        object_ref,
-        object,
-        layout,
-        options.unwrap_or_default(),
-        display_fields,
-    )
-    .map_err(|_e| IotaObjectResponseError::Unknown)
-}
-
 /// Get display fields for an object
 async fn get_display_fields(
-    grpc_reader: &Arc<crate::types::GrpcReader>,
+    grpc_reader: &Arc<GrpcReader>,
     original_object: &Object,
     original_layout: &Option<MoveStructLayout>,
 ) -> Result<DisplayFieldsResponse, Status> {

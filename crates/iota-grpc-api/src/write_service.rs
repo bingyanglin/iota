@@ -24,7 +24,7 @@ use iota_types::{
     transaction::{InputObjectKind, Transaction, TransactionData, TransactionDataAPI},
 };
 use tonic::{Request, Response, Status};
-use tracing::{Instrument, debug, instrument, warn};
+use tracing::{Instrument, debug, instrument};
 
 use crate::{
     GrpcReader,
@@ -168,22 +168,19 @@ impl WriteGrpcService {
                 let mut layout_resolver = epoch_store
                     .executor()
                     .type_layout_resolver(Box::new(backing_package_store));
-
-                match IotaTransactionBlockEvents::try_from(
-                    response.events.unwrap_or_default(),
-                    digest,
-                    None,
-                    layout_resolver.as_mut(),
-                ) {
-                    Ok(events) => Some(events),
-                    Err(e) => {
-                        warn!("Failed to convert events: {e}");
-                        None
-                    }
-                }
+                Some(
+                    IotaTransactionBlockEvents::try_from(
+                        response.events.unwrap_or_default(),
+                        digest,
+                        None,
+                        layout_resolver.as_mut(),
+                    )
+                    .map_err(|e| Status::internal(format!("Failed to convert events: {e}")))?,
+                )
             } else {
-                warn!("Cannot convert events: missing epoch store or authority state");
-                None
+                return Err(Status::internal(
+                    "Cannot convert events: missing epoch store or authority state",
+                ));
             }
         } else {
             None
@@ -199,8 +196,8 @@ impl WriteGrpcService {
         };
 
         let balance_changes = match &object_cache {
-            Some(object_cache) if opts.show_balance_changes => {
-                match get_balance_changes_from_effect(
+            Some(object_cache) if opts.show_balance_changes => Some(
+                get_balance_changes_from_effect(
                     object_cache,
                     &response.effects.effects,
                     input_objs,
@@ -208,20 +205,14 @@ impl WriteGrpcService {
                 )
                 .instrument(tracing::trace_span!("resolving balance changes"))
                 .await
-                {
-                    Ok(changes) => Some(changes),
-                    Err(e) => {
-                        warn!("Failed to get balance changes: {e}");
-                        None
-                    }
-                }
-            }
+                .map_err(|e| Status::internal(format!("Failed to get balance changes: {e}")))?,
+            ),
             _ => None,
         };
 
         let object_changes = match &object_cache {
-            Some(object_cache) if opts.show_object_changes => {
-                match get_object_changes(
+            Some(object_cache) if opts.show_object_changes => Some(
+                get_object_changes(
                     object_cache,
                     sender,
                     response.effects.effects.modified_at_versions(),
@@ -230,14 +221,8 @@ impl WriteGrpcService {
                 )
                 .instrument(tracing::trace_span!("resolving object changes"))
                 .await
-                {
-                    Ok(changes) => Some(changes),
-                    Err(e) => {
-                        debug!("Failed to get object changes: {e}");
-                        None
-                    }
-                }
-            }
+                .map_err(|e| Status::internal(format!("Failed to get object changes: {e}")))?,
+            ),
             _ => None,
         };
 

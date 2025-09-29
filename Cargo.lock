@@ -6400,6 +6400,7 @@ dependencies = [
  "iota-grpc-types",
  "iota-json-rpc",
  "iota-json-rpc-types",
+ "iota-metrics",
  "iota-storage",
  "iota-types",
  "move-core-types",
