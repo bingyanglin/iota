@@ -6420,6 +6420,7 @@ dependencies = [
 name = "iota-grpc-types"
 version = "1.8.0-alpha"
 dependencies = [
+ "iota-json-rpc-types",
  "iota-types",
  "serde",
 ]

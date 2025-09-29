@@ -14,4 +14,5 @@ workspace = true
 serde.workspace = true
 
 # internal dependencies
+iota-json-rpc-types.workspace = true
 iota-types.workspace = true

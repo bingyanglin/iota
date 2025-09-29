@@ -17,90 +17,9 @@ message TransactionStreamRequest {
   TransactionFilter filter = 1;
 }
 
-// Versioned transaction data structure
+// Transaction data
 message Transaction {
-  string message_version = 1;  // Version identifier: "v1", "v2", etc.
-  
-  oneof effects {
-    TransactionEffectsV1 v1 = 2;
-    // Future versions:
-    // TransactionEffectsV2 v2 = 3;
-    // TransactionEffectsV3 v3 = 4;
-  }
-}
-
-// V1 transaction effects - exactly matching IotaTransactionBlockEffectsV1 field order
-message TransactionEffectsV1 {
-  ExecutionStatus status = 1;                                          // pub status: IotaExecutionStatus,
-  uint64 executed_epoch = 2;                                           // pub executed_epoch: EpochId,
-  GasCostSummary gas_used = 3;                                         // pub gas_used: GasCostSummary,
-  repeated ModifiedAtVersions modified_at_versions = 4;                // pub modified_at_versions: Vec<IotaTransactionBlockEffectsModifiedAtVersions>,
-  repeated iota.grpc.common.ObjectRef shared_objects = 5;              // pub shared_objects: Vec<IotaObjectRef>,
-  iota.grpc.common.Digest transaction_digest = 6;                      // pub transaction_digest: TransactionDigest,
-  repeated OwnedObjectRef created = 7;                                 // pub created: Vec<OwnedObjectRef>,
-  repeated OwnedObjectRef mutated = 8;                                 // pub mutated: Vec<OwnedObjectRef>,
-  repeated OwnedObjectRef unwrapped = 9;                               // pub unwrapped: Vec<OwnedObjectRef>,
-  repeated iota.grpc.common.ObjectRef deleted = 10;                    // pub deleted: Vec<IotaObjectRef>,
-  repeated iota.grpc.common.ObjectRef unwrapped_then_deleted = 11;     // pub unwrapped_then_deleted: Vec<IotaObjectRef>,
-  repeated iota.grpc.common.ObjectRef wrapped = 12;                    // pub wrapped: Vec<IotaObjectRef>,
-  OwnedObjectRef gas_object = 13;                                      // pub gas_object: OwnedObjectRef,
-  optional iota.grpc.common.Digest events_digest = 14;                // pub events_digest: Option<TransactionEventsDigest>,
-  repeated iota.grpc.common.Digest dependencies = 15;                 // pub dependencies: Vec<TransactionDigest>,
-}
-
-// Execution status of a transaction
-message ExecutionStatus {
-  oneof status {
-    Success success = 1;
-    Failure failure = 2;
-  }
-}
-
-message Success {}
-
-message Failure {
-  string error = 1;
-}
-
-// Gas cost summary
-message GasCostSummary {
-  uint64 computation_cost = 1;
-  uint64 computation_cost_burned = 2;
-  uint64 storage_cost = 3;
-  uint64 storage_rebate = 4;
-  uint64 non_refundable_storage_fee = 5;
-}
-
-// Object reference with owner
-message OwnedObjectRef {
-  iota.grpc.common.ObjectRef reference = 1;
-  Owner owner = 2;
-}
-
-// Object owner
-message Owner {
-  oneof owner {
-    iota.grpc.common.Address address_owner = 1;
-    ObjectOwner object_owner = 2;
-    Shared shared = 3;
-    Immutable immutable = 4;
-  }
-}
-
-message ObjectOwner {
-  iota.grpc.common.Address address = 1;
-}
-
-message Shared {
-  uint64 initial_shared_version = 1;
-}
-
-message Immutable {}
-
-// Modified at versions info
-message ModifiedAtVersions {
-  iota.grpc.common.Address object_id = 1;
-  uint64 sequence_number = 2;
+  bytes json_data = 1;  // JSON-serialized IotaTransactionBlockEffects
 }
 
 // Rich transaction filter that supports gRPC transaction filtering
