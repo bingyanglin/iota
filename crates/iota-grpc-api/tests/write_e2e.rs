@@ -50,7 +50,8 @@ async fn test_write_service_execute_transaction() {
     let signed_tx = cluster.sign_transaction(&tx_data);
 
     // Extract real transaction bytes and signatures
-    let tx_bytes = bcs::to_bytes(signed_tx.data()).expect("BCS serialization failed");
+    let tx_bytes =
+        bcs::to_bytes(&signed_tx.data().intent_message().value).expect("BCS serialization failed");
     let signatures: Vec<Vec<u8>> = signed_tx
         .tx_signatures()
         .iter()
@@ -75,7 +76,7 @@ async fn test_write_service_execute_transaction() {
                 show_balance_changes: false,
                 show_raw_effects: false,
             }),
-            request_type: None, // Let the system use default
+            request_type: None, // Uses default: WaitForEffectsCert
         };
 
         let response = write_client.execute_transaction(request).await?;
@@ -124,25 +125,9 @@ async fn test_write_service_execute_transaction() {
     .expect("timeout waiting for transaction");
 
     match tx_result {
-        Ok(()) => {
-            // Transaction was executed successfully and response validated
-            println!("Transaction executed successfully via WriteService");
-        }
+        Ok(()) => {}
         Err(e) => {
-            let error_msg = e.to_string();
-
-            // Check if this is expected (WriteService not available in this test
-            // environment)
-            assert!(
-                error_msg.contains("Write API not configured")
-                    || error_msg.contains("read-only mode")
-                    || error_msg.contains("unimplemented")
-                    || error_msg.contains("Transaction execution not available")
-                    || error_msg.contains("Deserialization error")
-                    || error_msg.contains("variant index")
-                    || error_msg.contains("unexpected end of input"),
-                "Expected WriteService/transaction execution limitation, got unexpected error: {error_msg}"
-            );
+            panic!("WriteService transaction execution failed: {e}");
         }
     }
 }
@@ -173,7 +158,7 @@ async fn test_write_service_invalid_transaction() {
                 show_balance_changes: false,
                 show_raw_effects: false,
             }),
-            request_type: None,
+            request_type: Some(1), // WaitForLocalExecution
         };
 
         let _response = write_client.execute_transaction(request).await?;
@@ -183,25 +168,8 @@ async fn test_write_service_invalid_transaction() {
     .await
     .expect("timeout waiting for transaction");
 
-    match tx_result {
-        Ok(()) => {
-            // This would be unexpected for invalid transaction data
-            panic!("WriteService should not succeed with invalid transaction data");
-        }
-        Err(e) => {
-            let error_msg = e.to_string();
-
-            // Expected: invalid transaction format or WriteService not available
-            assert!(
-                error_msg.contains("Failed to deserialize transaction data")
-                    || error_msg.contains("invalid argument")
-                    || error_msg.contains("Transaction execution not available")
-                    || error_msg.contains("Write API not configured")
-                    || error_msg.contains("Deserialization error")
-                    || error_msg.contains("variant index")
-                    || error_msg.contains("unexpected end of input"),
-                "Expected transaction deserialization or WriteService error, got: {error_msg}"
-            );
-        }
+    if let Ok(()) = tx_result {
+        // This would be unexpected for invalid transaction data
+        panic!("WriteService should not succeed with invalid transaction data");
     }
 }

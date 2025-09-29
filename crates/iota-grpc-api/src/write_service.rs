@@ -385,7 +385,14 @@ impl WriteService for WriteGrpcService {
             .ok_or_else(|| Status::unimplemented("Transaction execution not available"))?;
 
         debug!("Executing transaction: {digest}");
-        let request_type = ExecuteTransactionRequestType::WaitForEffectsCert;
+        let request_type = req
+            .request_type
+            .map(|rt| match rt {
+                0 => ExecuteTransactionRequestType::WaitForEffectsCert,
+                1 => ExecuteTransactionRequestType::WaitForLocalExecution,
+                _ => ExecuteTransactionRequestType::WaitForEffectsCert, // fallback to default
+            })
+            .unwrap_or(ExecuteTransactionRequestType::WaitForEffectsCert);
         let (response, is_executed_locally) = orchestrator
             .execute_transaction_block(execute_request, request_type, None)
             .await
