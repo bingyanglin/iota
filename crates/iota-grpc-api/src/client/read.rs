@@ -11,9 +11,6 @@ use crate::{
 };
 
 /// Dedicated client for read-related gRPC operations.
-///
-/// This client handles all read service interactions including object retrieval
-/// with various options for data display.
 #[derive(Clone)]
 pub struct ReadClient {
     client: ReadServiceClient<Channel>,
@@ -34,7 +31,7 @@ impl ReadClient {
     /// * `options` - Options for what data to include in the response
     ///
     /// # Returns
-    /// Result containing IotaObjectResponse (matches JSON-RPC API)
+    /// Result containing IotaObjectResponse
     pub async fn get_object(
         &mut self,
         object_id: ObjectID,

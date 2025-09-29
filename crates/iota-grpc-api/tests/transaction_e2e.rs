@@ -4,37 +4,25 @@
 use std::time::Duration;
 
 use futures::StreamExt;
-use iota_config::local_ip_utils;
 use iota_grpc_api::{
-    client::NodeClient,
     common::{AddressFilter, AllFilter},
     transactions::{TransactionFilter, transaction_filter::Filter},
 };
 use iota_json_rpc_types::IotaTransactionBlockEffectsAPI;
-use test_cluster::{TestCluster, TestClusterBuilder};
+use test_cluster::TestCluster;
 use tokio::time::timeout;
+
+mod utils;
+use utils::setup_test_cluster_and_client;
 
 async fn setup_test_cluster() -> (
     TestCluster,
     iota_grpc_api::client::TransactionClient,
     iota_types::base_types::IotaAddress,
 ) {
-    let localhost = local_ip_utils::localhost_for_testing();
-    let grpc_port = local_ip_utils::get_available_port(&localhost);
-    let grpc_addr = format!("{localhost}:{grpc_port}");
+    let (cluster, node_client) = setup_test_cluster_and_client().await;
 
-    let cluster = TestClusterBuilder::new()
-        .with_fullnode_grpc_api_address(grpc_addr.parse().expect("Invalid gRPC address"))
-        .disable_fullnode_pruning()
-        .with_num_validators(1)
-        .build()
-        .await;
-
-    let client = NodeClient::connect(&format!("http://{grpc_addr}"))
-        .await
-        .expect("Failed to connect to gRPC");
-
-    let transaction_client = client
+    let transaction_client = node_client
         .transaction_client()
         .expect("Transaction client should be available");
 

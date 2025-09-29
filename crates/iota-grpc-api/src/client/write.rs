@@ -9,9 +9,6 @@ use crate::write::{
 };
 
 /// Dedicated client for write-related gRPC operations.
-///
-/// This client handles all write service interactions including transaction
-/// execution with various response options.
 #[derive(Clone)]
 pub struct WriteClient {
     client: WriteServiceClient<Channel>,

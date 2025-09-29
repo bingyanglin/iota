@@ -3,36 +3,27 @@
 
 use std::time::Duration;
 
-use iota_config::local_ip_utils;
-use iota_grpc_api::client::NodeClient;
+use iota_grpc_api::client::ReadClient;
 use iota_json_rpc_types::IotaObjectDataOptions;
 use iota_types::{base_types::ObjectID, error::IotaObjectResponseError};
-use test_cluster::{TestCluster, TestClusterBuilder};
+use test_cluster::TestCluster;
 
-async fn setup_test_cluster_and_client() -> (TestCluster, NodeClient) {
-    let localhost = local_ip_utils::localhost_for_testing();
-    let grpc_port = local_ip_utils::get_available_port(&localhost);
-    let grpc_addr = format!("{localhost}:{grpc_port}");
+mod utils;
+use utils::setup_test_cluster_and_client;
 
-    // Start a test cluster with gRPC enabled and pruning disabled
-    let cluster = TestClusterBuilder::new()
-        .with_fullnode_grpc_api_address(grpc_addr.parse().expect("Invalid gRPC address"))
-        .disable_fullnode_pruning()
-        .with_num_validators(1)
-        .build()
-        .await;
+async fn setup_test_cluster_and_read_client() -> (TestCluster, ReadClient) {
+    let (cluster, node_client) = setup_test_cluster_and_client().await;
 
-    // Create NodeClient
-    let node_client = NodeClient::connect(&format!("http://{grpc_addr}"))
-        .await
-        .expect("connect gRPC");
+    let read_client = node_client
+        .read_client()
+        .expect("Read client should be available");
 
-    (cluster, node_client)
+    (cluster, read_client)
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_read_service_get_object() {
-    let (cluster, node_client) = setup_test_cluster_and_client().await;
+    let (cluster, mut read_client) = setup_test_cluster_and_read_client().await;
 
     // Get a known object (gas object from account)
     let sender = cluster.get_address_0();
@@ -50,11 +41,6 @@ async fn test_read_service_get_object() {
     let gas_object = &owned_objects[0];
 
     let object_id = gas_object.data.as_ref().unwrap().object_id;
-
-    // Test getting the object via ReadService
-    let mut read_client = node_client
-        .read_client()
-        .expect("Read client should be available");
 
     let options = Some(IotaObjectDataOptions {
         show_type: true,
@@ -102,15 +88,10 @@ async fn test_read_service_get_object() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_read_service_nonexistent_object() {
-    let (_cluster, node_client) = setup_test_cluster_and_client().await;
+    let (_cluster, mut read_client) = setup_test_cluster_and_read_client().await;
 
     // Use a dummy object ID that doesn't exist
     let nonexistent_object_id = [0u8; 32];
-
-    // Test getting a non-existent object
-    let mut read_client = node_client
-        .read_client()
-        .expect("Read client should be available");
 
     let nonexistent_id = ObjectID::from_bytes(nonexistent_object_id).unwrap();
     let options = Some(IotaObjectDataOptions {

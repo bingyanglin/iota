@@ -3,37 +3,28 @@
 
 use std::time::Duration;
 
-use iota_config::local_ip_utils;
 use iota_grpc_api::{
-    client::NodeClient,
+    client::WriteClient,
     write::{ExecuteTransactionRequest, TransactionResponseOptions},
 };
-use test_cluster::{TestCluster, TestClusterBuilder};
+use test_cluster::TestCluster;
 
-async fn setup_test_cluster_and_client() -> (TestCluster, NodeClient) {
-    let localhost = local_ip_utils::localhost_for_testing();
-    let grpc_port = local_ip_utils::get_available_port(&localhost);
-    let grpc_addr = format!("{localhost}:{grpc_port}");
+mod utils;
+use utils::setup_test_cluster_and_client;
 
-    // Start a test cluster with gRPC enabled and pruning disabled
-    let cluster = TestClusterBuilder::new()
-        .with_fullnode_grpc_api_address(grpc_addr.parse().expect("Invalid gRPC address"))
-        .disable_fullnode_pruning()
-        .with_num_validators(1)
-        .build()
-        .await;
+async fn setup_test_cluster_and_write_client() -> (TestCluster, WriteClient) {
+    let (cluster, node_client) = setup_test_cluster_and_client().await;
 
-    // Create NodeClient
-    let node_client = NodeClient::connect(&format!("http://{grpc_addr}"))
-        .await
-        .expect("connect gRPC");
+    let write_client = node_client
+        .write_client()
+        .expect("Write client should be available");
 
-    (cluster, node_client)
+    (cluster, write_client)
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_write_service_execute_transaction() {
-    let (cluster, node_client) = setup_test_cluster_and_client().await;
+    let (cluster, mut write_client) = setup_test_cluster_and_write_client().await;
 
     let sender = cluster.get_address_0();
     let receiver = cluster.get_address_1();
@@ -60,10 +51,6 @@ async fn test_write_service_execute_transaction() {
 
     // Test execute_transaction via WriteService with real transaction data
     let tx_result = tokio::time::timeout(Duration::from_secs(30), async {
-        let mut write_client = node_client
-            .write_client()
-            .ok_or_else(|| anyhow::anyhow!("Write client not available"))?;
-
         let request = ExecuteTransactionRequest {
             tx_bytes,
             signatures,
@@ -134,7 +121,7 @@ async fn test_write_service_execute_transaction() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_write_service_invalid_transaction() {
-    let (_cluster, node_client) = setup_test_cluster_and_client().await;
+    let (_cluster, mut write_client) = setup_test_cluster_and_write_client().await;
 
     // Create invalid transaction data (dummy bytes that won't deserialize properly)
     let tx_bytes = vec![0u8; 32]; // Invalid transaction bytes
@@ -142,10 +129,6 @@ async fn test_write_service_invalid_transaction() {
 
     // Test execute_transaction with invalid data via WriteService
     let tx_result = tokio::time::timeout(Duration::from_secs(30), async {
-        let mut write_client = node_client
-            .write_client()
-            .ok_or_else(|| anyhow::anyhow!("Write client not available"))?;
-
         let request = ExecuteTransactionRequest {
             tx_bytes,
             signatures,

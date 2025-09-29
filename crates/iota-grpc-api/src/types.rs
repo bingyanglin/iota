@@ -300,10 +300,9 @@ impl GrpcReader {
 
     /// Load epoch store for transaction processing with graceful fallback
     pub fn load_epoch_store_one_call_per_task(&self) -> Option<Arc<AuthorityPerEpochStore>> {
-        self.authority_state.as_ref().map(|state| {
-            let guard = state.load_epoch_store_one_call_per_task();
-            (*guard).clone()
-        })
+        self.authority_state
+            .as_ref()
+            .map(|state| state.load_epoch_store_one_call_per_task().clone())
     }
 
     pub fn get_epoch_last_checkpoint(

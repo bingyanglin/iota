@@ -116,7 +116,9 @@ fn create_transaction_filter(
                 IotaTransactionKind::EndOfEpochTransaction,
             ]))
         }
-        Some(Filter::Checkpoint(f)) => Ok(TransactionFilter::Checkpoint(f.checkpoint)),
+        Some(Filter::Checkpoint(f)) => {
+            Ok(TransactionFilter::Checkpoint(f.checkpoint_sequence_number))
+        }
         Some(Filter::MoveFunction(f)) => {
             let package_id = parse_object_id(&f.package_id, "Package ID")?;
             Ok(TransactionFilter::MoveFunction {

@@ -4,28 +4,16 @@
 use std::time::Duration;
 
 use futures::StreamExt;
-use iota_config::local_ip_utils;
-use iota_grpc_api::client::{CheckpointClient, NodeClient};
-use test_cluster::{TestCluster, TestClusterBuilder};
+use iota_grpc_api::client::CheckpointClient;
+use test_cluster::TestCluster;
 
-async fn setup_test_cluster_and_client() -> (TestCluster, CheckpointClient) {
-    let localhost = local_ip_utils::localhost_for_testing();
-    let grpc_port = local_ip_utils::get_available_port(&localhost);
-    let grpc_addr = format!("{localhost}:{grpc_port}");
+mod utils;
+use utils::setup_test_cluster_and_client;
 
-    // Start a test cluster with gRPC enabled and pruning disabled
-    let cluster = TestClusterBuilder::new()
-        .with_fullnode_grpc_api_address(grpc_addr.parse().expect("Invalid gRPC address"))
-        .disable_fullnode_pruning()
-        .with_num_validators(1)
-        .build()
-        .await;
+async fn setup_test_cluster_and_checkpoint_client() -> (TestCluster, CheckpointClient) {
+    let (cluster, node_client) = setup_test_cluster_and_client().await;
 
-    let client = NodeClient::connect(&format!("http://{grpc_addr}"))
-        .await
-        .expect("connect gRPC");
-
-    let checkpoint_client = client
+    let checkpoint_client = node_client
         .checkpoint_client()
         .expect("Checkpoint client should be available");
 
@@ -34,7 +22,7 @@ async fn setup_test_cluster_and_client() -> (TestCluster, CheckpointClient) {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn e2e_stream_checkpoints() {
-    let (_cluster, mut client) = setup_test_cluster_and_client().await;
+    let (_cluster, mut client) = setup_test_cluster_and_checkpoint_client().await;
 
     // Request all checkpoints using the higher-level GrpcNodeClient API
     let mut stream = client
@@ -78,7 +66,7 @@ async fn e2e_stream_checkpoints() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_get_epoch_first_checkpoint_sequence_number() {
-    let (cluster, mut client) = setup_test_cluster_and_client().await;
+    let (cluster, mut client) = setup_test_cluster_and_checkpoint_client().await;
 
     let sender = cluster.get_address_0();
     let receiver = cluster.get_address_1();
@@ -150,7 +138,7 @@ async fn test_get_epoch_first_checkpoint_sequence_number() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_stream_full_checkpoint_data() {
-    let (_cluster, mut client) = setup_test_cluster_and_client().await;
+    let (_cluster, mut client) = setup_test_cluster_and_checkpoint_client().await;
 
     let mut stream = client
         .stream_checkpoints(None, Some(2), true)
@@ -186,7 +174,7 @@ async fn test_stream_full_checkpoint_data() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_get_latest_checkpoint() {
-    let (cluster, mut client) = setup_test_cluster_and_client().await;
+    let (cluster, mut client) = setup_test_cluster_and_checkpoint_client().await;
 
     let sender = cluster.get_address_0();
     let receiver = cluster.get_address_1();

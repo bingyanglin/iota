@@ -111,9 +111,7 @@ impl SubscriptionHandler {
         }
         Ok(())
     }
-}
 
-impl SubscriptionHandler {
     pub fn subscribe_events(
         &self,
         filter: EventFilter,

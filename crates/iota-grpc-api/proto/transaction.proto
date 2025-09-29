@@ -41,7 +41,7 @@ message TransactionFilter {
 
 // Filter by checkpoint sequence number
 message CheckpointFilter {
-  uint64 checkpoint = 1;
+  uint64 checkpoint_sequence_number = 1;
 }
 
 // Filter by input object ID
