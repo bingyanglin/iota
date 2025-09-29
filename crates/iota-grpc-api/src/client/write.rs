@@ -26,14 +26,6 @@ impl WriteClient {
     }
 
     /// Execute a transaction with specified options.
-    ///
-    /// # Arguments
-    /// * `request` - ExecuteTransaction request containing transaction bytes,
-    ///   signatures, and options
-    ///
-    /// # Returns
-    /// Result containing IotaTransactionBlockResponse (success) or
-    /// tonic::Status
     pub async fn execute_transaction(
         &mut self,
         request: ExecuteTransactionRequest,
@@ -57,8 +49,7 @@ impl WriteClient {
             .as_ref()
             .ok_or_else(|| Status::internal("Missing json_data in response"))?;
 
-        // Deserialize directly from JSON - the service serializes
-        // IotaTransactionBlockResponse
+        // Deserialize directly from JSON
         serde_json::from_slice(&json_data.data).map_err(|e| {
             Status::internal(format!(
                 "Failed to deserialize transaction response from JSON: {e}"

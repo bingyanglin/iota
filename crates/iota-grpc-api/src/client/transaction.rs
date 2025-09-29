@@ -65,7 +65,7 @@ impl TransactionClient {
             .as_ref()
             .ok_or_else(|| anyhow!("Missing json_data in transaction"))?;
 
-        // Deserialize directly from JSON (much simpler than BCS)
+        // Deserialize directly from JSON
         serde_json::from_slice(&json_data.data)
             .map_err(|e| anyhow!("Failed to deserialize transaction effects from JSON: {e}"))
     }
