@@ -79,18 +79,30 @@ async fn test_write_service_execute_transaction() {
         };
 
         let response = write_client.execute_transaction(request).await?;
-        Ok::<bool, anyhow::Error>(response.digest.is_some())
+
+        // Validate the IotaTransactionBlockResponse
+        assert!(!response.digest.inner().is_empty(), "Response should have a valid digest");
+
+        // Since we requested show_effects: true, validate effects are present
+        assert!(response.effects.is_some(), "Effects should be present when show_effects is true");
+
+        // Validate that fields we didn't request are None/empty
+        assert!(response.transaction.is_none(), "Transaction should be None when show_input is false");
+        assert!(response.raw_transaction.is_empty(), "Raw transaction should be empty when show_raw_input is false");
+        assert!(response.events.is_none(), "Events should be None when show_events is false");
+        assert!(response.object_changes.is_none(), "Object changes should be None when show_object_changes is false");
+        assert!(response.balance_changes.is_none(), "Balance changes should be None when show_balance_changes is false");
+        assert!(response.raw_effects.is_empty(), "Raw effects should be empty when show_raw_effects is false");
+
+        Ok::<(), anyhow::Error>(())
     })
     .await
     .expect("timeout waiting for transaction");
 
     match tx_result {
-        Ok(success) => {
-            // Verify the transaction was executed successfully
-            assert!(
-                success,
-                "Transaction should have been executed successfully via WriteService"
-            );
+        Ok(()) => {
+            // Transaction was executed successfully and response validated
+            println!("Transaction executed successfully via WriteService");
         }
         Err(e) => {
             let error_msg = e.to_string();
@@ -140,14 +152,15 @@ async fn test_write_service_invalid_transaction() {
             request_type: None,
         };
 
-        let response = write_client.execute_transaction(request).await?;
-        Ok::<bool, anyhow::Error>(response.digest.is_some())
+        let _response = write_client.execute_transaction(request).await?;
+        // Should not reach here with invalid transaction data
+        Ok::<(), anyhow::Error>(())
     })
     .await
     .expect("timeout waiting for transaction");
 
     match tx_result {
-        Ok(_success) => {
+        Ok(()) => {
             // This would be unexpected for invalid transaction data
             panic!("WriteService should not succeed with invalid transaction data");
         }

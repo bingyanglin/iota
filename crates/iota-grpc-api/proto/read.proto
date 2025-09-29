@@ -30,65 +30,6 @@ message ObjectDataOptions {
 }
 
 message GetObjectResponse {
-  // Object data (if exists)
-  optional ObjectData data = 1;
-  // Error (if object doesn't exist or other error)
-  optional ObjectError error = 2;
-}
-
-message ObjectData {
-  // Object ID
-  iota.grpc.common.Address object_id = 1;
-  // Object version
-  uint64 version = 2;
-  // Object digest
-  iota.grpc.common.Digest digest = 3;
-  // Object type (if show_type is true)
-  optional string object_type = 4;
-  // Object owner (if show_owner is true)
-  optional string owner = 5;
-  // Previous transaction digest (if show_previous_transaction is true)
-  optional iota.grpc.common.Digest previous_transaction = 6;
-  // The amount of IOTA we would rebate if this object gets deleted.
-  // This number is re-calculated each time the object is mutated based on
-  // the present storage gas price (if show_storage_rebate is true)
-  optional uint64 storage_rebate = 7;
-  // The Display metadata for frontend UI rendering (if show_display is true)
-  optional iota.grpc.common.BcsData display = 8;
-  // Parsed Move object content or package content (if show_content is true)
-  optional iota.grpc.common.BcsData content = 9;
-  // BCS raw data (if show_bcs is true)
-  optional iota.grpc.common.BcsData bcs = 10;
-}
-
-message ObjectError {
-  oneof error {
-    NotExistsError not_exists = 1;
-    DynamicFieldNotFoundError dynamic_field_not_found = 2;
-    DeletedError deleted = 3;
-    UnknownError unknown = 4;
-    DisplayError display = 5;
-  }
-}
-
-message NotExistsError {
-  iota.grpc.common.Address object_id = 1;
-}
-
-message DynamicFieldNotFoundError {
-  iota.grpc.common.Address parent_object_id = 1;
-}
-
-message DeletedError {
-  iota.grpc.common.Address object_id = 1;
-  uint64 version = 2;
-  iota.grpc.common.Digest digest = 3;
-}
-
-message UnknownError {
-  // No fields - matches JSON RPC IotaObjectResponseError::Unknown
-}
-
-message DisplayError {
-  string error_message = 1;
+  optional iota.grpc.common.JsonData json_data = 1;   // JSON-serialized IotaObjectData (success)
+  optional iota.grpc.common.JsonData json_error = 2;  // JSON-serialized IotaObjectResponseError (error)
 }

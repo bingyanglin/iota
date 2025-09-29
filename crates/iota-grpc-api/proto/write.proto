@@ -46,27 +46,5 @@ enum ExecuteTransactionRequestType {
 }
 
 message ExecuteTransactionResponse {
-  iota.grpc.common.Digest digest = 1;
-  // Transaction data (if show_input is true)
-  optional iota.grpc.common.BcsData transaction = 2;
-  // Raw transaction bytes
-  optional bytes raw_transaction = 3;
-  // Transaction effects
-  optional iota.grpc.common.BcsData effects = 4;
-  // Transaction events
-  repeated iota.grpc.common.BcsData events = 5;
-  // Object changes
-  repeated iota.grpc.common.BcsData object_changes = 6;
-  // Balance changes
-  repeated iota.grpc.common.BcsData balance_changes = 7;
-  // Timestamp when transaction was executed
-  optional uint64 timestamp_ms = 8;
-  // Whether the transaction was confirmed locally
-  optional bool confirmed_local_execution = 9;
-  // Checkpoint sequence number when this transaction was included and finalized. Only returned in read API, not in execution API.
-  optional uint64 checkpoint = 10;
-  // Error messages
-  repeated string errors = 11;
-  // Raw transaction effects
-  optional bytes raw_effects = 12;
+  iota.grpc.common.JsonData json_data = 1;  // JSON-serialized IotaTransactionBlockResponse
 }

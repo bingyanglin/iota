@@ -7,7 +7,9 @@ use fastcrypto::traits::ToFromBytes;
 use iota_core::{
     authority_client::NetworkAuthorityClient, transaction_orchestrator::TransactionOrchestrator,
 };
-use iota_json_rpc_types::{BalanceChange, IotaTransactionBlock, ObjectChange};
+use iota_json_rpc_types::{
+    BalanceChange, IotaTransactionBlock, IotaTransactionBlockEvents, IotaTransactionBlockResponse, ObjectChange,
+};
 use iota_types::{
     base_types::{IotaAddress, ObjectID, ObjectRef, SequenceNumber},
     effects::{ObjectRemoveKind, TransactionEffectsAPI},
@@ -17,7 +19,7 @@ use iota_types::{
         IsTransactionExecutedLocally,
     },
     signature::GenericSignature,
-    storage::WriteKind,
+    storage::{PostExecutionPackageResolver, WriteKind},
     transaction::{InputObjectKind, Transaction, TransactionData, TransactionDataAPI},
 };
 use move_core_types::language_storage::TypeTag;
@@ -26,7 +28,7 @@ use tracing::debug;
 
 use crate::{
     GrpcReader,
-    utils::{convert_bytes, serialize_collection_to_bcs, serialize_to_bcs},
+    utils::convert_bytes,
     write::{
         ExecuteTransactionRequest, ExecuteTransactionResponse, TransactionResponseOptions,
         write_service_server::WriteService,
@@ -161,6 +163,169 @@ impl WriteGrpcService {
         ))
     }
 
+    /// Create IotaTransactionBlockResponse from execution results
+    async fn create_transaction_block_response(
+        &self,
+        response: ExecuteTransactionResponseV1,
+        is_executed_locally: IsTransactionExecutedLocally,
+        opts: TransactionResponseOptions,
+        digest: iota_types::base_types::TransactionDigest,
+        transaction_block: Option<Vec<u8>>,
+        raw_transaction: Vec<u8>,
+        sender: IotaAddress,
+    ) -> Result<IotaTransactionBlockResponse, Status> {
+        // Build transaction block from serialized data if requested
+        let transaction = if opts.show_input {
+            transaction_block.and_then(|data| {
+                // Try to deserialize back to IotaTransactionBlock
+                bcs::from_bytes::<IotaTransactionBlock>(&data).ok()
+            })
+        } else {
+            None
+        };
+
+        let raw_transaction = if opts.show_raw_input {
+            raw_transaction
+        } else {
+            vec![]
+        };
+
+        let effects = if opts.show_effects {
+            // Convert TransactionEffects to IotaTransactionBlockEffects
+            Some(
+                response.effects.effects.clone().try_into()
+                    .map_err(|e| Status::internal(format!("Failed to convert effects: {e}")))?,
+            )
+        } else {
+            None
+        };
+
+        let events = if opts.show_events {
+            // Convert TransactionEvents to IotaTransactionBlockEvents
+            if let Some(transaction_events) = response.events {
+                // We need epoch store and authority state for event conversion (like JSON-RPC)
+                if let (Some(epoch_store), Some(authority_state)) = (
+                    self.grpc_reader.load_epoch_store_one_call_per_task(),
+                    self.grpc_reader.authority_state().as_ref(),
+                ) {
+                    // Create PostExecutionPackageResolver exactly like JSON-RPC API
+                    let package_resolver = PostExecutionPackageResolver::new(
+                        authority_state.get_backing_package_store().clone(),
+                        &response.output_objects,
+                    );
+                    let mut layout_resolver = epoch_store
+                        .executor()
+                        .type_layout_resolver(Box::new(package_resolver));
+
+                    match IotaTransactionBlockEvents::try_from(
+                        transaction_events,
+                        digest,
+                        None,
+                        layout_resolver.as_mut(),
+                    ) {
+                        Ok(iota_events) => Some(iota_events),
+                        Err(e) => {
+                            debug!("Failed to convert events: {e}");
+                            None
+                        }
+                    }
+                } else {
+                    debug!("Cannot convert events: missing epoch store or authority state");
+                    None
+                }
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+
+        let (object_changes, balance_changes) =
+            if opts.show_object_changes || opts.show_balance_changes {
+                match (&response.input_objects, &response.output_objects) {
+                    (Some(input_objects), Some(output_objects)) => {
+                        let object_changes = if opts.show_object_changes {
+                            Some(compute_object_changes(
+                                sender,
+                                response.effects.effects.modified_at_versions(),
+                                response.effects.effects.all_changed_objects(),
+                                response.effects.effects.all_removed_objects(),
+                                input_objects,
+                                output_objects,
+                            ))
+                        } else {
+                            None
+                        };
+
+                        let balance_changes = if opts.show_balance_changes {
+                            Some(derive_balance_changes(input_objects, output_objects))
+                        } else {
+                            None
+                        };
+
+                        (object_changes, balance_changes)
+                    }
+                    _ => {
+                        debug!(
+                            "Cannot compute object/balance changes: missing input or output objects"
+                        );
+                        (None, None)
+                    }
+                }
+            } else {
+                (None, None)
+            };
+
+        let timestamp_ms =
+            if opts.show_effects || opts.show_object_changes || opts.show_balance_changes {
+                Some(
+                    std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_millis() as u64,
+                )
+            } else {
+                None
+            };
+
+        let confirmed_local_execution = Some(is_executed_locally);
+
+        let raw_effects = if opts.show_raw_effects {
+            bcs::to_bytes(&response.effects.effects)
+                .map_err(|e| Status::internal(format!("Raw effects serialization failed: {e}")))?
+        } else {
+            vec![]
+        };
+
+        Ok(IotaTransactionBlockResponse {
+            digest,
+            transaction,
+            raw_transaction,
+            effects,
+            events,
+            object_changes,
+            balance_changes,
+            timestamp_ms,
+            confirmed_local_execution,
+            checkpoint: None, // Same as JSON RPC execution API
+            errors: vec![],
+            raw_effects,
+        })
+    }
+
+    /// Serialize IotaTransactionBlockResponse to JSON
+    fn serialize_response_to_json(
+        response: &IotaTransactionBlockResponse,
+    ) -> Result<ExecuteTransactionResponse, Status> {
+        let data = serde_json::to_vec(response)
+            .map_err(|e| Status::internal(format!("Failed to serialize response to JSON: {e}")))?;
+
+        Ok(ExecuteTransactionResponse {
+            json_data: Some(crate::common::JsonData { data }),
+        })
+    }
+
     async fn handle_post_orchestration(
         &self,
         response: ExecuteTransactionResponseV1,
@@ -172,102 +337,24 @@ impl WriteGrpcService {
         raw_transaction: Vec<u8>,
         sender: IotaAddress,
     ) -> Result<Response<ExecuteTransactionResponse>, Status> {
-        let events = if opts.show_events {
-            if let Some(ref tx_events) = response.events {
-                serialize_collection_to_bcs(tx_events.data.iter(), "Event")?
-            } else {
-                vec![]
-            }
-        } else {
-            vec![]
-        };
+        // Create IotaTransactionBlockResponse using same logic as JSON RPC
+        let iota_response = self
+            .create_transaction_block_response(
+                response,
+                is_executed_locally,
+                opts,
+                digest,
+                transaction_block,
+                raw_transaction,
+                sender,
+            )
+            .await?;
 
-        let (object_changes, balance_changes) =
-            if opts.show_object_changes || opts.show_balance_changes {
-                match (&response.input_objects, &response.output_objects) {
-                    (Some(input_objects), Some(output_objects)) => {
-                        let object_changes = if opts.show_object_changes {
-                            let changes = compute_object_changes(
-                                sender,
-                                response.effects.effects.modified_at_versions(),
-                                response.effects.effects.all_changed_objects(),
-                                response.effects.effects.all_removed_objects(),
-                                input_objects,
-                                output_objects,
-                            );
-                            serialize_collection_to_bcs(changes.into_iter(), "Object change")?
-                        } else {
-                            vec![]
-                        };
+        // Serialize to JSON
+        let grpc_response = Self::serialize_response_to_json(&iota_response)?;
 
-                        let balance_changes = if opts.show_balance_changes {
-                            let changes = derive_balance_changes(input_objects, output_objects);
-                            serialize_collection_to_bcs(changes.into_iter(), "Balance change")?
-                        } else {
-                            vec![]
-                        };
-
-                        (object_changes, balance_changes)
-                    }
-                    _ => {
-                        debug!(
-                            "Cannot compute object/balance changes: missing input or output objects"
-                        );
-                        (vec![], vec![])
-                    }
-                }
-            } else {
-                (vec![], vec![])
-            };
-
-        let transaction = if opts.show_input {
-            transaction_block.map(|data| crate::common::BcsData { data })
-        } else {
-            None
-        };
-
-        let raw_transaction = if opts.show_raw_input {
-            Some(raw_transaction)
-        } else {
-            None
-        };
-
-        let effects = if opts.show_effects {
-            Some(serialize_to_bcs(&response.effects.effects, "Effects")?)
-        } else {
-            None
-        };
-
-        let raw_effects =
-            if opts.show_raw_effects {
-                Some(bcs::to_bytes(&response.effects.effects).map_err(|e| {
-                    Status::internal(format!("Raw effects serialization failed: {e}"))
-                })?)
-            } else {
-                None
-            };
-
-        let timestamp_ms = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_millis() as u64;
-
-        Ok(Response::new(ExecuteTransactionResponse {
-            digest: Some(crate::common::Digest {
-                digest: digest.into_inner().to_vec(),
-            }),
-            transaction,
-            raw_transaction,
-            effects,
-            events,
-            object_changes,
-            balance_changes,
-            timestamp_ms: Some(timestamp_ms),
-            confirmed_local_execution: Some(is_executed_locally),
-            checkpoint: None, // Same as JSON RPC execution API
-            errors: vec![],
-            raw_effects,
-        }))
+        debug!("Transaction executed successfully");
+        Ok(Response::new(grpc_response))
     }
 }
 

@@ -1,7 +1,8 @@
 // Copyright (c) 2025 IOTA Stiftung
 // SPDX-License-Identifier: Apache-2.0
 
-use tonic::transport::Channel;
+use iota_json_rpc_types::IotaTransactionBlockResponse;
+use tonic::{transport::Channel, Status};
 
 use crate::write::{
     ExecuteTransactionRequest, ExecuteTransactionResponse, write_service_client::WriteServiceClient,
@@ -31,13 +32,37 @@ impl WriteClient {
     ///   signatures, and options
     ///
     /// # Returns
-    /// ExecuteTransactionResponse containing transaction results, effects,
-    /// events, etc.
+    /// Result containing IotaTransactionBlockResponse (success) or
+    /// tonic::Status
     pub async fn execute_transaction(
         &mut self,
         request: ExecuteTransactionRequest,
-    ) -> Result<ExecuteTransactionResponse, tonic::Status> {
-        let response = self.client.execute_transaction(request).await?;
-        Ok(response.into_inner())
+    ) -> Result<IotaTransactionBlockResponse, tonic::Status> {
+        // Make gRPC call
+        let response = self
+            .client
+            .execute_transaction(request)
+            .await?;
+
+        let grpc_response = response.into_inner();
+
+        // Deserialize JSON response
+        Self::deserialize_response(&grpc_response)
+    }
+
+    /// Deserialize JSON response into IotaTransactionBlockResponse
+    fn deserialize_response(
+        response: &ExecuteTransactionResponse,
+    ) -> Result<IotaTransactionBlockResponse, Status> {
+        // Extract data from JsonData wrapper
+        let json_data = response
+            .json_data
+            .as_ref()
+            .ok_or_else(|| Status::internal("Missing json_data in response"))?;
+
+        // Deserialize directly from JSON - the service serializes
+        // IotaTransactionBlockResponse
+        serde_json::from_slice(&json_data.data)
+            .map_err(|e| Status::internal(format!("Failed to deserialize transaction response from JSON: {e}")))
     }
 }

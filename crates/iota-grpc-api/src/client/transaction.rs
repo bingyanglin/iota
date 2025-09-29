@@ -59,8 +59,14 @@ impl TransactionClient {
 
     /// Deserialize transaction effects from JSON-serialized data.
     fn deserialize_transaction(tx: &Transaction) -> anyhow::Result<IotaTransactionBlockEffects> {
+        // Extract data from JsonData wrapper
+        let json_data = tx
+            .json_data
+            .as_ref()
+            .ok_or_else(|| anyhow!("Missing json_data in transaction"))?;
+
         // Deserialize directly from JSON (much simpler than BCS)
-        serde_json::from_slice(&tx.json_data)
+        serde_json::from_slice(&json_data.data)
             .map_err(|e| anyhow!("Failed to deserialize transaction effects from JSON: {e}"))
     }
 }

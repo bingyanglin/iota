@@ -17,10 +17,8 @@ use tonic::{Request, Response, Status};
 use tracing::debug;
 
 use crate::{
-    conversions,
-    read::{GetObjectRequest, GetObjectResponse, ObjectData, read_service_server::ReadService},
+    read::{GetObjectRequest, GetObjectResponse, read_service_server::ReadService},
     types::GrpcReader,
-    utils::serialize_to_bcs,
 };
 
 pub struct ReadGrpcService {
@@ -76,61 +74,43 @@ impl ReadService for ReadGrpcService {
 
         let object_read_result = self.grpc_reader.get_object_read(&object_id);
 
-        // Handle ObjectRead
+        // Handle ObjectRead following JSON-RPC pattern (line 499-537)
         let grpc_response = match object_read_result {
-            Ok(object_read) => {
-                match object_read {
-                    ObjectRead::NotExists(id) => {
-                        // Object not found - create NotExists error
-                        let not_exists_error = IotaObjectResponseError::NotExists { object_id: id };
-                        GetObjectResponse {
-                            data: None,
-                            error: Some(conversions::iota_object_response_error_to_grpc(
-                                not_exists_error,
-                            )),
-                        }
-                    }
-                    ObjectRead::Deleted(object_ref) => {
-                        // Object was deleted - create Deleted error
-                        let deleted_error = IotaObjectResponseError::Deleted {
-                            object_id: object_ref.0,
-                            version: object_ref.1,
-                            digest: object_ref.2,
-                        };
-                        GetObjectResponse {
-                            data: None,
-                            error: Some(conversions::iota_object_response_error_to_grpc(
-                                deleted_error,
-                            )),
-                        }
-                    }
-                    ObjectRead::Exists(object_ref, object, layout) => {
-                        // Object exists - create successful response with layout
-                        create_object_data_response_with_layout(
-                            &self.grpc_reader,
-                            object_ref,
-                            object,
-                            layout,
-                            options,
-                        )
-                        .await?
+            Ok(object_read) => match object_read {
+                ObjectRead::NotExists(id) => {
+                    // Object not found - return error
+                    let error = IotaObjectResponseError::NotExists { object_id: id };
+                    serialize_error_to_json(error)?
+                }
+                ObjectRead::Deleted(object_ref) => {
+                    // Object was deleted - return error
+                    let error = IotaObjectResponseError::Deleted {
+                        object_id: object_ref.0,
+                        version: object_ref.1,
+                        digest: object_ref.2,
+                    };
+                    serialize_error_to_json(error)?
+                }
+                ObjectRead::Exists(object_ref, object, layout) => {
+                    // Object exists - create IotaObjectData
+                    match create_iota_object_data(
+                        &self.grpc_reader,
+                        object_ref,
+                        object,
+                        layout,
+                        options,
+                    )
+                    .await
+                    {
+                        Ok(data) => serialize_data_to_json(data)?,
+                        Err(display_error) => serialize_error_to_json(display_error)?,
                     }
                 }
-            }
-            Err(e) => {
-                // Convert storage/access errors to appropriate ObjectError
-                match e.downcast_ref::<iota_types::error::IotaError>() {
-                    Some(iota_error) => GetObjectResponse {
-                        data: None,
-                        error: Some(conversions::iota_error_to_grpc(iota_error.clone())),
-                    },
-                    None => {
-                        // For non-IotaError types, create an Unknown error
-                        return Err(Status::internal(format!(
-                            "Failed to get object from GrpcReader: {e}"
-                        )));
-                    }
-                }
+            },
+            Err(_e) => {
+                // Convert storage/access errors to appropriate IotaObjectResponseError
+                let error = IotaObjectResponseError::Unknown;
+                serialize_error_to_json(error)?
             }
         };
 
@@ -139,191 +119,60 @@ impl ReadService for ReadGrpcService {
     }
 }
 
-/// Helper function to create object data response with layout information
-async fn create_object_data_response_with_layout(
+/// Serialize success data to JSON (matches IotaObjectResponse::new_with_data)
+fn serialize_data_to_json(data: IotaObjectData) -> Result<GetObjectResponse, Status> {
+    let json_data = serde_json::to_vec(&data)
+        .map_err(|e| Status::internal(format!("Failed to serialize object data to JSON: {e}")))?;
+
+    Ok(GetObjectResponse {
+        json_data: Some(crate::common::JsonData { data: json_data }),
+        json_error: None,
+    })
+}
+
+/// Serialize error to JSON (matches IotaObjectResponse::new_with_error)
+fn serialize_error_to_json(error: IotaObjectResponseError) -> Result<GetObjectResponse, Status> {
+    let error_data = serde_json::to_vec(&error)
+        .map_err(|e| Status::internal(format!("Failed to serialize error to JSON: {e}")))?;
+
+    Ok(GetObjectResponse {
+        json_data: None,
+        json_error: Some(crate::common::JsonData { data: error_data }),
+    })
+}
+
+/// Create IotaObjectData from ObjectRead::Exists case
+async fn create_iota_object_data(
     grpc_reader: &Arc<crate::types::GrpcReader>,
     object_ref: iota_types::base_types::ObjectRef,
     object: Object,
     layout: Option<MoveStructLayout>,
     options: Option<IotaObjectDataOptions>,
-) -> Result<GetObjectResponse, Status> {
+) -> Result<IotaObjectData, IotaObjectResponseError> {
     // Handle display fields computation with proper error handling
-    if options.as_ref().map(|o| o.show_display).unwrap_or(false) {
+    let display_fields = if options.as_ref().map(|o| o.show_display).unwrap_or(false) {
         match get_display_fields(grpc_reader, &object, &layout).await {
-            Ok(rendered_fields) => {
-                // Success: create response with display fields
-                return create_object_response_with_display_fields(
-                    object_ref,
-                    object,
-                    layout,
-                    options,
-                    Some(rendered_fields),
-                );
-            }
-            Err(e) => {
-                // Display error: return response with display error
-                debug!("Display fields computation failed: {e}");
-                let display_error = IotaObjectResponseError::Display {
-                    error: e.to_string(),
-                };
-                return Ok(GetObjectResponse {
-                    data: Some(create_object_data_without_display(
-                        object_ref, object, layout, options,
-                    )?),
-                    error: Some(conversions::iota_object_response_error_to_grpc(
-                        display_error,
-                    )),
+            Ok(rendered_fields) => Some(rendered_fields),
+            Err(_) => {
+                // Display error: return it as an error
+                return Err(IotaObjectResponseError::Display {
+                    error: "Failed to compute display fields".to_string(),
                 });
             }
         }
-    }
+    } else {
+        None
+    };
 
-    // No display fields requested: create response without display fields
-    create_object_response_with_display_fields(object_ref, object, layout, options, None)
-}
-
-/// Helper function to create object response with optional display fields
-fn create_object_response_with_display_fields(
-    object_ref: iota_types::base_types::ObjectRef,
-    object: Object,
-    layout: Option<MoveStructLayout>,
-    options: Option<IotaObjectDataOptions>,
-    display_fields: Option<DisplayFieldsResponse>,
-) -> Result<GetObjectResponse, Status> {
-    let data = IotaObjectData::new(
+    // Create IotaObjectData using the same logic as JSON RPC
+    IotaObjectData::new(
         object_ref,
         object,
         layout,
-        options.clone().unwrap_or_default(),
+        options.unwrap_or_default(),
         display_fields,
     )
-    .map_err(|e| Status::internal(format!("Failed to create IotaObjectData: {e}")))?;
-
-    // Convert optional fields based on request options
-    let opts = options.as_ref();
-
-    let display = if opts.map(|o| o.show_display).unwrap_or(false) && data.display.is_some() {
-        Some(serialize_to_bcs(&data.display, "Display")?)
-    } else {
-        None
-    };
-
-    let content = if opts.map(|o| o.show_content).unwrap_or(false) && data.content.is_some() {
-        Some(serialize_to_bcs(&data.content, "Content")?)
-    } else {
-        None
-    };
-
-    let bcs = if opts.map(|o| o.show_bcs).unwrap_or(false) && data.bcs.is_some() {
-        Some(serialize_to_bcs(&data.bcs, "BCS data")?)
-    } else {
-        None
-    };
-
-    Ok(GetObjectResponse {
-        data: Some(ObjectData {
-            object_id: Some(crate::common::Address {
-                address: data.object_id.into_bytes().to_vec(),
-            }),
-            version: data.version.value(),
-            digest: Some(crate::common::Digest {
-                digest: data.digest.into_inner().to_vec(),
-            }),
-            object_type: if opts.map(|o| o.show_type).unwrap_or(false) {
-                data.type_.map(|t| t.to_string())
-            } else {
-                None
-            },
-            owner: if opts.map(|o| o.show_owner).unwrap_or(false) {
-                data.owner.map(|o| o.to_string())
-            } else {
-                None
-            },
-            previous_transaction: if opts.map(|o| o.show_previous_transaction).unwrap_or(false) {
-                data.previous_transaction.map(|tx| crate::common::Digest {
-                    digest: tx.into_inner().to_vec(),
-                })
-            } else {
-                None
-            },
-            storage_rebate: if opts.map(|o| o.show_storage_rebate).unwrap_or(false) {
-                data.storage_rebate
-            } else {
-                None
-            },
-            display,
-            content,
-            bcs,
-        }),
-        error: None,
-    })
-}
-
-/// Helper function to create object data without display fields for error cases
-fn create_object_data_without_display(
-    object_ref: iota_types::base_types::ObjectRef,
-    object: Object,
-    layout: Option<MoveStructLayout>,
-    options: Option<IotaObjectDataOptions>,
-) -> Result<ObjectData, Status> {
-    let data = IotaObjectData::new(
-        object_ref,
-        object,
-        layout,
-        options.clone().unwrap_or_default(),
-        None, // No display fields
-    )
-    .map_err(|e| Status::internal(format!("Failed to create IotaObjectData: {e}")))?;
-
-    // Convert optional fields based on request options
-    let opts = options.as_ref();
-
-    let content = if opts.map(|o| o.show_content).unwrap_or(false) && data.content.is_some() {
-        Some(serialize_to_bcs(&data.content, "Content")?)
-    } else {
-        None
-    };
-
-    let bcs = if opts.map(|o| o.show_bcs).unwrap_or(false) && data.bcs.is_some() {
-        Some(serialize_to_bcs(&data.bcs, "BCS data")?)
-    } else {
-        None
-    };
-
-    Ok(ObjectData {
-        object_id: Some(crate::common::Address {
-            address: data.object_id.into_bytes().to_vec(),
-        }),
-        version: data.version.value(),
-        digest: Some(crate::common::Digest {
-            digest: data.digest.into_inner().to_vec(),
-        }),
-        object_type: if opts.map(|o| o.show_type).unwrap_or(false) {
-            data.type_.map(|t| t.to_string())
-        } else {
-            None
-        },
-        owner: if opts.map(|o| o.show_owner).unwrap_or(false) {
-            data.owner.map(|o| o.to_string())
-        } else {
-            None
-        },
-        previous_transaction: if opts.map(|o| o.show_previous_transaction).unwrap_or(false) {
-            data.previous_transaction.map(|tx| crate::common::Digest {
-                digest: tx.into_inner().to_vec(),
-            })
-        } else {
-            None
-        },
-        storage_rebate: if opts.map(|o| o.show_storage_rebate).unwrap_or(false) {
-            data.storage_rebate
-        } else {
-            None
-        },
-        display: None, // Never include display for error cases
-        content,
-        bcs,
-    })
+    .map_err(|_e| IotaObjectResponseError::Unknown)
 }
 
 /// Get display fields for an object

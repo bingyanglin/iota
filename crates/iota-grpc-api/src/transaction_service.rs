@@ -272,10 +272,12 @@ fn parse_iota_address(
 // Conversion from JSON-RPC types to gRPC protobuf using JSON serialization
 impl From<&iota_json_rpc_types::IotaTransactionBlockEffects> for Transaction {
     fn from(effects: &iota_json_rpc_types::IotaTransactionBlockEffects) -> Self {
-        // Serialize JSON-RPC effects directly to JSON (much simpler than BCS)
-        let json_data = serde_json::to_vec(effects)
+        // Serialize JSON-RPC effects directly to JSON
+        let data = serde_json::to_vec(effects)
             .expect("IotaTransactionBlockEffects should always serialize to JSON");
 
-        Transaction { json_data }
+        Transaction {
+            json_data: Some(crate::common::JsonData { data }),
+        }
     }
 }

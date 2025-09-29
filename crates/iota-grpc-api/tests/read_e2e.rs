@@ -4,12 +4,8 @@
 use std::time::Duration;
 
 use iota_config::local_ip_utils;
-use iota_grpc_api::{
-    client::NodeClient,
-    common::Address,
-    conversions,
-    read::{GetObjectRequest, ObjectDataOptions},
-};
+use iota_grpc_api::client::NodeClient;
+use iota_json_rpc_types::IotaObjectDataOptions;
 use iota_types::{base_types::ObjectID, error::IotaObjectResponseError};
 use test_cluster::{TestCluster, TestClusterBuilder};
 
@@ -54,61 +50,54 @@ async fn test_read_service_get_object() {
     let gas_object = &owned_objects[0];
 
     let object_id = gas_object.data.as_ref().unwrap().object_id;
-    let object_id_bytes: [u8; 32] = object_id.into_bytes();
 
     // Test getting the object via ReadService
     let mut read_client = node_client
         .read_client()
         .expect("Read client should be available");
 
-    let request = GetObjectRequest {
-        object_id: Some(Address {
-            address: object_id_bytes.to_vec(),
-        }),
-        options: Some(ObjectDataOptions {
-            show_type: true,
-            show_owner: true,
-            show_previous_transaction: false,
-            show_display: false,
-            show_content: false,
-            show_bcs: false,
-            show_storage_rebate: false,
-        }),
-    };
+    let options = Some(IotaObjectDataOptions {
+        show_type: true,
+        show_owner: true,
+        show_previous_transaction: false,
+        show_display: false,
+        show_content: false,
+        show_bcs: false,
+        show_storage_rebate: false,
+    });
 
-    let grpc_response =
-        tokio::time::timeout(Duration::from_secs(30), read_client.get_object(request))
-            .await
-            .expect("timeout waiting for object")
-            .expect("ReadService get_object should work");
+    let response = tokio::time::timeout(
+        Duration::from_secs(30),
+        read_client.get_object(object_id, options),
+    )
+    .await
+    .expect("timeout waiting for object")
+    .expect("ReadService get_object should work");
 
-    // Verify ReadService get_object works correctly - test gRPC response directly
-    assert!(
-        grpc_response.data.is_some(),
-        "Expected object data, got None"
-    );
-    assert!(
-        grpc_response.error.is_none(),
-        "Expected no error, got error"
-    );
+    // Verify ReadService get_object works correctly
+    assert!(response.data.is_some(), "Should have data");
+    assert!(response.error.is_none(), "Should not have error");
+    let iota_object_data = response.data.unwrap();
 
-    let data = grpc_response.data.unwrap();
     let expected_object_ref = gas_object.data.as_ref().unwrap().object_ref();
 
-    // Verify object ID matches using existing conversion utility
-    let actual_object_id = conversions::grpc_address_to_object_id(data.object_id.clone())
-        .expect("Should be able to convert gRPC address to ObjectID");
+    // Verify object matches expected data
     assert_eq!(
-        actual_object_id, expected_object_ref.0,
+        iota_object_data.object_id, expected_object_ref.0,
         "Object ID should match"
     );
     assert_eq!(
-        data.version,
-        expected_object_ref.1.value(),
+        iota_object_data.version, expected_object_ref.1,
         "Version should match"
     );
-    assert!(data.object_type.is_some(), "Object type should be present");
-    assert!(data.owner.is_some(), "Object owner should be present");
+    assert!(
+        iota_object_data.type_.is_some(),
+        "Object type should be present"
+    );
+    assert!(
+        iota_object_data.owner.is_some(),
+        "Object owner should be present"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -123,42 +112,29 @@ async fn test_read_service_nonexistent_object() {
         .read_client()
         .expect("Read client should be available");
 
-    let request = GetObjectRequest {
-        object_id: Some(Address {
-            address: nonexistent_object_id.to_vec(),
-        }),
-        options: Some(ObjectDataOptions {
-            show_type: true,
-            show_owner: true,
-            show_previous_transaction: false,
-            show_display: false,
-            show_content: false,
-            show_bcs: false,
-            show_storage_rebate: false,
-        }),
-    };
+    let nonexistent_id = ObjectID::from_bytes(nonexistent_object_id).unwrap();
+    let options = Some(IotaObjectDataOptions {
+        show_type: true,
+        show_owner: true,
+        show_previous_transaction: false,
+        show_display: false,
+        show_content: false,
+        show_bcs: false,
+        show_storage_rebate: false,
+    });
 
-    let grpc_response =
-        tokio::time::timeout(Duration::from_secs(30), read_client.get_object(request))
-            .await
-            .expect("timeout waiting for object")
-            .expect("ReadService get_object should work");
+    let response = tokio::time::timeout(
+        Duration::from_secs(30),
+        read_client.get_object(nonexistent_id, options),
+    )
+    .await
+    .expect("timeout waiting for object")
+    .expect("ReadService get_object should work");
 
-    // Verify ReadService returns proper error for non-existent object - test gRPC
-    // response directly
-    assert!(
-        grpc_response.data.is_none(),
-        "Expected no data for non-existent object"
-    );
-    assert!(
-        grpc_response.error.is_some(),
-        "Expected error for non-existent object"
-    );
-
-    // Convert gRPC error back to verify it's the correct type using existing
-    // conversion
-    let iota_error = conversions::grpc_to_iota_object_response_error(grpc_response.error.unwrap())
-        .expect("Should be able to convert gRPC error");
+    // Verify ReadService returns proper error for non-existent object
+    assert!(response.data.is_none(), "Should not have data");
+    assert!(response.error.is_some(), "Should have error");
+    let iota_error = response.error.unwrap();
 
     match iota_error {
         IotaObjectResponseError::NotExists { object_id } => {

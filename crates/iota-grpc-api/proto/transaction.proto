@@ -19,7 +19,7 @@ message TransactionStreamRequest {
 
 // Transaction data
 message Transaction {
-  bytes json_data = 1;  // JSON-serialized IotaTransactionBlockEffects
+  iota.grpc.common.JsonData json_data = 1;  // JSON-serialized IotaTransactionBlockEffects
 }
 
 // Rich transaction filter that supports gRPC transaction filtering

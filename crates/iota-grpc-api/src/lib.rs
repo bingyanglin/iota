@@ -29,7 +29,6 @@ pub mod transactions {
 // Modules
 pub mod checkpoint_service;
 pub mod client;
-pub mod conversions;
 pub mod event_service;
 pub mod read_service;
 pub mod server;
