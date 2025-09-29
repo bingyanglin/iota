@@ -20,6 +20,7 @@ use crate::{
     conversions,
     read::{GetObjectRequest, GetObjectResponse, ObjectData, read_service_server::ReadService},
     types::GrpcReader,
+    utils::serialize_to_bcs,
 };
 
 pub struct ReadGrpcService {
@@ -146,27 +147,55 @@ async fn create_object_data_response_with_layout(
     layout: Option<MoveStructLayout>,
     options: Option<IotaObjectDataOptions>,
 ) -> Result<GetObjectResponse, Status> {
-    // Create IotaObjectData with layout information
-    let display_fields = if options.as_ref().map(|o| o.show_display).unwrap_or(false) {
-        // Use full display fields computation
+    // Handle display fields computation with proper error handling
+    if options.as_ref().map(|o| o.show_display).unwrap_or(false) {
         match get_display_fields(grpc_reader, &object, &layout).await {
-            Ok(rendered_fields) => Some(rendered_fields),
+            Ok(rendered_fields) => {
+                // Success: create response with display fields
+                return create_object_response_with_display_fields(
+                    object_ref,
+                    object,
+                    layout,
+                    options,
+                    Some(rendered_fields),
+                );
+            }
             Err(e) => {
-                // Log the error but don't fail the request - graceful fallback
-                debug!("Failed to compute display fields: {e}");
-                None
+                // Display error: return response with display error
+                debug!("Display fields computation failed: {e}");
+                let display_error = IotaObjectResponseError::Display {
+                    error: e.to_string(),
+                };
+                return Ok(GetObjectResponse {
+                    data: Some(create_object_data_without_display(
+                        object_ref, object, layout, options,
+                    )?),
+                    error: Some(conversions::iota_object_response_error_to_grpc(
+                        display_error,
+                    )),
+                });
             }
         }
-    } else {
-        None
-    };
+    }
 
+    // No display fields requested: create response without display fields
+    create_object_response_with_display_fields(object_ref, object, layout, options, None)
+}
+
+/// Helper function to create object response with optional display fields
+fn create_object_response_with_display_fields(
+    object_ref: iota_types::base_types::ObjectRef,
+    object: Object,
+    layout: Option<MoveStructLayout>,
+    options: Option<IotaObjectDataOptions>,
+    display_fields: Option<DisplayFieldsResponse>,
+) -> Result<GetObjectResponse, Status> {
     let data = IotaObjectData::new(
         object_ref,
         object,
-        layout, // Use the layout from ObjectRead
+        layout,
         options.clone().unwrap_or_default(),
-        display_fields, // Display fields computation
+        display_fields,
     )
     .map_err(|e| Status::internal(format!("Failed to create IotaObjectData: {e}")))?;
 
@@ -230,13 +259,71 @@ async fn create_object_data_response_with_layout(
     })
 }
 
-/// Helper function to serialize data to BCS and handle errors consistently
-fn serialize_to_bcs<T: serde::Serialize>(
-    data: &T,
-    context: &str,
-) -> Result<crate::common::BcsData, Status> {
-    crate::common::BcsData::serialize_from(data)
-        .map_err(|e| Status::internal(format!("{context} BCS serialization failed: {e}")))
+/// Helper function to create object data without display fields for error cases
+fn create_object_data_without_display(
+    object_ref: iota_types::base_types::ObjectRef,
+    object: Object,
+    layout: Option<MoveStructLayout>,
+    options: Option<IotaObjectDataOptions>,
+) -> Result<ObjectData, Status> {
+    let data = IotaObjectData::new(
+        object_ref,
+        object,
+        layout,
+        options.clone().unwrap_or_default(),
+        None, // No display fields
+    )
+    .map_err(|e| Status::internal(format!("Failed to create IotaObjectData: {e}")))?;
+
+    // Convert optional fields based on request options
+    let opts = options.as_ref();
+
+    let content = if opts.map(|o| o.show_content).unwrap_or(false) && data.content.is_some() {
+        Some(serialize_to_bcs(&data.content, "Content")?)
+    } else {
+        None
+    };
+
+    let bcs = if opts.map(|o| o.show_bcs).unwrap_or(false) && data.bcs.is_some() {
+        Some(serialize_to_bcs(&data.bcs, "BCS data")?)
+    } else {
+        None
+    };
+
+    Ok(ObjectData {
+        object_id: Some(crate::common::Address {
+            address: data.object_id.into_bytes().to_vec(),
+        }),
+        version: data.version.value(),
+        digest: Some(crate::common::Digest {
+            digest: data.digest.into_inner().to_vec(),
+        }),
+        object_type: if opts.map(|o| o.show_type).unwrap_or(false) {
+            data.type_.map(|t| t.to_string())
+        } else {
+            None
+        },
+        owner: if opts.map(|o| o.show_owner).unwrap_or(false) {
+            data.owner.map(|o| o.to_string())
+        } else {
+            None
+        },
+        previous_transaction: if opts.map(|o| o.show_previous_transaction).unwrap_or(false) {
+            data.previous_transaction.map(|tx| crate::common::Digest {
+                digest: tx.into_inner().to_vec(),
+            })
+        } else {
+            None
+        },
+        storage_rebate: if opts.map(|o| o.show_storage_rebate).unwrap_or(false) {
+            data.storage_rebate
+        } else {
+            None
+        },
+        display: None, // Never include display for error cases
+        content,
+        bcs,
+    })
 }
 
 /// Get display fields for an object

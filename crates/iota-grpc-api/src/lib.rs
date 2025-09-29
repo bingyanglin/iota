@@ -35,6 +35,7 @@ pub mod read_service;
 pub mod server;
 pub mod transaction_service;
 pub mod types;
+pub mod utils;
 pub mod write_service;
 
 // Re-export commonly used types and traits

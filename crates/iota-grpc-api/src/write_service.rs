@@ -26,6 +26,7 @@ use tracing::debug;
 
 use crate::{
     GrpcReader,
+    utils::{convert_bytes, serialize_collection_to_bcs, serialize_to_bcs},
     write::{
         ExecuteTransactionRequest, ExecuteTransactionResponse, TransactionResponseOptions,
         write_service_server::WriteService,
@@ -52,8 +53,7 @@ impl WriteGrpcService {
 
     /// Convert bytes to any deserializable type
     fn convert_bytes<T: serde::de::DeserializeOwned>(&self, tx_bytes: &[u8]) -> Result<T, Status> {
-        bcs::from_bytes(tx_bytes)
-            .map_err(|e| Status::invalid_argument(format!("Failed to deserialize: {e}")))
+        convert_bytes(tx_bytes)
     }
 
     /// Prepare transaction request
@@ -312,25 +312,6 @@ impl WriteService for WriteGrpcService {
         )
         .await
     }
-}
-
-/// Helper function to serialize data to BCS and handle errors consistently
-fn serialize_to_bcs<T: serde::Serialize>(
-    data: &T,
-    context: &str,
-) -> Result<crate::common::BcsData, Status> {
-    crate::common::BcsData::serialize_from(data)
-        .map_err(|e| Status::internal(format!("{context} BCS serialization failed: {e}")))
-}
-
-/// Helper function to convert a collection to BCS serialized Vec
-fn serialize_collection_to_bcs<T: serde::Serialize>(
-    items: impl Iterator<Item = T>,
-    context: &str,
-) -> Result<Vec<crate::common::BcsData>, Status> {
-    items
-        .map(|item| serialize_to_bcs(&item, context))
-        .collect::<Result<Vec<_>, _>>()
 }
 
 /// Extract coins from objects
