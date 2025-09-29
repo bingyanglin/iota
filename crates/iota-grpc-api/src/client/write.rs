@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use iota_json_rpc_types::IotaTransactionBlockResponse;
-use tonic::{transport::Channel, Status};
+use tonic::{Status, transport::Channel};
 
 use crate::write::{
     ExecuteTransactionRequest, ExecuteTransactionResponse, write_service_client::WriteServiceClient,
@@ -39,10 +39,7 @@ impl WriteClient {
         request: ExecuteTransactionRequest,
     ) -> Result<IotaTransactionBlockResponse, tonic::Status> {
         // Make gRPC call
-        let response = self
-            .client
-            .execute_transaction(request)
-            .await?;
+        let response = self.client.execute_transaction(request).await?;
 
         let grpc_response = response.into_inner();
 
@@ -62,7 +59,10 @@ impl WriteClient {
 
         // Deserialize directly from JSON - the service serializes
         // IotaTransactionBlockResponse
-        serde_json::from_slice(&json_data.data)
-            .map_err(|e| Status::internal(format!("Failed to deserialize transaction response from JSON: {e}")))
+        serde_json::from_slice(&json_data.data).map_err(|e| {
+            Status::internal(format!(
+                "Failed to deserialize transaction response from JSON: {e}"
+            ))
+        })
     }
 }

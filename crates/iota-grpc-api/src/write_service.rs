@@ -8,7 +8,8 @@ use iota_core::{
     authority_client::NetworkAuthorityClient, transaction_orchestrator::TransactionOrchestrator,
 };
 use iota_json_rpc_types::{
-    BalanceChange, IotaTransactionBlock, IotaTransactionBlockEvents, IotaTransactionBlockResponse, ObjectChange,
+    BalanceChange, IotaTransactionBlock, IotaTransactionBlockEvents, IotaTransactionBlockResponse,
+    ObjectChange,
 };
 use iota_types::{
     base_types::{IotaAddress, ObjectID, ObjectRef, SequenceNumber},
@@ -193,7 +194,11 @@ impl WriteGrpcService {
         let effects = if opts.show_effects {
             // Convert TransactionEffects to IotaTransactionBlockEffects
             Some(
-                response.effects.effects.clone().try_into()
+                response
+                    .effects
+                    .effects
+                    .clone()
+                    .try_into()
                     .map_err(|e| Status::internal(format!("Failed to convert effects: {e}")))?,
             )
         } else {
@@ -239,7 +244,6 @@ impl WriteGrpcService {
         } else {
             None
         };
-
 
         let (object_changes, balance_changes) =
             if opts.show_object_changes || opts.show_balance_changes {

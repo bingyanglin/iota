@@ -3,7 +3,7 @@
 
 use iota_json_rpc_types::{IotaObjectData, IotaObjectDataOptions, IotaObjectResponse};
 use iota_types::{base_types::ObjectID, error::IotaObjectResponseError};
-use tonic::{transport::Channel, Status};
+use tonic::{Status, transport::Channel};
 
 use crate::{
     common::Address,
@@ -57,10 +57,7 @@ impl ReadClient {
         };
 
         // Make gRPC call
-        let response = self
-            .client
-            .get_object(grpc_request)
-            .await?;
+        let response = self.client.get_object(grpc_request).await?;
 
         let grpc_response = response.into_inner();
 
@@ -75,13 +72,17 @@ impl ReadClient {
         // Check for success data first
         if let Some(data_wrapper) = &response.json_data {
             // Deserialize success data
-            let object_data: IotaObjectData = serde_json::from_slice(&data_wrapper.data)
-                .map_err(|e| Status::internal(format!("Failed to deserialize object data from JSON: {e}")))?;
+            let object_data: IotaObjectData =
+                serde_json::from_slice(&data_wrapper.data).map_err(|e| {
+                    Status::internal(format!("Failed to deserialize object data from JSON: {e}"))
+                })?;
             Ok(IotaObjectResponse::new_with_data(object_data))
         } else if let Some(error_wrapper) = &response.json_error {
             // Deserialize error
             let error: IotaObjectResponseError = serde_json::from_slice(&error_wrapper.data)
-                .map_err(|e| Status::internal(format!("Failed to deserialize error from JSON: {e}")))?;
+                .map_err(|e| {
+                    Status::internal(format!("Failed to deserialize error from JSON: {e}"))
+                })?;
             Ok(IotaObjectResponse::new_with_error(error))
         } else {
             Err(Status::internal("Response contains neither data nor error"))

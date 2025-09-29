@@ -234,17 +234,7 @@ fn parse_object_id(
     let address = address
         .as_ref()
         .ok_or_else(|| Status::invalid_argument(format!("{field_name} is required")))?;
-
-    if address.address.len() != 32 {
-        return Err(Status::invalid_argument(format!(
-            "{field_name} must be 32 bytes, got {}",
-            address.address.len()
-        )));
-    }
-
-    let mut bytes = [0u8; 32];
-    bytes.copy_from_slice(&address.address);
-    ObjectID::from_bytes(bytes)
+    ObjectID::from_bytes(&address.address)
         .map_err(|e| Status::invalid_argument(format!("Invalid {field_name}: {e}")))
 }
 
@@ -255,17 +245,7 @@ fn parse_iota_address(
     let address = address
         .as_ref()
         .ok_or_else(|| Status::invalid_argument(format!("{field_name} is required")))?;
-
-    if address.address.len() != 32 {
-        return Err(Status::invalid_argument(format!(
-            "{field_name} must be 32 bytes, got {}",
-            address.address.len()
-        )));
-    }
-
-    let mut bytes = [0u8; 32];
-    bytes.copy_from_slice(&address.address);
-    IotaAddress::from_bytes(bytes)
+    IotaAddress::from_bytes(&address.address)
         .map_err(|e| Status::invalid_argument(format!("Invalid {field_name}: {e}")))
 }
 
