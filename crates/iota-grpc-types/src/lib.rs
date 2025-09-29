@@ -9,6 +9,12 @@
 
 use serde::{Deserialize, Serialize};
 
+/// Forward-compatible versioned transaction effects for gRPC streaming.
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub enum TransactionEffects {
+    V1(iota_types::effects::TransactionEffects),
+}
+
 /// Forward-compatible versioned checkpoint data for gRPC streaming.
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub enum CheckpointData {
@@ -32,6 +38,23 @@ impl From<iota_types::messages_checkpoint::CertifiedCheckpointSummary>
 {
     fn from(summary: iota_types::messages_checkpoint::CertifiedCheckpointSummary) -> Self {
         Self::V1(summary)
+    }
+}
+
+impl TransactionEffects {
+    /// Extract the V1 transaction effects, returning None for unknown versions
+    pub fn into_v1(self) -> Option<iota_types::effects::TransactionEffects> {
+        match self {
+            Self::V1(effects) => Some(effects),
+        }
+    }
+
+    /// Get a reference to the V1 transaction effects, returning None for
+    /// unknown versions
+    pub fn as_v1(&self) -> Option<&iota_types::effects::TransactionEffects> {
+        match self {
+            Self::V1(effects) => Some(effects),
+        }
     }
 }
 

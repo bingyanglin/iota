@@ -1,0 +1,35 @@
+// Copyright (c) 2025 IOTA Stiftung
+// SPDX-License-Identifier: Apache-2.0
+
+syntax = "proto3";
+
+package iota.grpc.read;
+
+import "common.proto";
+
+service ReadService {
+  rpc GetObject (GetObjectRequest) returns (GetObjectResponse);
+}
+
+// GetObject
+message GetObjectRequest {
+  // The ID of the queried object
+  iota.grpc.common.Address object_id = 1;
+  // Options for specifying the content to be returned
+  optional ObjectDataOptions options = 2;
+}
+
+message ObjectDataOptions {
+  bool show_type = 1;
+  bool show_owner = 2;
+  bool show_previous_transaction = 3;
+  bool show_display = 4;
+  bool show_content = 5;
+  bool show_bcs = 6;
+  bool show_storage_rebate = 7;
+}
+
+message GetObjectResponse {
+  optional string json_data = 1;   // JSON-serialized IotaObjectData (success)
+  optional string json_error = 2;  // JSON-serialized IotaObjectResponseError (error)
+}

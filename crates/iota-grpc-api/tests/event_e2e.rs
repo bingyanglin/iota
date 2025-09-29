@@ -4,15 +4,17 @@
 use std::time::Duration;
 
 use futures::StreamExt;
-use iota_config::local_ip_utils;
 use iota_grpc_api::{
-    client::{EventClient, NodeClient},
-    common::Address,
-    events::{AllFilter, EventFilter, MoveEventTypeFilter, SenderFilter, event_filter::Filter},
+    client::EventClient,
+    common::{Address, AddressFilter, AllFilter, MoveEventTypeFilter},
+    events::{EventFilter, event_filter::Filter},
 };
 use iota_types::{base_types::ObjectID, effects::TransactionEffectsAPI, transaction::CallArg};
-use test_cluster::{TestCluster, TestClusterBuilder};
+use test_cluster::TestCluster;
 use tokio::time::timeout;
+
+mod utils;
+use utils::setup_test_cluster_and_client;
 
 // Test constants for Move packages and contracts
 const NFT_PACKAGE: &str = "nft";
@@ -30,22 +32,9 @@ const CREATOR_FIELD: &str = "creator";
 const NAME_FIELD: &str = "name";
 
 async fn setup_test_cluster() -> (TestCluster, EventClient, ObjectID, ObjectID) {
-    let localhost = local_ip_utils::localhost_for_testing();
-    let grpc_port = local_ip_utils::get_available_port(&localhost);
-    let grpc_addr = format!("{localhost}:{grpc_port}");
+    let (cluster, node_client) = setup_test_cluster_and_client().await;
 
-    let cluster = TestClusterBuilder::new()
-        .with_fullnode_grpc_api_address(grpc_addr.parse().expect("Invalid gRPC address"))
-        .disable_fullnode_pruning()
-        .with_num_validators(1)
-        .build()
-        .await;
-
-    let client = NodeClient::connect(&format!("http://{grpc_addr}"))
-        .await
-        .expect("Failed to connect to gRPC");
-
-    let event_client = client
+    let event_client = node_client
         .event_client()
         .expect("Event client should be available");
 
@@ -113,8 +102,8 @@ async fn test_event_filtering_and_bcs_serialization() {
     // Client 2: SenderFilter - should receive only events from sender_1
     let mut sender_client = event_client.clone();
     let sender_filter = EventFilter {
-        filter: Some(Filter::Sender(SenderFilter {
-            sender: Some(Address {
+        filter: Some(Filter::Sender(AddressFilter {
+            address: Some(Address {
                 address: sender_1.to_vec(),
             }),
         })),

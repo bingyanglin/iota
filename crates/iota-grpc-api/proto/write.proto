@@ -1,0 +1,50 @@
+// Copyright (c) 2025 IOTA Stiftung
+// SPDX-License-Identifier: Apache-2.0
+
+syntax = "proto3";
+
+package iota.grpc.write;
+
+import "common.proto";
+
+service WriteService {
+  rpc ExecuteTransaction (ExecuteTransactionRequest) returns (ExecuteTransactionResponse);
+}
+
+// ExecuteTransaction
+message ExecuteTransactionRequest {
+  // BCS serialized transaction data bytes
+  bytes tx_bytes = 1;
+  // List of signatures
+  repeated bytes signatures = 2;
+  // Options for specifying the content to be returned
+  optional TransactionResponseOptions options = 3;
+  // The request type
+  optional ExecuteTransactionRequestType request_type = 4;
+}
+
+message TransactionResponseOptions {
+  ///Whether to show transaction input data
+  bool show_input = 1;
+  /// Whether to show bcs-encoded transaction input data
+  bool show_raw_input = 2;
+  // Whether to show transaction effects
+  bool show_effects = 3;
+  // Whether to show transaction events
+  bool show_events = 4;
+  // Whether to show object changes
+  bool show_object_changes = 5;
+  // Whether to show balance changes
+  bool show_balance_changes = 6;
+  // Whether to show raw transaction effects
+  bool show_raw_effects = 7;
+}
+
+enum ExecuteTransactionRequestType {
+  WAIT_FOR_EFFECTS_CERT = 0;
+  WAIT_FOR_LOCAL_EXECUTION = 1;
+}
+
+message ExecuteTransactionResponse {
+  string json_data = 1;  // JSON-serialized IotaTransactionBlockResponse
+}

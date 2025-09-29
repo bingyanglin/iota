@@ -4,14 +4,17 @@
 use std::sync::Arc;
 
 use anyhow::Result;
+use iota_core::authority::{AuthorityState, authority_per_epoch_store::AuthorityPerEpochStore};
 use iota_grpc_types::{
     CertifiedCheckpointSummary as GrpcCertifiedCheckpointSummary,
     CheckpointData as GrpcCheckpointData,
 };
-use iota_json_rpc_types::{EventFilter, IotaEvent};
+use iota_storage::key_value_store::TransactionKeyValueStore;
 use iota_types::{
+    base_types::ObjectID,
     full_checkpoint_content::CheckpointData,
     messages_checkpoint::CertifiedCheckpointSummary,
+    object::{Object, ObjectRead},
     storage::{RestStateReader, error::Kind},
 };
 use serde::{Deserialize, Serialize};
@@ -20,7 +23,7 @@ use tokio_util::sync::CancellationToken;
 use tonic::Status;
 use tracing::debug;
 
-use crate::{checkpoint::Checkpoint, common::BcsData};
+use crate::{checkpoints::Checkpoint, common::BcsData};
 
 /// Trait for broadcasting checkpoint summaries
 pub trait CheckpointSummaryBroadcaster {
@@ -30,15 +33,6 @@ pub trait CheckpointSummaryBroadcaster {
 /// Trait for broadcasting checkpoint data
 pub trait CheckpointDataBroadcaster {
     fn send(&self, data: &CheckpointData) -> anyhow::Result<()>;
-}
-
-/// Trait for subscribing to event streams (used by gRPC service)
-pub trait EventSubscriber: Send + Sync {
-    /// Subscribe to events with the given filter
-    fn subscribe_events(
-        &self,
-        filter: iota_json_rpc_types::EventFilter,
-    ) -> Box<dyn futures::Stream<Item = IotaEvent> + Send + Unpin>;
 }
 
 /// Wrapper that converts native CertifiedCheckpointSummary to gRPC type before
@@ -174,17 +168,6 @@ impl CheckpointDataBroadcaster for () {
     }
 }
 
-/// No-op implementation for unit type (used in tests and when event
-/// subscription is not needed)
-impl EventSubscriber for () {
-    fn subscribe_events(
-        &self,
-        _filter: EventFilter,
-    ) -> Box<dyn futures::Stream<Item = IotaEvent> + Send + Unpin> {
-        Box::new(Box::pin(futures::stream::empty()))
-    }
-}
-
 impl BcsData {
     pub fn serialize_from<T>(data: &T) -> Result<Self, bcs::Error>
     where
@@ -210,7 +193,7 @@ pub type CheckpointStreamResult = Result<Checkpoint, Status>;
 // making it easier to implement gRPC services with different storage types
 // (e.g., production database vs simulacrum for testing).
 
-/// Trait for reading checkpoint data from storage
+/// Trait for reading data from storage
 pub trait GrpcStateReader: Send + Sync + 'static {
     /// Get the latest checkpoint sequence number
     fn get_latest_checkpoint_sequence_number(&self) -> Option<u64>;
@@ -226,6 +209,9 @@ pub trait GrpcStateReader: Send + Sync + 'static {
         &self,
         epoch: u64,
     ) -> anyhow::Result<Option<CertifiedCheckpointSummary>>;
+
+    /// Get object data by object ID
+    fn get_object(&self, object_id: &ObjectID) -> anyhow::Result<Option<Object>>;
 }
 
 /// Adapter that implements GrpcStateReader for RestStateReader
@@ -269,6 +255,14 @@ impl GrpcStateReader for RestStateReaderAdapter {
             Err(e) => Err(e.into()),
         }
     }
+
+    fn get_object(&self, object_id: &ObjectID) -> anyhow::Result<Option<Object>> {
+        use iota_types::storage::ObjectStore;
+        match self.inner.try_get_object(object_id) {
+            Ok(object) => Ok(object),
+            Err(e) => Err(e.into()),
+        }
+    }
 }
 
 /// Central gRPC data reader that provides unified access to checkpoint data.
@@ -277,19 +271,38 @@ impl GrpcStateReader for RestStateReaderAdapter {
 #[derive(Clone)]
 pub struct GrpcReader {
     state_reader: Arc<dyn GrpcStateReader>,
+    authority_state: Option<Arc<AuthorityState>>,
+    transaction_kv_store: Option<Arc<TransactionKeyValueStore>>,
 }
 
 impl GrpcReader {
     pub fn new(state_reader: Arc<dyn GrpcStateReader>) -> Self {
-        Self { state_reader }
+        Self {
+            state_reader,
+            authority_state: None,
+            transaction_kv_store: None,
+        }
     }
 
-    pub fn from_rest_state_reader(state_reader: Arc<dyn RestStateReader>) -> Self {
+    pub fn from_rest_state_reader(
+        state_reader: Arc<dyn RestStateReader>,
+        authority_state: Option<Arc<AuthorityState>>,
+        transaction_kv_store: Option<Arc<TransactionKeyValueStore>>,
+    ) -> Self {
         Self {
             state_reader: Arc::new(RestStateReaderAdapter {
                 inner: state_reader,
             }),
+            authority_state,
+            transaction_kv_store,
         }
+    }
+
+    /// Load epoch store for transaction processing with graceful fallback
+    pub fn load_epoch_store_one_call_per_task(&self) -> Option<Arc<AuthorityPerEpochStore>> {
+        self.authority_state
+            .as_ref()
+            .map(|state| state.load_epoch_store_one_call_per_task().clone())
     }
 
     pub fn get_epoch_last_checkpoint(
@@ -299,12 +312,51 @@ impl GrpcReader {
         self.state_reader.get_epoch_last_checkpoint(epoch)
     }
 
-    fn get_full_checkpoint_data(&self, seq: u64) -> Option<CheckpointData> {
+    pub fn get_full_checkpoint_data(&self, seq: u64) -> Option<CheckpointData> {
         self.state_reader.get_checkpoint_data(seq)
+    }
+
+    pub fn get_checkpoint_summary(&self, seq: u64) -> Option<CertifiedCheckpointSummary> {
+        self.state_reader.get_checkpoint_summary(seq)
     }
 
     pub fn get_latest_checkpoint_sequence_number(&self) -> Option<u64> {
         self.state_reader.get_latest_checkpoint_sequence_number()
+    }
+
+    pub fn get_object(&self, object_id: &ObjectID) -> anyhow::Result<Option<Object>> {
+        self.state_reader.get_object(object_id)
+    }
+
+    /// Access to authority_state for display fields computation
+    pub fn authority_state(&self) -> &Option<Arc<AuthorityState>> {
+        &self.authority_state
+    }
+
+    /// Access to transaction_kv_store for display fields computation
+    pub fn transaction_kv_store(&self) -> &Option<Arc<TransactionKeyValueStore>> {
+        &self.transaction_kv_store
+    }
+
+    /// Get object with layout information like JSON RPC (when AuthorityState is
+    /// available)
+    pub fn get_object_read(&self, object_id: &ObjectID) -> anyhow::Result<ObjectRead> {
+        match &self.authority_state {
+            Some(state) => {
+                // Use AuthorityState.get_object_read() for full ObjectRead with layout
+                state.get_object_read(object_id).map_err(Into::into)
+            }
+            None => {
+                // Fallback: use basic object access and construct ObjectRead manually
+                match self.state_reader.get_object(object_id)? {
+                    Some(object) => {
+                        let object_ref = object.compute_object_reference();
+                        Ok(ObjectRead::Exists(object_ref, object, None)) // No layout available
+                    }
+                    None => Ok(ObjectRead::NotExists(*object_id)),
+                }
+            }
+        }
     }
 
     /// Generic checkpoint streaming implementation that works with checkpoint
