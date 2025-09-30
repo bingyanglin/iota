@@ -363,6 +363,10 @@ impl RestStateReader for MockRestStateReader {
     fn indexes(&self) -> Option<&dyn RestIndexes> {
         None
     }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
 }
 
 async fn test_server_and_client_setup<I: Iterator<Item = u64>>(
@@ -376,7 +380,7 @@ async fn test_server_and_client_setup<I: Iterator<Item = u64>>(
     let mock = Arc::new(MockRestStateReader::new_from_iter(checkpoint_range));
     let checkpoints = mock.checkpoints.clone();
     let cancellation_token = tokio_util::sync::CancellationToken::new();
-    let grpc_reader = Arc::new(GrpcReader::from_rest_state_reader(mock, None, None));
+    let grpc_reader = Arc::new(GrpcReader::from_rest_state_reader(mock, None));
 
     let localhost = local_ip_utils::localhost_for_testing();
     let grpc_port = local_ip_utils::get_available_port(&localhost);

@@ -185,7 +185,7 @@ async fn get_display_fields(
 ) -> Result<DisplayFieldsResponse, Status> {
     // Check if we have access to both AuthorityState and TransactionKeyValueStore
     let (authority_state, kv_store) = match (
-        grpc_reader.authority_state().as_ref(),
+        grpc_reader.authority_state(),
         grpc_reader.transaction_kv_store().as_ref(),
     ) {
         (Some(state), Some(kv_store)) => (state, kv_store),

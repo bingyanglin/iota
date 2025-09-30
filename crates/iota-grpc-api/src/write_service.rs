@@ -185,11 +185,13 @@ impl WriteGrpcService {
         };
 
         let object_cache = {
-            response.output_objects.map(|output_objects| {
-                ObjectProviderCache::new_with_output_objects(
-                    self.grpc_reader.authority_state().clone().unwrap(),
-                    output_objects,
-                )
+            response.output_objects.and_then(|output_objects| {
+                self.grpc_reader.authority_state().map(|authority_state| {
+                    ObjectProviderCache::new_with_output_objects(
+                        authority_state.clone(),
+                        output_objects,
+                    )
+                })
             })
         };
 

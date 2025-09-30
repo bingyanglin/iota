@@ -48,6 +48,6 @@ pub use server::{GrpcServerHandle, start_grpc_server};
 pub use transaction_service::TransactionGrpcService;
 pub use types::{
     CheckpointDataBroadcaster, CheckpointSummaryBroadcaster, GrpcCheckpointDataBroadcaster,
-    GrpcCheckpointSummaryBroadcaster, GrpcReader, GrpcStateReader, RestStateReaderAdapter,
+    GrpcCheckpointSummaryBroadcaster, GrpcReader,
 };
 pub use write_service::WriteGrpcService;

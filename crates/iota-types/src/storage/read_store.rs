@@ -814,6 +814,9 @@ pub trait RestStateReader: ObjectStore + ReadStore + Send + Sync {
 
     // Get a handle to an instance of the RpcIndexes
     fn indexes(&self) -> Option<&dyn RestIndexes>;
+
+    /// Enable downcasting to concrete types for enhanced functionality
+    fn as_any(&self) -> &dyn std::any::Any;
 }
 
 pub trait RestIndexes: Send + Sync {

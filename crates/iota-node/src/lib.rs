@@ -2444,13 +2444,9 @@ async fn build_grpc_server(
     // Create cancellation token for proper shutdown hierarchy
     let shutdown_token = CancellationToken::new();
 
-    // Create GrpcReader with AuthorityState and TransactionKeyValueStore for full
+    // Create GrpcReader with RestReadStore and TransactionKeyValueStore for full
     // functionality
-    let grpc_reader = Arc::new(GrpcReader::from_rest_state_reader(
-        rest_read_store,
-        Some(state.clone()),
-        Some(transaction_kv_store),
-    ));
+    let grpc_reader = Arc::new(GrpcReader::new(rest_read_store, Some(transaction_kv_store)));
 
     // Get the subscription handler from the state for event streaming
     let event_subscriber = state.subscription_handler.clone();
