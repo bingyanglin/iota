@@ -710,6 +710,10 @@ impl RestStateReader for PersistedStoreInnerReadOnlyWrapper {
     ) -> iota_types::storage::error::Result<Option<VerifiedCheckpoint>> {
         todo!()
     }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
 }
 
 impl PersistedStoreInnerReadOnlyWrapper {

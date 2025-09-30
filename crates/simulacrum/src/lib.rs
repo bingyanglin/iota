@@ -596,6 +596,10 @@ impl<T: Send + Sync, V: store::SimulatorStore + Send + Sync> RestStateReader for
     fn indexes(&self) -> Option<&dyn iota_types::storage::RestIndexes> {
         None
     }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        todo!()
+    }
 }
 
 impl Simulacrum {
