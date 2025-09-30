@@ -14,6 +14,7 @@ workspace = true
 anyhow.workspace = true
 async-stream = "0.3"
 bcs.workspace = true
+fastcrypto.workspace = true
 futures.workspace = true
 prost.workspace = true
 serde.workspace = true
@@ -25,7 +26,6 @@ tonic.workspace = true
 tracing.workspace = true
 
 # internal dependencies
-fastcrypto.workspace = true
 iota-config.workspace = true
 iota-core.workspace = true
 iota-grpc-types.workspace = true
@@ -40,6 +40,9 @@ move-core-types.workspace = true
 tonic-build.workspace = true
 
 [dev-dependencies]
-iota-config.workspace = true
+# external dependencies
 prometheus.workspace = true
+
+# internal dependencies
+iota-config.workspace = true
 test-cluster.workspace = true
