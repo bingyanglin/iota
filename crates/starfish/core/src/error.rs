@@ -20,6 +20,9 @@ pub(crate) enum ConsensusError {
     #[error("Error deserializing block header: {0}")]
     MalformedHeader(bcs::Error),
 
+    #[error("Error deserializing shard with proof: {0}")]
+    MalformedShard(bcs::Error),
+
     #[error("Error deserializing block transactions: {0}")]
     MalformedTransactions(bcs::Error),
 
@@ -233,6 +236,12 @@ pub(crate) enum ConsensusError {
         header_round: Round,
         block_round: Round,
     },
+
+    #[error("Block bundle contains too many shards: {count} > {limit}")]
+    TooManyShardsInABundle { count: usize, limit: usize },
+
+    #[error("Block bundle from {peer} contains shard from round {round} with incorrect proof")]
+    IncorrectShardProof { peer: AuthorityIndex, round: Round },
 }
 
 impl ConsensusError {
