@@ -3,11 +3,12 @@
 
 use anyhow::anyhow;
 use futures::{Stream, StreamExt};
-use iota_json_rpc_types::IotaTransactionBlockEffects;
+use iota_types::effects::TransactionEffects;
 use tonic::transport::Channel;
 
 use crate::transactions::{
-    Transaction, TransactionStreamRequest, transaction_service_client::TransactionServiceClient,
+    Transaction, TransactionFilter, TransactionStreamRequest,
+    transaction_service_client::TransactionServiceClient,
 };
 
 /// Dedicated client for transaction-related gRPC operations.
@@ -37,9 +38,8 @@ impl TransactionClient {
     /// A stream of IOTA transaction effects that match the specified filter
     pub async fn stream_transactions(
         &mut self,
-        filter: crate::transactions::TransactionFilter,
-    ) -> Result<impl Stream<Item = Result<IotaTransactionBlockEffects, tonic::Status>>, tonic::Status>
-    {
+        filter: TransactionFilter,
+    ) -> Result<impl Stream<Item = Result<TransactionEffects, tonic::Status>>, tonic::Status> {
         let request = TransactionStreamRequest {
             filter: Some(filter),
         };
@@ -47,7 +47,7 @@ impl TransactionClient {
         let stream = response.into_inner();
 
         // Transform the stream to deserialize Transaction protobuf messages
-        // into native IotaTransactionBlockEffects
+        // into native TransactionEffects
         Ok(stream.map(|transaction_result| {
             transaction_result.and_then(|transaction| {
                 Self::deserialize_transaction(&transaction).map_err(|e| {
@@ -57,13 +57,15 @@ impl TransactionClient {
         }))
     }
 
-    /// Deserialize transaction effects from JSON-serialized data.
-    fn deserialize_transaction(tx: &Transaction) -> anyhow::Result<IotaTransactionBlockEffects> {
-        // Extract JSON string directly
-        let json_data = &tx.json_data;
+    /// Deserialize transaction effects from BCS-encoded data.
+    fn deserialize_transaction(tx: &Transaction) -> anyhow::Result<TransactionEffects> {
+        let bcs_data = tx
+            .bcs_data
+            .as_ref()
+            .ok_or_else(|| anyhow!("Transaction missing BCS data"))?;
 
-        // Deserialize directly from JSON string
-        serde_json::from_str(json_data)
-            .map_err(|e| anyhow!("Failed to deserialize transaction effects from JSON: {e}"))
+        // Deserialize directly as core TransactionEffects - no conversion needed!
+        bcs::from_bytes(&bcs_data.data)
+            .map_err(|e| anyhow!("Failed to deserialize TransactionEffects from BCS: {e}"))
     }
 }

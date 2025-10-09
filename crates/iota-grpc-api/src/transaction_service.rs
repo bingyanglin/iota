@@ -5,14 +5,21 @@ use std::sync::Arc;
 
 use futures::StreamExt;
 use iota_core::subscription_handler::SubscriptionHandler;
-use iota_json_rpc_types::{IotaTransactionBlockEffectsAPI, IotaTransactionKind, TransactionFilter};
-use iota_types::base_types::{IotaAddress, ObjectID};
+use iota_grpc_types::{IotaTransactionKind, TransactionFilter};
+use iota_types::{
+    base_types::{IotaAddress, ObjectID},
+    effects::TransactionEffectsAPI,
+};
 use tokio_util::sync::CancellationToken;
 use tonic::{Request, Response, Status};
 use tracing::debug;
 
-use crate::transactions::{
-    Transaction, TransactionStreamRequest, transaction_service_server::TransactionService,
+use crate::{
+    common::{Address, BcsData},
+    transactions::{
+        Transaction, TransactionKind, TransactionStreamRequest, transaction_filter::Filter,
+        transaction_service_server::TransactionService,
+    },
 };
 
 pub struct TransactionGrpcService {
@@ -52,13 +59,13 @@ impl TransactionService for TransactionGrpcService {
         let transaction_filter = create_transaction_filter(&proto_filter)?;
         debug!("New gRPC client subscribed with filter: {transaction_filter:?}");
 
-        // Subscribe to transactions using the EventSubscriber trait
+        // Subscribe to transactions using the gRPC subscription method
         let transaction_stream = self
             .event_subscriber
-            .subscribe_transactions(transaction_filter);
+            .subscribe_transactions_grpc(transaction_filter);
         let cancellation_token = self.cancellation_token.clone();
 
-        let stream = async_stream::try_stream! {
+        let stream = async_stream::stream! {
             // Pin the stream for use with .next() and tokio::select!
             // Safe because the stream has Unpin bound
             let mut pinned_stream = std::pin::Pin::new(transaction_stream);
@@ -74,15 +81,23 @@ impl TransactionService for TransactionGrpcService {
 
                 match transaction_result {
                     Some(transaction_effects) => {
-                        debug!(
-                            "Transaction matched filter: TX: {}",
-                            transaction_effects.transaction_digest()
-                        );
+                        // Get transaction digest from effects
+                        let tx_digest = transaction_effects.transaction_digest();
 
-                        // Convert to protobuf Transaction
-                        let proto_transaction = Transaction::from(&transaction_effects);
+                        debug!("Transaction matched filter: TX: {}", tx_digest);
 
-                        yield proto_transaction;
+                        // Serialize to BCS
+                        let data = match bcs::to_bytes(&transaction_effects) {
+                            Ok(data) => data,
+                            Err(e) => {
+                                yield Err(Status::internal(format!("Failed to serialize transaction effects: {e}")));
+                                continue;
+                            }
+                        };
+
+                        yield Ok(Transaction {
+                            bcs_data: Some(BcsData { data })
+                        });
                     }
                     None => {
                         // Stream ended or cancellation occurred
@@ -97,12 +112,10 @@ impl TransactionService for TransactionGrpcService {
     }
 }
 
-/// Convert protobuf TransactionFilter to iota_json_rpc_types::TransactionFilter
+/// Convert protobuf TransactionFilter to iota_grpc_types::TransactionFilter
 fn create_transaction_filter(
     proto_filter: &crate::transactions::TransactionFilter,
 ) -> Result<TransactionFilter, Status> {
-    use crate::transactions::transaction_filter::Filter;
-
     match &proto_filter.filter {
         Some(Filter::All(_)) => {
             // For "All" transactions, include all possible transaction kinds
@@ -116,9 +129,9 @@ fn create_transaction_filter(
                 IotaTransactionKind::EndOfEpochTransaction,
             ]))
         }
-        Some(Filter::Checkpoint(f)) => {
-            Ok(TransactionFilter::Checkpoint(f.checkpoint_sequence_number))
-        }
+        Some(Filter::Checkpoint(_)) => Err(Status::invalid_argument(
+            "Checkpoint filter not supported for streaming",
+        )),
         Some(Filter::MoveFunction(f)) => {
             let package_id = parse_object_id(&f.package_id, "Package ID")?;
             Ok(TransactionFilter::MoveFunction {
@@ -156,61 +169,15 @@ fn create_transaction_filter(
             Ok(TransactionFilter::FromOrToAddress { addr: address })
         }
         Some(Filter::TransactionKind(f)) => {
-            let kind = match crate::transactions::TransactionKind::try_from(f.kind) {
-                Ok(crate::transactions::TransactionKind::SystemTransaction) => {
-                    IotaTransactionKind::SystemTransaction
-                }
-                Ok(crate::transactions::TransactionKind::ProgrammableTransaction) => {
-                    IotaTransactionKind::ProgrammableTransaction
-                }
-                Ok(crate::transactions::TransactionKind::Genesis) => IotaTransactionKind::Genesis,
-                Ok(crate::transactions::TransactionKind::ConsensusCommitPrologueV1) => {
-                    IotaTransactionKind::ConsensusCommitPrologueV1
-                }
-                Ok(crate::transactions::TransactionKind::AuthenticatorStateUpdateV1) => {
-                    IotaTransactionKind::AuthenticatorStateUpdateV1
-                }
-                Ok(crate::transactions::TransactionKind::RandomnessStateUpdate) => {
-                    IotaTransactionKind::RandomnessStateUpdate
-                }
-                Ok(crate::transactions::TransactionKind::EndOfEpochTransaction) => {
-                    IotaTransactionKind::EndOfEpochTransaction
-                }
-                Err(_) => return Err(Status::invalid_argument("Invalid transaction kind")),
-            };
+            let kind = convert_transaction_kind(f.kind)?;
             Ok(TransactionFilter::TransactionKind(kind))
         }
         Some(Filter::TransactionKindIn(f)) => {
-            let mut kinds = Vec::new();
-            for k in &f.kinds {
-                let kind = match crate::transactions::TransactionKind::try_from(*k) {
-                    Ok(crate::transactions::TransactionKind::SystemTransaction) => {
-                        IotaTransactionKind::SystemTransaction
-                    }
-                    Ok(crate::transactions::TransactionKind::ProgrammableTransaction) => {
-                        IotaTransactionKind::ProgrammableTransaction
-                    }
-                    Ok(crate::transactions::TransactionKind::Genesis) => {
-                        IotaTransactionKind::Genesis
-                    }
-                    Ok(crate::transactions::TransactionKind::ConsensusCommitPrologueV1) => {
-                        IotaTransactionKind::ConsensusCommitPrologueV1
-                    }
-                    Ok(crate::transactions::TransactionKind::AuthenticatorStateUpdateV1) => {
-                        IotaTransactionKind::AuthenticatorStateUpdateV1
-                    }
-                    Ok(crate::transactions::TransactionKind::RandomnessStateUpdate) => {
-                        IotaTransactionKind::RandomnessStateUpdate
-                    }
-                    Ok(crate::transactions::TransactionKind::EndOfEpochTransaction) => {
-                        IotaTransactionKind::EndOfEpochTransaction
-                    }
-                    Err(_) => {
-                        return Err(Status::invalid_argument("Invalid transaction kind in list"));
-                    }
-                };
-                kinds.push(kind);
-            }
+            let kinds = f
+                .kinds
+                .iter()
+                .map(|k| convert_transaction_kind(*k))
+                .collect::<Result<Vec<_>, _>>()?;
             Ok(TransactionFilter::TransactionKindIn(kinds))
         }
         None => {
@@ -229,10 +196,7 @@ fn create_transaction_filter(
 }
 
 // Helper functions to reduce repetition and improve error messages
-fn parse_object_id(
-    address: &Option<crate::common::Address>,
-    field_name: &str,
-) -> Result<ObjectID, Status> {
+fn parse_object_id(address: &Option<Address>, field_name: &str) -> Result<ObjectID, Status> {
     let address = address
         .as_ref()
         .ok_or_else(|| Status::invalid_argument(format!("{field_name} is required")))?;
@@ -240,10 +204,7 @@ fn parse_object_id(
         .map_err(|e| Status::invalid_argument(format!("Invalid {field_name}: {e}")))
 }
 
-fn parse_iota_address(
-    address: &Option<crate::common::Address>,
-    field_name: &str,
-) -> Result<IotaAddress, Status> {
+fn parse_iota_address(address: &Option<Address>, field_name: &str) -> Result<IotaAddress, Status> {
     let address = address
         .as_ref()
         .ok_or_else(|| Status::invalid_argument(format!("{field_name} is required")))?;
@@ -251,13 +212,25 @@ fn parse_iota_address(
         .map_err(|e| Status::invalid_argument(format!("Invalid {field_name}: {e}")))
 }
 
-// Conversion from JSON-RPC types to gRPC protobuf using JSON serialization
-impl From<&iota_json_rpc_types::IotaTransactionBlockEffects> for Transaction {
-    fn from(effects: &iota_json_rpc_types::IotaTransactionBlockEffects) -> Self {
-        // Serialize JSON-RPC effects directly to JSON
-        let json_data = serde_json::to_string(effects)
-            .expect("IotaTransactionBlockEffects should always serialize to JSON");
-
-        Transaction { json_data }
+fn convert_transaction_kind(kind: i32) -> Result<IotaTransactionKind, Status> {
+    match TransactionKind::try_from(kind) {
+        Ok(TransactionKind::SystemTransaction) => Ok(IotaTransactionKind::SystemTransaction),
+        Ok(TransactionKind::ProgrammableTransaction) => {
+            Ok(IotaTransactionKind::ProgrammableTransaction)
+        }
+        Ok(TransactionKind::Genesis) => Ok(IotaTransactionKind::Genesis),
+        Ok(TransactionKind::ConsensusCommitPrologueV1) => {
+            Ok(IotaTransactionKind::ConsensusCommitPrologueV1)
+        }
+        Ok(TransactionKind::AuthenticatorStateUpdateV1) => {
+            Ok(IotaTransactionKind::AuthenticatorStateUpdateV1)
+        }
+        Ok(TransactionKind::RandomnessStateUpdate) => {
+            Ok(IotaTransactionKind::RandomnessStateUpdate)
+        }
+        Ok(TransactionKind::EndOfEpochTransaction) => {
+            Ok(IotaTransactionKind::EndOfEpochTransaction)
+        }
+        Err(_) => Err(Status::invalid_argument("Invalid transaction kind")),
     }
 }

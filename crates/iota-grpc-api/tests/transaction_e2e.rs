@@ -8,7 +8,7 @@ use iota_grpc_api::{
     common::{AddressFilter, AllFilter},
     transactions::{TransactionFilter, transaction_filter::Filter},
 };
-use iota_json_rpc_types::IotaTransactionBlockEffectsAPI;
+use iota_types::effects::TransactionEffectsAPI;
 use test_cluster::TestCluster;
 use tokio::time::timeout;
 
