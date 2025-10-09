@@ -15,21 +15,49 @@ service ReadService {
 message GetObjectRequest {
   // The ID of the queried object
   iota.grpc.common.Address object_id = 1;
-  // Options for specifying the content to be returned
-  optional ObjectDataOptions options = 2;
-}
-
-message ObjectDataOptions {
-  bool show_type = 1;
-  bool show_owner = 2;
-  bool show_previous_transaction = 3;
-  bool show_display = 4;
-  bool show_content = 5;
-  bool show_bcs = 6;
-  bool show_storage_rebate = 7;
 }
 
 message GetObjectResponse {
-  optional string json_data = 1;   // JSON-serialized IotaObjectData (success)
-  optional string json_error = 2;  // JSON-serialized IotaObjectResponseError (error)
+  oneof result {
+    NotExists not_exists = 1;
+    Exists exists = 2;
+    Deleted deleted = 3;
+  }
+}
+
+message NotExists {
+  iota.grpc.common.Address object_id = 1;
+}
+
+message Exists {
+  // Object reference
+  iota.grpc.common.ObjectRef object_ref = 1;
+
+  // Object data (BCS-encoded)
+  iota.grpc.common.BcsData data = 2;
+
+  // Owner (oneof)
+  oneof owner {
+    iota.grpc.common.Address address_owner = 3;
+    iota.grpc.common.Address object_owner = 4;
+    SharedOwner shared = 5;
+    ImmutableOwner immutable = 6;
+  }
+
+  // Object metadata
+  iota.grpc.common.Digest previous_transaction = 7;
+  uint64 storage_rebate = 8;
+
+  // Optional MoveStructLayout (BCS-encoded)
+  optional iota.grpc.common.BcsData move_structure_layout = 9;
+}
+
+message SharedOwner {
+  uint64 initial_shared_version = 1;
+}
+
+message ImmutableOwner {}
+
+message Deleted {
+  iota.grpc.common.ObjectRef object_ref = 1;
 }

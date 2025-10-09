@@ -20,6 +20,38 @@ message Digest {
   bytes digest = 1;
 }
 
+// Object reference
+message ObjectRef {
+  Address object_id = 1;
+  uint64 version = 2;
+  Digest digest = 3;
+}
+
+// Object metadata and data
+// Field order matches iota_types::object::ObjectInner
+message Object {
+  BcsData data = 1;  // BCS-encoded object data (Data enum)
+  Owner owner = 2;
+  Digest previous_transaction = 3;
+  uint64 storage_rebate = 4;
+}
+
+// Owner types
+message Owner {
+  oneof owner {
+    Address address_owner = 1;
+    Address object_owner = 2;
+    SharedOwner shared = 3;
+    ImmutableOwner immutable = 4;
+  }
+}
+
+message SharedOwner {
+  uint64 initial_shared_version = 1;
+}
+
+message ImmutableOwner {}
+
 // Match all events (catch-all filter)
 message AllFilter {
 }

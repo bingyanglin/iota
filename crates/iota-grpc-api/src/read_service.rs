@@ -3,23 +3,21 @@
 
 use std::sync::Arc;
 
-use iota_json_rpc_types::{
-    DisplayFieldsResponse, EventFilter, IotaObjectData, IotaObjectDataOptions,
-};
 use iota_metrics::spawn_monitored_task;
 use iota_types::{
     base_types::ObjectID,
-    display::DisplayVersionUpdatedEvent,
-    error::IotaObjectResponseError,
-    object::{Object, ObjectRead},
+    object::{ObjectRead, Owner},
 };
-use move_core_types::annotated_value::MoveStructLayout;
 use tonic::{Request, Response, Status};
 use tracing::{debug, instrument, warn};
 
 use crate::{
     GrpcReader,
-    read::{GetObjectRequest, GetObjectResponse, read_service_server::ReadService},
+    common::{Address, BcsData, Digest, ObjectRef},
+    read::{
+        Deleted, Exists, GetObjectRequest, GetObjectResponse, ImmutableOwner, NotExists,
+        SharedOwner, exists, get_object_response, read_service_server::ReadService,
+    },
 };
 
 pub struct ReadGrpcService {
@@ -46,34 +44,9 @@ impl ReadService for ReadGrpcService {
         debug!("get_object called");
 
         // Extract object ID from gRPC request
-        let object_id_bytes = req
-            .object_id
-            .as_ref()
-            .ok_or_else(|| Status::invalid_argument("Object ID is required"))?;
+        let object_id = parse_object_id(&req.object_id)?;
 
-        if object_id_bytes.address.len() != 32 {
-            return Err(Status::invalid_argument(format!(
-                "Object ID must be 32 bytes, got {}",
-                object_id_bytes.address.len()
-            )));
-        }
-
-        let mut bytes = [0u8; 32];
-        bytes.copy_from_slice(&object_id_bytes.address);
-        let object_id = ObjectID::from_bytes(bytes)
-            .map_err(|e| Status::invalid_argument(format!("Invalid object ID: {e}")))?;
-
-        // Convert gRPC options to JSON-RPC options
-        let options = req.options.map(|opts| IotaObjectDataOptions {
-            show_type: opts.show_type,
-            show_owner: opts.show_owner,
-            show_previous_transaction: opts.show_previous_transaction,
-            show_display: opts.show_display,
-            show_content: opts.show_content,
-            show_bcs: opts.show_bcs,
-            show_storage_rebate: opts.show_storage_rebate,
-        });
-
+        // Get ObjectRead from storage
         let grpc_reader = self.grpc_reader.clone();
         let object_read = spawn_monitored_task!(async move {
             grpc_reader.get_object_read(&object_id).map_err(|e| {
@@ -84,154 +57,115 @@ impl ReadService for ReadGrpcService {
         .await
         .map_err(|e| Status::internal(format!("Task execution failed: {e}")))??;
 
-        let grpc_response = match object_read {
-            ObjectRead::NotExists(id) => {
-                // Object not found - return error
-                let error = IotaObjectResponseError::NotExists { object_id: id };
-                serialize_error_to_json(error)?
-            }
-            ObjectRead::Exists(object_ref, object, layout) => {
-                // Object exists
-                let mut display_fields = None;
-                if options.as_ref().map(|o| o.show_display).unwrap_or(false) {
-                    match get_display_fields(&self.grpc_reader, &object, &layout).await {
-                        Ok(rendered_fields) => display_fields = Some(rendered_fields),
-                        Err(_e) => {
-                            // Return error response with display error, like JSON-RPC
-                            let data = IotaObjectData::new(
-                                object_ref,
-                                object,
-                                layout,
-                                options.unwrap_or_default(),
-                                None,
-                            )
-                            .map_err(|e| {
-                                Status::internal(format!("Failed to create object data: {e}"))
-                            })?;
-
-                            return Ok(Response::new(GetObjectResponse {
-                                json_data: Some(serde_json::to_string(&data).map_err(|e| {
-                                    Status::internal(format!(
-                                        "Failed to serialize object data: {e}"
-                                    ))
-                                })?),
-                                json_error: Some(
-                                    serde_json::to_string(&IotaObjectResponseError::Display {
-                                        error: "Failed to compute display fields".to_string(),
-                                    })
-                                    .map_err(|e| {
-                                        Status::internal(format!("Failed to serialize error: {e}"))
-                                    })?,
-                                ),
-                            }));
-                        }
-                    }
-                }
-
-                let data = IotaObjectData::new(
-                    object_ref,
-                    object,
-                    layout,
-                    options.unwrap_or_default(),
-                    display_fields,
-                )
-                .map_err(|e| Status::internal(format!("Failed to create object data: {e}")))?;
-
-                serialize_data_to_json(data)?
-            }
-            ObjectRead::Deleted(object_ref) => {
-                // Object was deleted - return error
-                let error = IotaObjectResponseError::Deleted {
-                    object_id: object_ref.0,
-                    version: object_ref.1,
-                    digest: object_ref.2,
-                };
-                serialize_error_to_json(error)?
-            }
-        };
+        // Convert to proto response
+        let response = convert_object_read_to_proto(object_read)?;
 
         debug!("Object retrieved successfully");
-        Ok(Response::new(grpc_response))
+        Ok(Response::new(response))
     }
 }
 
-/// Serialize success data to JSON (matches IotaObjectResponse::new_with_data)
-fn serialize_data_to_json(data: IotaObjectData) -> Result<GetObjectResponse, Status> {
-    let json_data = serde_json::to_string(&data)
-        .map_err(|e| Status::internal(format!("Failed to serialize object data to JSON: {e}")))?;
+/// Convert ObjectRead to proto GetObjectResponse
+fn convert_object_read_to_proto(object_read: ObjectRead) -> Result<GetObjectResponse, Status> {
+    let result = match object_read {
+        ObjectRead::NotExists(object_id) => get_object_response::Result::NotExists(NotExists {
+            object_id: Some(Address {
+                address: object_id.into_bytes().to_vec(),
+            }),
+        }),
+        ObjectRead::Exists(object_ref, object, layout) => {
+            let obj_inner = object.into_inner();
 
-    Ok(GetObjectResponse {
-        json_data: Some(json_data),
-        json_error: None,
-    })
-}
+            // BCS-encode the entire object data
+            let data_bcs = bcs::to_bytes(&obj_inner.data)
+                .map_err(|e| Status::internal(format!("Failed to serialize object data: {e}")))?;
 
-/// Serialize error to JSON (matches IotaObjectResponse::new_with_error)
-fn serialize_error_to_json(error: IotaObjectResponseError) -> Result<GetObjectResponse, Status> {
-    let json_error = serde_json::to_string(&error)
-        .map_err(|e| Status::internal(format!("Failed to serialize error to JSON: {e}")))?;
+            // Convert owner to oneof
+            let owner = convert_owner_to_oneof(&obj_inner.owner)?;
 
-    Ok(GetObjectResponse {
-        json_data: None,
-        json_error: Some(json_error),
-    })
-}
-
-/// Get display fields for an object
-async fn get_display_fields(
-    grpc_reader: &Arc<GrpcReader>,
-    original_object: &Object,
-    original_layout: &Option<MoveStructLayout>,
-) -> Result<DisplayFieldsResponse, Status> {
-    // Check if we have access to both AuthorityState and TransactionKeyValueStore
-    let (authority_state, kv_store) = match (
-        grpc_reader.authority_state(),
-        grpc_reader.transaction_kv_store().as_ref(),
-    ) {
-        (Some(state), Some(kv_store)) => (state, kv_store),
-        _ => {
-            // Graceful fallback: return empty display fields if dependencies not available
-            return Ok(DisplayFieldsResponse {
-                data: None,
-                error: None,
-            });
+            get_object_response::Result::Exists(Exists {
+                // Object reference
+                object_ref: Some(ObjectRef {
+                    object_id: Some(Address {
+                        address: object_ref.0.into_bytes().to_vec(),
+                    }),
+                    version: object_ref.1.value(),
+                    digest: Some(Digest {
+                        digest: object_ref.2.into_inner().to_vec(),
+                    }),
+                }),
+                // Object data (BCS-encoded)
+                data: Some(BcsData { data: data_bcs }),
+                // Owner (oneof) - set via the helper function
+                owner,
+                // Object metadata
+                previous_transaction: Some(Digest {
+                    digest: obj_inner.previous_transaction.into_inner().to_vec(),
+                }),
+                storage_rebate: obj_inner.storage_rebate,
+                // Optional layout
+                move_structure_layout: layout
+                    .map(|l| {
+                        bcs::to_bytes(&l).map(|data| BcsData { data }).map_err(|e| {
+                            Status::internal(format!("Failed to serialize layout: {e}"))
+                        })
+                    })
+                    .transpose()?,
+            })
         }
+        ObjectRead::Deleted(object_ref) => get_object_response::Result::Deleted(Deleted {
+            object_ref: Some(ObjectRef {
+                object_id: Some(Address {
+                    address: object_ref.0.into_bytes().to_vec(),
+                }),
+                version: object_ref.1.value(),
+                digest: Some(Digest {
+                    digest: object_ref.2.into_inner().to_vec(),
+                }),
+            }),
+        }),
     };
 
-    // Extract object type and layout, same logic as JSON RPC
-    let Some((object_type, layout)) =
-        iota_json_rpc::read_api::get_object_type_and_struct(original_object, original_layout)
-            .map_err(|e| Status::internal(format!("Failed to get object type and struct: {e}")))?
-    else {
-        return Ok(DisplayFieldsResponse {
-            data: None,
-            error: None,
-        });
+    Ok(GetObjectResponse {
+        result: Some(result),
+    })
+}
+
+/// Convert Owner to proto oneof for flattened Exists message
+fn convert_owner_to_oneof(owner: &Owner) -> Result<Option<exists::Owner>, Status> {
+    let owner_oneof = match owner {
+        Owner::AddressOwner(addr) => exists::Owner::AddressOwner(Address {
+            address: addr.to_vec(),
+        }),
+        Owner::ObjectOwner(addr) => exists::Owner::ObjectOwner(Address {
+            address: addr.to_vec(),
+        }),
+        Owner::Shared {
+            initial_shared_version,
+        } => exists::Owner::Shared(SharedOwner {
+            initial_shared_version: initial_shared_version.value(),
+        }),
+        Owner::Immutable => exists::Owner::Immutable(ImmutableOwner {}),
     };
 
-    // Query for display object, same as JSON RPC
-    let mut events = authority_state
-        .query_events(
-            kv_store,
-            EventFilter::MoveEventType(DisplayVersionUpdatedEvent::type_(&object_type)),
-            None,
-            1,
-            true,
-        )
-        .await
-        .map_err(|e| Status::internal(format!("Failed to query display events: {e}")))?;
+    Ok(Some(owner_oneof))
+}
 
-    // Process display object if found
-    if let Some(event) = events.pop() {
-        let display: DisplayVersionUpdatedEvent = bcs::from_bytes(&event.bcs.into_bytes())
-            .map_err(|e| Status::internal(format!("Failed to deserialize display event: {e}")))?;
+/// Parse object ID from protobuf Address
+fn parse_object_id(address: &Option<Address>) -> Result<ObjectID, Status> {
+    let address = address
+        .as_ref()
+        .ok_or_else(|| Status::invalid_argument("Object ID is required"))?;
 
-        return iota_json_rpc::read_api::get_rendered_fields(display.fields, &layout)
-            .map_err(|e| Status::internal(format!("Failed to render display fields: {e}")));
+    if address.address.len() != 32 {
+        return Err(Status::invalid_argument(format!(
+            "Object ID must be 32 bytes, got {}",
+            address.address.len()
+        )));
     }
 
-    Ok(DisplayFieldsResponse {
-        data: None,
-        error: None,
-    })
+    let mut bytes = [0u8; 32];
+    bytes.copy_from_slice(&address.address);
+    ObjectID::from_bytes(bytes)
+        .map_err(|e| Status::invalid_argument(format!("Invalid object ID: {e}")))
 }
