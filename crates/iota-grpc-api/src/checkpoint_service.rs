@@ -141,7 +141,6 @@ impl CheckpointService for CheckpointGrpcService {
         &self,
         request: Request<GetLatestCheckpointRequest>,
     ) -> Result<Response<Checkpoint>, Status> {
-        debug!("get_latest_checkpoint called");
         let req = request.into_inner();
 
         // Get the latest checkpoint sequence number
