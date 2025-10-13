@@ -41,7 +41,6 @@ impl ReadService for ReadGrpcService {
         request: Request<GetObjectRequest>,
     ) -> Result<Response<GetObjectResponse>, Status> {
         let req = request.into_inner();
-        debug!("get_object called");
 
         // Extract object ID from gRPC request
         let object_id = parse_object_id(&req.object_id)?;
