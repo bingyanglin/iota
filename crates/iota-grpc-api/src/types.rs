@@ -224,11 +224,11 @@ impl GrpcReader {
 
     /// Load epoch store for transaction processing with graceful fallback
     pub fn load_epoch_store_one_call_per_task(&self) -> Option<Arc<AuthorityPerEpochStore>> {
-        // Downcast to RestReadStore for enhanced functionality
+        // Use authority_state_any() to access AuthorityState
         self.state_reader
-            .as_any()
-            .downcast_ref::<RestReadStore>()
-            .map(|store| store.load_epoch_store_one_call_per_task())
+            .authority_state_any()?
+            .downcast_ref::<Arc<AuthorityState>>()
+            .map(|state| state.load_epoch_store_one_call_per_task().clone())
     }
 
     /// Get epoch's last checkpoint for epoch boundary calculations with
@@ -291,11 +291,10 @@ impl GrpcReader {
 
     /// Access to authority_state for display fields computation
     pub fn authority_state(&self) -> Option<&Arc<AuthorityState>> {
-        // Downcast to RestReadStore for enhanced functionality
+        // Use authority_state_any() to access AuthorityState
         self.state_reader
-            .as_any()
-            .downcast_ref::<RestReadStore>()
-            .map(|store| store.authority_state())
+            .authority_state_any()?
+            .downcast_ref::<Arc<AuthorityState>>()
     }
 
     /// Access to transaction_kv_store for display fields computation

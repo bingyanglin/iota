@@ -364,9 +364,7 @@ impl RestStateReader for MockRestStateReader {
         None
     }
 
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
+    // authority_state_any() uses default implementation (returns None)
 }
 
 async fn test_server_and_client_setup<I: Iterator<Item = u64>>(

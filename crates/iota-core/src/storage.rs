@@ -545,8 +545,8 @@ impl RestStateReader for RestReadStore {
         self.index().ok().map(|index| index as _)
     }
 
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
+    fn authority_state_any(&self) -> Option<&dyn std::any::Any> {
+        Some(&self.state)
     }
 }
 

@@ -711,9 +711,7 @@ impl RestStateReader for PersistedStoreInnerReadOnlyWrapper {
         todo!()
     }
 
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
+    // authority_state_any() uses default implementation (returns None)
 }
 
 impl PersistedStoreInnerReadOnlyWrapper {
