@@ -7,6 +7,7 @@ use iota_grpc_api::{
     client::WriteClient,
     write::{ExecuteTransactionRequest, TransactionResponseOptions},
 };
+use iota_types::transaction::{TransactionData, TransactionDataAPI};
 use test_cluster::TestCluster;
 
 mod utils;
@@ -68,10 +69,11 @@ async fn test_write_service_execute_transaction() {
 
         let response = write_client.execute_transaction(request).await?;
 
-        // Validate the IotaTransactionBlockResponse
+        // Validate the ExecuteTransactionResponse
+        assert!(response.digest.is_some(), "Response should have a digest");
         assert!(
-            !response.digest.inner().is_empty(),
-            "Response should have a valid digest"
+            !response.digest.as_ref().unwrap().digest.is_empty(),
+            "Digest should not be empty"
         );
 
         // Since we requested show_effects: true, validate effects are present
@@ -86,24 +88,24 @@ async fn test_write_service_execute_transaction() {
             "Transaction should be None when show_input is false"
         );
         assert!(
-            response.raw_transaction.is_empty(),
-            "Raw transaction should be empty when show_raw_input is false"
+            response.raw_transaction.is_none(),
+            "Raw transaction should be None when show_raw_input is false"
         );
         assert!(
             response.events.is_none(),
             "Events should be None when show_events is false"
         );
         assert!(
-            response.object_changes.is_none(),
-            "Object changes should be None when show_object_changes is false"
+            response.object_changes.is_empty(),
+            "Object changes should be empty when show_object_changes is false"
         );
         assert!(
-            response.balance_changes.is_none(),
-            "Balance changes should be None when show_balance_changes is false"
+            response.balance_changes.is_empty(),
+            "Balance changes should be empty when show_balance_changes is false"
         );
         assert!(
-            response.raw_effects.is_empty(),
-            "Raw effects should be empty when show_raw_effects is false"
+            response.raw_effects.is_none(),
+            "Raw effects should be None when show_raw_effects is false"
         );
 
         Ok::<(), anyhow::Error>(())
@@ -155,4 +157,73 @@ async fn test_write_service_invalid_transaction() {
         // This would be unexpected for invalid transaction data
         panic!("WriteService should not succeed with invalid transaction data");
     }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_transaction_data_bcs_deserialization() {
+    let (cluster, mut write_client) = setup_test_cluster_and_write_client().await;
+
+    let sender = cluster.get_address_0();
+    let receiver = cluster.get_address_1();
+    let amount = 1000u64;
+
+    // Build and sign transaction
+    let tx_data = cluster
+        .test_transaction_builder_with_sender(sender)
+        .await
+        .transfer_iota(Some(amount), receiver)
+        .build();
+
+    let signed_tx = cluster.sign_transaction(&tx_data);
+    let tx_bytes =
+        bcs::to_bytes(&signed_tx.data().intent_message().value).expect("BCS serialization failed");
+    let signatures: Vec<Vec<u8>> = signed_tx
+        .tx_signatures()
+        .iter()
+        .map(|sig| sig.as_ref().to_vec())
+        .collect();
+
+    // Execute transaction
+    let request = ExecuteTransactionRequest {
+        tx_bytes,
+        signatures,
+        options: Some(TransactionResponseOptions {
+            show_input: true,
+            show_raw_input: true,
+            show_effects: false,
+            show_events: false,
+            show_object_changes: false,
+            show_balance_changes: false,
+            show_raw_effects: false,
+        }),
+        request_type: None,
+    };
+    let response = write_client
+        .execute_transaction(request)
+        .await
+        .expect("gRPC call should succeed");
+
+    // Verify TransactionData can be deserialized from BCS
+    assert!(
+        response.transaction.is_some(),
+        "TransactionData should be present when show_input is true"
+    );
+
+    let bcs_data = response.transaction.as_ref().unwrap();
+    let deserialized_tx_data: TransactionData = bcs::from_bytes(&bcs_data.data)
+        .expect("Should be able to deserialize TransactionData from BCS");
+
+    // Verify the deserialized data matches original
+    assert_eq!(deserialized_tx_data.sender(), sender, "Sender should match");
+    assert_eq!(
+        deserialized_tx_data.gas_budget(),
+        tx_data.gas_budget(),
+        "Gas budget should match"
+    );
+
+    // Verify raw_transaction can also be deserialized
+    assert!(
+        response.raw_transaction.is_some(),
+        "Raw transaction should be present when show_raw_input is true"
+    );
 }

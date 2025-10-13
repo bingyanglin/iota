@@ -45,6 +45,114 @@ enum ExecuteTransactionRequestType {
   WAIT_FOR_LOCAL_EXECUTION = 1;
 }
 
+// ObjectChange represents changes to objects during transaction execution
+message ObjectChange {
+  oneof change {
+    ObjectPublished published = 1;
+    ObjectTransferred transferred = 2;
+    ObjectMutated mutated = 3;
+    ObjectDeleted deleted = 4;
+    ObjectWrapped wrapped = 5;
+    ObjectCreated created = 6;
+  }
+}
+
+message ObjectPublished {
+  iota.grpc.common.Address package_id = 1;
+  uint64 version = 2;
+  iota.grpc.common.Digest digest = 3;
+  repeated string modules = 4;
+}
+
+message ObjectTransferred {
+  iota.grpc.common.Address sender = 1;
+  iota.grpc.common.Owner recipient = 2;
+  string object_type = 3;  // StructTag as string
+  iota.grpc.common.Address object_id = 4;
+  uint64 version = 5;
+  iota.grpc.common.Digest digest = 6;
+}
+
+message ObjectMutated {
+  iota.grpc.common.Address sender = 1;
+  iota.grpc.common.Owner owner = 2;
+  string object_type = 3;  // StructTag as string
+  iota.grpc.common.Address object_id = 4;
+  uint64 version = 5;
+  uint64 previous_version = 6;
+  iota.grpc.common.Digest digest = 7;
+}
+
+message ObjectDeleted {
+  iota.grpc.common.Address sender = 1;
+  string object_type = 2;  // StructTag as string
+  iota.grpc.common.Address object_id = 3;
+  uint64 version = 4;
+}
+
+message ObjectWrapped {
+  iota.grpc.common.Address sender = 1;
+  string object_type = 2;  // StructTag as string
+  iota.grpc.common.Address object_id = 3;
+  uint64 version = 4;
+}
+
+message ObjectCreated {
+  iota.grpc.common.Address sender = 1;
+  iota.grpc.common.Owner owner = 2;
+  string object_type = 3;  // StructTag as string
+  iota.grpc.common.Address object_id = 4;
+  uint64 version = 5;
+  iota.grpc.common.Digest digest = 6;
+}
+
+// BalanceChange represents balance changes during transaction execution
+message BalanceChange {
+  iota.grpc.common.Owner owner = 1;
+  string coin_type = 2;  // TypeTag as string
+  // Amount as string to support i128 (can be negative)
+  // Format: decimal string representation of i128
+  string amount = 3;
+}
+
 message ExecuteTransactionResponse {
-  string json_data = 1;  // JSON-serialized IotaTransactionBlockResponse
+  // Transaction digest (32-byte)
+  iota.grpc.common.Digest digest = 1;
+
+  // Transaction input data (optional, based on show_input option)
+  // BCS-encoded TransactionData (core type from iota-types)
+  optional iota.grpc.common.BcsData transaction = 2;
+
+  // BCS-encoded SenderSignedData (optional, based on show_raw_input option)
+  optional iota.grpc.common.BcsData raw_transaction = 3;
+
+  // Transaction effects (optional, based on show_effects option)
+  // BCS-encoded TransactionEffects (core type from iota-types)
+  optional iota.grpc.common.BcsData effects = 4;
+
+  // Transaction events (optional, based on show_events option)
+  // BCS-encoded TransactionEvents (core type from iota-types)
+  optional iota.grpc.common.BcsData events = 5;
+
+  // Object changes (optional, based on show_object_changes option)
+  repeated ObjectChange object_changes = 6;
+
+  // Balance changes (optional, based on show_balance_changes option)
+  repeated BalanceChange balance_changes = 7;
+
+  // Timestamp in milliseconds
+  optional uint64 timestamp_ms = 8;
+
+  // Whether local execution was confirmed
+  optional bool confirmed_local_execution = 9;
+
+  // Checkpoint sequence number
+  optional uint64 checkpoint = 10;
+
+  // Error messages
+  repeated string errors = 11;
+
+  // BCS-encoded raw effects (optional, based on show_raw_effects option)
+  // BCS-encoded TransactionEffects (core type from iota-types)
+  optional iota.grpc.common.BcsData raw_effects = 12;
 }

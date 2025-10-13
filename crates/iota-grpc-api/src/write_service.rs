@@ -9,12 +9,14 @@ use iota_core::{
 };
 use iota_json_rpc::{ObjectProviderCache, get_balance_changes_from_effect, get_object_changes};
 use iota_json_rpc_types::{
-    IotaTransactionBlock, IotaTransactionBlockEvents, IotaTransactionBlockResponse,
+    BalanceChange, IotaTransactionBlock, IotaTransactionBlockEvents, IotaTransactionBlockResponse,
+    ObjectChange,
 };
 use iota_metrics::spawn_monitored_task;
 use iota_types::{
-    base_types::IotaAddress,
-    effects::TransactionEffectsAPI,
+    base_types::{IotaAddress, TransactionDigest},
+    effects::{TransactionEffects, TransactionEffectsAPI, TransactionEvents},
+    object::Owner as CoreOwner,
     quorum_driver_types::{
         ExecuteTransactionRequestType, ExecuteTransactionRequestV1, ExecuteTransactionResponseV1,
         IsTransactionExecutedLocally,
@@ -28,9 +30,12 @@ use tracing::{Instrument, debug, instrument};
 
 use crate::{
     GrpcReader,
+    common::{Address, BcsData, Digest, Owner as ProtoOwner, owner as proto_owner},
     write::{
-        ExecuteTransactionRequest, ExecuteTransactionResponse, TransactionResponseOptions,
-        write_service_server::WriteService,
+        BalanceChange as ProtoBalanceChange, ExecuteTransactionRequest, ExecuteTransactionResponse,
+        ObjectChange as ProtoObjectChange, ObjectCreated, ObjectDeleted, ObjectMutated,
+        ObjectPublished, ObjectTransferred, ObjectWrapped, TransactionResponseOptions,
+        object_change::Change, write_service_server::WriteService,
     },
 };
 
@@ -68,6 +73,7 @@ impl WriteGrpcService {
             Transaction,
             Option<IotaTransactionBlock>,
             Vec<u8>,
+            TransactionData, // Added: return TransactionData for BCS serialization
         ),
         Status,
     > {
@@ -76,6 +82,9 @@ impl WriteGrpcService {
             .map_err(|e| Status::invalid_argument(format!("Failed to deserialize: {e}")))?;
         let sender = tx_data.sender();
         let input_objs = tx_data.input_objects().unwrap_or_default();
+
+        // Clone tx_data before consuming it
+        let tx_data_clone = tx_data.clone();
 
         let mut sigs = Vec::new();
         for sig in signatures {
@@ -129,17 +138,243 @@ impl WriteGrpcService {
             txn,
             transaction_block,
             raw_transaction,
+            tx_data_clone, // Return cloned TransactionData
         ))
     }
 
-    /// Serialize IotaTransactionBlockResponse to JSON
-    fn serialize_response_to_json(
+    /// Convert IotaTransactionBlockResponse to proto ExecuteTransactionResponse
+    /// Uses core BCS types for transaction/effects/events and native proto
+    /// messages for ObjectChange/BalanceChange
+    fn convert_response_to_proto(
         response: &IotaTransactionBlockResponse,
+        core_transaction_data: Option<&TransactionData>,
+        core_effects: Option<&TransactionEffects>,
+        core_events: Option<&TransactionEvents>,
     ) -> Result<ExecuteTransactionResponse, Status> {
-        let json_data = serde_json::to_string(response)
-            .map_err(|e| Status::internal(format!("Failed to serialize response to JSON: {e}")))?;
+        Ok(ExecuteTransactionResponse {
+            digest: Some(Digest {
+                digest: response.digest.into_inner().to_vec(),
+            }),
+            // Use core TransactionData (BCS-serializable)
+            transaction: core_transaction_data
+                .map(|t| {
+                    bcs::to_bytes(t).map(|data| BcsData { data }).map_err(|e| {
+                        Status::internal(format!("Failed to serialize TransactionData: {e}"))
+                    })
+                })
+                .transpose()?,
+            raw_transaction: if response.raw_transaction.is_empty() {
+                None
+            } else {
+                Some(BcsData {
+                    data: response.raw_transaction.clone(),
+                })
+            },
+            // Use core TransactionEffects (BCS-serializable)
+            effects: core_effects
+                .map(|e| {
+                    bcs::to_bytes(e).map(|data| BcsData { data }).map_err(|e| {
+                        Status::internal(format!("Failed to serialize TransactionEffects: {e}"))
+                    })
+                })
+                .transpose()?,
+            // Use core TransactionEvents (BCS-serializable)
+            events: core_events
+                .map(|e| {
+                    bcs::to_bytes(e).map(|data| BcsData { data }).map_err(|e| {
+                        Status::internal(format!("Failed to serialize TransactionEvents: {e}"))
+                    })
+                })
+                .transpose()?,
+            // Convert ObjectChange to native proto messages
+            object_changes: response
+                .object_changes
+                .as_ref()
+                .map(|changes| {
+                    changes
+                        .iter()
+                        .map(Self::convert_object_change_to_proto)
+                        .collect::<Result<Vec<_>, _>>()
+                })
+                .transpose()?
+                .unwrap_or_default(),
+            // Convert BalanceChange to native proto messages
+            balance_changes: response
+                .balance_changes
+                .as_ref()
+                .map(|changes| {
+                    changes
+                        .iter()
+                        .map(Self::convert_balance_change_to_proto)
+                        .collect::<Result<Vec<_>, _>>()
+                })
+                .transpose()?
+                .unwrap_or_default(),
+            timestamp_ms: response.timestamp_ms,
+            confirmed_local_execution: response.confirmed_local_execution,
+            checkpoint: response.checkpoint,
+            errors: response.errors.clone(),
+            raw_effects: if response.raw_effects.is_empty() {
+                None
+            } else {
+                Some(BcsData {
+                    data: response.raw_effects.clone(),
+                })
+            },
+        })
+    }
 
-        Ok(ExecuteTransactionResponse { json_data })
+    /// Convert ObjectChange (JSON-RPC type) to proto ObjectChange
+    fn convert_object_change_to_proto(change: &ObjectChange) -> Result<ProtoObjectChange, Status> {
+        let change_oneof = match change {
+            ObjectChange::Published {
+                package_id,
+                version,
+                digest,
+                modules,
+            } => Change::Published(ObjectPublished {
+                package_id: Some(Address {
+                    address: package_id.into_bytes().to_vec(),
+                }),
+                version: version.value(),
+                digest: Some(Digest {
+                    digest: digest.into_inner().to_vec(),
+                }),
+                modules: modules.clone(),
+            }),
+            ObjectChange::Transferred {
+                sender,
+                recipient,
+                object_type,
+                object_id,
+                version,
+                digest,
+            } => Change::Transferred(ObjectTransferred {
+                sender: Some(Address {
+                    address: sender.to_vec(),
+                }),
+                recipient: Some(Self::convert_owner_to_proto(recipient)?),
+                object_type: object_type.to_string(),
+                object_id: Some(Address {
+                    address: object_id.into_bytes().to_vec(),
+                }),
+                version: version.value(),
+                digest: Some(Digest {
+                    digest: digest.into_inner().to_vec(),
+                }),
+            }),
+            ObjectChange::Mutated {
+                sender,
+                owner,
+                object_type,
+                object_id,
+                version,
+                previous_version,
+                digest,
+            } => Change::Mutated(ObjectMutated {
+                sender: Some(Address {
+                    address: sender.to_vec(),
+                }),
+                owner: Some(Self::convert_owner_to_proto(owner)?),
+                object_type: object_type.to_string(),
+                object_id: Some(Address {
+                    address: object_id.into_bytes().to_vec(),
+                }),
+                version: version.value(),
+                previous_version: previous_version.value(),
+                digest: Some(Digest {
+                    digest: digest.into_inner().to_vec(),
+                }),
+            }),
+            ObjectChange::Deleted {
+                sender,
+                object_type,
+                object_id,
+                version,
+            } => Change::Deleted(ObjectDeleted {
+                sender: Some(Address {
+                    address: sender.to_vec(),
+                }),
+                object_type: object_type.to_string(),
+                object_id: Some(Address {
+                    address: object_id.into_bytes().to_vec(),
+                }),
+                version: version.value(),
+            }),
+            ObjectChange::Wrapped {
+                sender,
+                object_type,
+                object_id,
+                version,
+            } => Change::Wrapped(ObjectWrapped {
+                sender: Some(Address {
+                    address: sender.to_vec(),
+                }),
+                object_type: object_type.to_string(),
+                object_id: Some(Address {
+                    address: object_id.into_bytes().to_vec(),
+                }),
+                version: version.value(),
+            }),
+            ObjectChange::Created {
+                sender,
+                owner,
+                object_type,
+                object_id,
+                version,
+                digest,
+            } => Change::Created(ObjectCreated {
+                sender: Some(Address {
+                    address: sender.to_vec(),
+                }),
+                owner: Some(Self::convert_owner_to_proto(owner)?),
+                object_type: object_type.to_string(),
+                object_id: Some(Address {
+                    address: object_id.into_bytes().to_vec(),
+                }),
+                version: version.value(),
+                digest: Some(Digest {
+                    digest: digest.into_inner().to_vec(),
+                }),
+            }),
+        };
+
+        Ok(ProtoObjectChange {
+            change: Some(change_oneof),
+        })
+    }
+
+    /// Convert BalanceChange (JSON-RPC type) to proto BalanceChange
+    fn convert_balance_change_to_proto(
+        change: &BalanceChange,
+    ) -> Result<ProtoBalanceChange, Status> {
+        Ok(ProtoBalanceChange {
+            owner: Some(Self::convert_owner_to_proto(&change.owner)?),
+            coin_type: change.coin_type.to_string(),
+            amount: change.amount.to_string(),
+        })
+    }
+
+    /// Convert Owner to proto Owner
+    fn convert_owner_to_proto(owner: &CoreOwner) -> Result<ProtoOwner, Status> {
+        let owner_oneof = match owner {
+            CoreOwner::AddressOwner(addr) => proto_owner::Owner::AddressOwner(Address {
+                address: addr.to_vec(),
+            }),
+            CoreOwner::ObjectOwner(addr) => proto_owner::Owner::ObjectOwner(Address {
+                address: addr.to_vec(),
+            }),
+            CoreOwner::Shared {
+                initial_shared_version,
+            } => proto_owner::Owner::Shared(crate::common::SharedOwner {
+                initial_shared_version: initial_shared_version.value(),
+            }),
+            CoreOwner::Immutable => proto_owner::Owner::Immutable(crate::common::ImmutableOwner {}),
+        };
+
+        Ok(ProtoOwner {
+            owner: Some(owner_oneof),
+        })
     }
 
     async fn handle_post_orchestration(
@@ -147,12 +382,16 @@ impl WriteGrpcService {
         response: ExecuteTransactionResponseV1,
         is_executed_locally: IsTransactionExecutedLocally,
         opts: TransactionResponseOptions,
-        digest: iota_types::base_types::TransactionDigest,
+        digest: TransactionDigest,
         input_objs: Vec<InputObjectKind>,
         transaction: Option<IotaTransactionBlock>,
         raw_transaction: Vec<u8>,
         sender: IotaAddress,
+        core_transaction_data: Option<TransactionData>,
     ) -> Result<Response<ExecuteTransactionResponse>, Status> {
+        // Store core events for BCS serialization before converting to JSON type
+        let core_events = response.events.clone();
+
         let events = if opts.show_events {
             tracing::trace!("Resolving events");
             if let (Some(epoch_store), Some(authority_state)) = (
@@ -168,7 +407,7 @@ impl WriteGrpcService {
                     .type_layout_resolver(Box::new(backing_package_store));
                 Some(
                     IotaTransactionBlockEvents::try_from(
-                        response.events.unwrap_or_default(),
+                        core_events.clone().unwrap_or_default(),
                         digest,
                         None,
                         layout_resolver.as_mut(),
@@ -233,31 +472,39 @@ impl WriteGrpcService {
             vec![]
         };
 
-        let iota_response =
-            IotaTransactionBlockResponse {
-                digest,
-                transaction,
-                raw_transaction,
-                effects: opts
-                    .show_effects
-                    .then(|| {
-                        response.effects.effects.try_into().map_err(|e| {
-                            Status::internal(format!("Failed to convert effects: {e}"))
-                        })
-                    })
-                    .transpose()?,
-                events,
-                object_changes,
-                balance_changes,
-                timestamp_ms: None,
-                confirmed_local_execution: Some(is_executed_locally),
-                checkpoint: None,
-                errors: vec![],
-                raw_effects,
-            };
+        // Store core effects for BCS serialization before converting
+        let core_effects = response.effects.effects.clone();
 
-        // Serialize to JSON
-        let grpc_response = Self::serialize_response_to_json(&iota_response)?;
+        let iota_response = IotaTransactionBlockResponse {
+            digest,
+            transaction,
+            raw_transaction,
+            effects: opts
+                .show_effects
+                .then(|| {
+                    core_effects
+                        .clone()
+                        .try_into()
+                        .map_err(|e| Status::internal(format!("Failed to convert effects: {e}")))
+                })
+                .transpose()?,
+            events,
+            object_changes,
+            balance_changes,
+            timestamp_ms: None,
+            confirmed_local_execution: Some(is_executed_locally),
+            checkpoint: None,
+            errors: vec![],
+            raw_effects,
+        };
+
+        // Convert to proto using core types
+        let grpc_response = Self::convert_response_to_proto(
+            &iota_response,
+            core_transaction_data.as_ref(),
+            opts.show_effects.then_some(&core_effects),
+            core_events.as_ref(),
+        )?;
 
         debug!("Transaction executed successfully");
         Ok(Response::new(grpc_response))
@@ -285,8 +532,16 @@ impl WriteService for WriteGrpcService {
             })
             .unwrap_or(ExecuteTransactionRequestType::WaitForEffectsCert);
 
-        let (execute_request, opts, sender, input_objs, txn, transaction_block, raw_transaction) =
-            self.prepare_execute_transaction_request(req.tx_bytes, req.signatures, req.options)?;
+        let (
+            execute_request,
+            opts,
+            sender,
+            input_objs,
+            txn,
+            transaction_block,
+            raw_transaction,
+            tx_data,
+        ) = self.prepare_execute_transaction_request(req.tx_bytes, req.signatures, req.options)?;
 
         let digest = *txn.digest();
 
@@ -303,6 +558,9 @@ impl WriteService for WriteGrpcService {
         .map_err(|e| Status::internal(format!("Task execution failed: {e}")))?
         .map_err(|e| Status::internal(format!("Transaction execution failed: {e}")))?;
 
+        // Keep core transaction data for BCS serialization
+        let core_transaction_data = opts.show_input.then_some(tx_data);
+
         self.handle_post_orchestration(
             response,
             is_executed_locally,
@@ -312,6 +570,7 @@ impl WriteService for WriteGrpcService {
             transaction_block,
             raw_transaction,
             sender,
+            core_transaction_data,
         )
         .await
     }
