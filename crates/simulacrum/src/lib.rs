@@ -597,9 +597,7 @@ impl<T: Send + Sync, V: store::SimulatorStore + Send + Sync> RestStateReader for
         None
     }
 
-    fn as_any(&self) -> &dyn std::any::Any {
-        todo!()
-    }
+    // authority_state_any() uses default implementation (returns None)
 }
 
 impl Simulacrum {
