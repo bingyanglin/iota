@@ -3,7 +3,7 @@
 
 use std::sync::Arc;
 
-use futures::StreamExt;
+use futures::{StreamExt, stream::BoxStream};
 use iota_core::subscription_handler::SubscriptionHandler;
 use iota_grpc_types::{IotaTransactionKind, TransactionFilter};
 use iota_types::{
@@ -44,8 +44,7 @@ impl TransactionGrpcService {
 // any gRPC transaction service must implement.
 #[tonic::async_trait]
 impl TransactionService for TransactionGrpcService {
-    type StreamTransactionsStream =
-        std::pin::Pin<Box<dyn futures::Stream<Item = Result<Transaction, Status>> + Send>>;
+    type StreamTransactionsStream = BoxStream<'static, Result<Transaction, Status>>;
 
     async fn stream_transactions(
         &self,
@@ -60,19 +59,15 @@ impl TransactionService for TransactionGrpcService {
         debug!("New gRPC client subscribed with filter: {transaction_filter:?}");
 
         // Subscribe to transactions using the gRPC subscription method
-        let transaction_stream = self
+        let mut transaction_stream = self
             .event_subscriber
             .subscribe_transactions_grpc(transaction_filter);
         let cancellation_token = self.cancellation_token.clone();
 
         let stream = async_stream::stream! {
-            // Pin the stream for use with .next() and tokio::select!
-            // Safe because the stream has Unpin bound
-            let mut pinned_stream = std::pin::Pin::new(transaction_stream);
-
             loop {
                 let transaction_result = tokio::select! {
-                    transaction_option = pinned_stream.next() => transaction_option,
+                    transaction_option = transaction_stream.next() => transaction_option,
                     _ = cancellation_token.cancelled() => {
                         debug!("Transaction stream cancelled");
                         None

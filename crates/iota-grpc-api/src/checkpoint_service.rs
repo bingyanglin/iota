@@ -1,8 +1,9 @@
 // Copyright (c) 2025 IOTA Stiftung
 // SPDX-License-Identifier: Apache-2.0
 
-use std::{pin::Pin, sync::Arc};
+use std::sync::Arc;
 
+use futures::stream::BoxStream;
 use tokio_util::sync::CancellationToken;
 use tonic::{Request, Response, Status};
 use tracing::debug;
@@ -74,8 +75,7 @@ impl CheckpointGrpcService {
 // any gRPC checkpoint service must implement.
 #[tonic::async_trait]
 impl CheckpointService for CheckpointGrpcService {
-    type StreamCheckpointsStream =
-        Pin<Box<dyn futures::Stream<Item = Result<Checkpoint, Status>> + Send>>;
+    type StreamCheckpointsStream = BoxStream<'static, Result<Checkpoint, Status>>;
 
     async fn stream_checkpoints(
         &self,

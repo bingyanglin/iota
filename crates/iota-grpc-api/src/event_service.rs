@@ -3,7 +3,7 @@
 
 use std::{str::FromStr, sync::Arc};
 
-use futures::StreamExt;
+use futures::{StreamExt, stream::BoxStream};
 use iota_core::subscription_handler::SubscriptionHandler;
 use iota_json_rpc_types::{EventFilter, IotaEvent};
 use iota_types::{
@@ -42,8 +42,7 @@ impl EventGrpcService {
 // any gRPC event service must implement.
 #[tonic::async_trait]
 impl EventService for EventGrpcService {
-    type StreamEventsStream =
-        std::pin::Pin<Box<dyn futures::Stream<Item = Result<Event, Status>> + Send>>;
+    type StreamEventsStream = BoxStream<'static, Result<Event, Status>>;
 
     async fn stream_events(
         &self,
@@ -58,17 +57,13 @@ impl EventService for EventGrpcService {
         debug!("New gRPC client subscribed with filter: {event_filter:?}");
 
         // Subscribe to events using the EventSubscriber trait
-        let event_stream = self.event_subscriber.subscribe_events(event_filter);
+        let mut event_stream = self.event_subscriber.subscribe_events(event_filter);
         let cancellation_token = self.cancellation_token.clone();
 
         let stream = async_stream::try_stream! {
-            // Pin the stream for use with .next() and tokio::select!
-            // Safe because the stream has Unpin bound
-            let mut pinned_stream = std::pin::Pin::new(event_stream);
-
             loop {
                 let event_result = tokio::select! {
-                    event_option = pinned_stream.next() => event_option,
+                    event_option = event_stream.next() => event_option,
                     _ = cancellation_token.cancelled() => {
                         debug!("Event stream cancelled");
                         None

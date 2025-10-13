@@ -5829,6 +5829,7 @@ dependencies = [
  "iota-execution",
  "iota-framework",
  "iota-genesis-builder",
+ "iota-grpc-types",
  "iota-json-rpc-types",
  "iota-macros",
  "iota-metrics",
@@ -6403,6 +6404,7 @@ dependencies = [
  "iota-metrics",
  "iota-storage",
  "iota-types",
+ "move-bytecode-utils",
  "move-core-types",
  "prometheus",
  "prost",
@@ -6421,6 +6423,7 @@ dependencies = [
 name = "iota-grpc-types"
 version = "1.10.0-alpha"
 dependencies = [
+ "iota-json-rpc-types",
  "iota-types",
  "serde",
 ]
