@@ -63,6 +63,7 @@ const identity = [
                 items: ['developer/iota-identity/how-tos/domain-linkage/create-and-verify'],
             },
             'developer/iota-identity/how-tos/key-storage',
+            'developer/iota-identity/how-tos/post-quantum'
         ],
     },
     {
