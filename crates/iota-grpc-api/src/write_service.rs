@@ -5,6 +5,7 @@ use std::sync::Arc;
 
 use fastcrypto::traits::ToFromBytes;
 use iota_core::{
+    authority::authority_per_epoch_store::AuthorityPerEpochStore,
     authority_client::NetworkAuthorityClient, transaction_orchestrator::TransactionOrchestrator,
 };
 use iota_json_rpc::{ObjectProviderCache, get_balance_changes_from_effect, get_object_changes};
@@ -64,6 +65,7 @@ impl WriteGrpcService {
         tx_bytes: Vec<u8>,
         signatures: Vec<Vec<u8>>,
         opts: Option<TransactionResponseOptions>,
+        epoch_store: &Arc<AuthorityPerEpochStore>,
     ) -> Result<
         (
             ExecuteTransactionRequestV1,
@@ -102,20 +104,16 @@ impl WriteGrpcService {
         };
 
         let transaction_block = if opts.show_input {
-            if let Some(epoch_store) = self.grpc_reader.load_epoch_store_one_call_per_task() {
-                Some(
-                    IotaTransactionBlock::try_from(
-                        txn.data().clone(),
-                        epoch_store.module_cache(),
-                        *txn.digest(),
-                    )
-                    .map_err(|e| {
-                        Status::internal(format!("Failed to create IotaTransactionBlock: {e}"))
-                    })?,
+            Some(
+                IotaTransactionBlock::try_from(
+                    txn.data().clone(),
+                    epoch_store.module_cache(),
+                    *txn.digest(),
                 )
-            } else {
-                return Err(Status::internal("Epoch store not available"));
-            }
+                .map_err(|e| {
+                    Status::internal(format!("Failed to create IotaTransactionBlock: {e}"))
+                })?,
+            )
         } else {
             None
         };
@@ -388,16 +386,14 @@ impl WriteGrpcService {
         raw_transaction: Vec<u8>,
         sender: IotaAddress,
         core_transaction_data: Option<TransactionData>,
+        epoch_store: &Arc<AuthorityPerEpochStore>,
     ) -> Result<Response<ExecuteTransactionResponse>, Status> {
         // Store core events for BCS serialization before converting to JSON type
         let core_events = response.events.clone();
 
         let events = if opts.show_events {
             tracing::trace!("Resolving events");
-            if let (Some(epoch_store), Some(authority_state)) = (
-                self.grpc_reader.load_epoch_store_one_call_per_task(),
-                self.grpc_reader.authority_state().as_ref(),
-            ) {
+            if let Some(authority_state) = self.grpc_reader.authority_state().as_ref() {
                 let backing_package_store = PostExecutionPackageResolver::new(
                     authority_state.get_backing_package_store().clone(),
                     &response.output_objects,
@@ -416,7 +412,7 @@ impl WriteGrpcService {
                 )
             } else {
                 return Err(Status::internal(
-                    "Cannot convert events: missing epoch store or authority state",
+                    "Cannot convert events: missing authority state",
                 ));
             }
         } else {
@@ -523,6 +519,13 @@ impl WriteService for WriteGrpcService {
     ) -> Result<Response<ExecuteTransactionResponse>, Status> {
         let req = request.into_inner();
 
+        // Load epoch store once at the beginning to ensure consistency throughout the
+        // request
+        let epoch_store = self
+            .grpc_reader
+            .load_epoch_store_one_call_per_task()
+            .ok_or_else(|| Status::internal("Epoch store not available"))?;
+
         let request_type = req
             .request_type
             .map(|rt| match rt {
@@ -541,7 +544,12 @@ impl WriteService for WriteGrpcService {
             transaction_block,
             raw_transaction,
             tx_data,
-        ) = self.prepare_execute_transaction_request(req.tx_bytes, req.signatures, req.options)?;
+        ) = self.prepare_execute_transaction_request(
+            req.tx_bytes,
+            req.signatures,
+            req.options,
+            &epoch_store,
+        )?;
 
         let digest = *txn.digest();
 
@@ -571,6 +579,7 @@ impl WriteService for WriteGrpcService {
             raw_transaction,
             sender,
             core_transaction_data,
+            &epoch_store,
         )
         .await
     }

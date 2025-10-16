@@ -387,6 +387,9 @@ impl RestReadStore {
     }
 
     /// Load epoch store for transaction processing
+    /// Note that the epoch store might change during reconfiguration and we
+    /// should use it carefully. See the code comments in
+    /// AuthorityState::load_epoch_store_one_call_per_task for more details.
     pub fn load_epoch_store_one_call_per_task(&self) -> Arc<AuthorityPerEpochStore> {
         self.state.load_epoch_store_one_call_per_task().clone()
     }
