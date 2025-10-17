@@ -4,11 +4,8 @@
 use std::time::Duration;
 
 use futures::StreamExt;
-use iota_grpc_api::{
-    client::EventClient,
-    common::{Address, AddressFilter, AllFilter, MoveEventTypeFilter},
-    events::{EventFilter, event_filter::Filter},
-};
+use iota_grpc_api::client::EventClient;
+use iota_grpc_types::v0::{common as grpc_common, events as grpc_events};
 use iota_types::{base_types::ObjectID, effects::TransactionEffectsAPI, transaction::CallArg};
 use test_cluster::TestCluster;
 use tokio::time::timeout;
@@ -85,14 +82,16 @@ async fn setup_test_cluster() -> (TestCluster, EventClient, ObjectID, ObjectID) 
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_event_filtering_and_bcs_serialization() {
+    use grpc_events::event_filter::Filter;
+
     let (cluster, event_client, nft_package_id, basics_package_id) = setup_test_cluster().await;
     let sender_1 = cluster.get_address_0();
     let sender_2 = cluster.get_address_1();
 
     // Client 1: AllFilter - should receive all events
     let mut all_client = event_client.clone();
-    let all_filter = EventFilter {
-        filter: Some(Filter::All(AllFilter {})),
+    let all_filter = grpc_events::EventFilter {
+        filter: Some(Filter::All(grpc_common::AllFilter {})),
     };
     let mut all_stream = all_client
         .stream_events(all_filter)
@@ -101,9 +100,9 @@ async fn test_event_filtering_and_bcs_serialization() {
 
     // Client 2: SenderFilter - should receive only events from sender_1
     let mut sender_client = event_client.clone();
-    let sender_filter = EventFilter {
-        filter: Some(Filter::Sender(AddressFilter {
-            address: Some(Address {
+    let sender_filter = grpc_events::EventFilter {
+        filter: Some(Filter::Sender(grpc_common::AddressFilter {
+            address: Some(grpc_common::Address {
                 address: sender_1.to_vec(),
             }),
         })),
@@ -115,9 +114,9 @@ async fn test_event_filtering_and_bcs_serialization() {
 
     // Client 3: MoveEventTypeFilter - should receive only NFT events
     let mut nft_client = event_client.clone();
-    let nft_filter = EventFilter {
-        filter: Some(Filter::MoveEventType(MoveEventTypeFilter {
-            package_id: Some(Address {
+    let nft_filter = grpc_events::EventFilter {
+        filter: Some(Filter::MoveEventType(grpc_common::MoveEventTypeFilter {
+            package_id: Some(grpc_common::Address {
                 address: nft_package_id.to_vec(),
             }),
             module: NFT_MODULE.to_string(),

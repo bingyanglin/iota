@@ -3,13 +3,9 @@
 
 use anyhow::anyhow;
 use futures::{Stream, StreamExt};
+use iota_grpc_types::v0::transactions as grpc_transactions;
 use iota_types::effects::TransactionEffects;
 use tonic::transport::Channel;
-
-use crate::transactions::{
-    Transaction, TransactionFilter, TransactionStreamRequest,
-    transaction_service_client::TransactionServiceClient,
-};
 
 /// Dedicated client for transaction-related gRPC operations.
 ///
@@ -17,14 +13,16 @@ use crate::transactions::{
 /// transactions with filtering capabilities.
 #[derive(Clone)]
 pub struct TransactionClient {
-    client: TransactionServiceClient<Channel>,
+    client: grpc_transactions::transaction_service_client::TransactionServiceClient<Channel>,
 }
 
 impl TransactionClient {
     /// Create a new TransactionClient from a shared gRPC channel.
     pub(super) fn new(channel: Channel) -> Self {
         Self {
-            client: TransactionServiceClient::new(channel),
+            client: grpc_transactions::transaction_service_client::TransactionServiceClient::new(
+                channel,
+            ),
         }
     }
 
@@ -38,9 +36,9 @@ impl TransactionClient {
     /// A stream of IOTA transaction effects that match the specified filter
     pub async fn stream_transactions(
         &mut self,
-        filter: TransactionFilter,
+        filter: grpc_transactions::TransactionFilter,
     ) -> Result<impl Stream<Item = Result<TransactionEffects, tonic::Status>>, tonic::Status> {
-        let request = TransactionStreamRequest {
+        let request = grpc_transactions::TransactionStreamRequest {
             filter: Some(filter),
         };
         let response = self.client.stream_transactions(request).await?;
@@ -58,7 +56,9 @@ impl TransactionClient {
     }
 
     /// Deserialize transaction effects from BCS-encoded data.
-    fn deserialize_transaction(tx: &Transaction) -> anyhow::Result<TransactionEffects> {
+    fn deserialize_transaction(
+        tx: &grpc_transactions::Transaction,
+    ) -> anyhow::Result<TransactionEffects> {
         let bcs_data = tx
             .bcs_data
             .as_ref()

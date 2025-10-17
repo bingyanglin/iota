@@ -4,10 +4,7 @@
 use std::time::Duration;
 
 use futures::StreamExt;
-use iota_grpc_api::{
-    common::{AddressFilter, AllFilter},
-    transactions::{TransactionFilter, transaction_filter::Filter},
-};
+use iota_grpc_types::v0::{common as grpc_common, transactions as grpc_transactions};
 use iota_types::effects::TransactionEffectsAPI;
 use test_cluster::TestCluster;
 use tokio::time::timeout;
@@ -33,13 +30,15 @@ async fn setup_test_cluster() -> (
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_transaction_filtering_and_bcs_serialization() {
+    use grpc_transactions::transaction_filter::Filter;
+
     let (cluster, transaction_client, sender_1) = setup_test_cluster().await;
     let sender_2 = cluster.get_address_1();
 
     // Client 1: AllTransactionsFilter - should receive all transactions
     let mut all_client = transaction_client.clone();
-    let all_filter = TransactionFilter {
-        filter: Some(Filter::All(AllFilter {})),
+    let all_filter = grpc_transactions::TransactionFilter {
+        filter: Some(Filter::All(grpc_common::AllFilter {})),
     };
     let mut all_stream = all_client
         .stream_transactions(all_filter)
@@ -48,9 +47,9 @@ async fn test_transaction_filtering_and_bcs_serialization() {
 
     // Client 2: FromAddressFilter - should receive only transactions from sender_1
     let mut sender_client = transaction_client.clone();
-    let sender_filter = TransactionFilter {
-        filter: Some(Filter::FromAddress(AddressFilter {
-            address: Some(iota_grpc_api::common::Address {
+    let sender_filter = grpc_transactions::TransactionFilter {
+        filter: Some(Filter::FromAddress(grpc_common::AddressFilter {
+            address: Some(grpc_common::Address {
                 address: sender_1.to_vec(),
             }),
         })),
@@ -182,14 +181,16 @@ async fn test_transaction_filtering_and_bcs_serialization() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_transaction_kind_filtering() {
+    use grpc_transactions::transaction_filter::Filter;
+
     let (cluster, transaction_client, sender) = setup_test_cluster().await;
 
     // Test TransactionKind filter
     let mut kind_client = transaction_client.clone();
-    let kind_filter = TransactionFilter {
+    let kind_filter = grpc_transactions::TransactionFilter {
         filter: Some(Filter::TransactionKind(
-            iota_grpc_api::transactions::TransactionKindFilter {
-                kind: iota_grpc_api::transactions::TransactionKind::ProgrammableTransaction as i32,
+            grpc_transactions::TransactionKindFilter {
+                kind: grpc_transactions::TransactionKind::ProgrammableTransaction as i32,
             },
         )),
     };

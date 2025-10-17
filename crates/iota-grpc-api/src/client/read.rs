@@ -1,6 +1,7 @@
 // Copyright (c) 2025 IOTA Stiftung
 // SPDX-License-Identifier: Apache-2.0
 
+use iota_grpc_types::v0::{common as grpc_common, read as grpc_read};
 use iota_types::{
     base_types::{IotaAddress, ObjectDigest, ObjectID, SequenceNumber, TransactionDigest},
     object::{Data, Object, ObjectInner, ObjectRead, Owner},
@@ -8,22 +9,17 @@ use iota_types::{
 use move_core_types::annotated_value::MoveStructLayout;
 use tonic::{Status, transport::Channel};
 
-use crate::{
-    common::{Address, Digest, ObjectRef as ProtoObjectRef},
-    read::{GetObjectRequest, exists, get_object_response, read_service_client::ReadServiceClient},
-};
-
 /// Dedicated client for read-related gRPC operations.
 #[derive(Clone)]
 pub struct ReadClient {
-    client: ReadServiceClient<Channel>,
+    client: grpc_read::read_service_client::ReadServiceClient<Channel>,
 }
 
 impl ReadClient {
     /// Create a new ReadClient from a shared gRPC channel.
     pub(super) fn new(channel: Channel) -> Self {
         Self {
-            client: ReadServiceClient::new(channel),
+            client: grpc_read::read_service_client::ReadServiceClient::new(channel),
         }
     }
 
@@ -36,8 +32,8 @@ impl ReadClient {
     /// Result containing ObjectRead (Exists/NotExists/Deleted)
     pub async fn get_object(&mut self, object_id: ObjectID) -> Result<ObjectRead, Status> {
         // Convert to gRPC request format
-        let grpc_request = GetObjectRequest {
-            object_id: Some(Address {
+        let grpc_request = grpc_read::GetObjectRequest {
+            object_id: Some(grpc_common::Address {
                 address: object_id.into_bytes().to_vec(),
             }),
         };
@@ -56,9 +52,11 @@ impl ReadClient {
 }
 
 /// Convert proto response to ObjectRead
-fn convert_proto_to_object_read(result: get_object_response::Result) -> Result<ObjectRead, Status> {
+fn convert_proto_to_object_read(
+    result: grpc_read::get_object_response::Result,
+) -> Result<ObjectRead, Status> {
     match result {
-        get_object_response::Result::Exists(exists) => {
+        grpc_read::get_object_response::Result::Exists(exists) => {
             // Parse ObjectRef
             let object_ref = parse_object_ref(&exists.object_ref, "object_ref")?;
 
@@ -78,11 +76,11 @@ fn convert_proto_to_object_read(result: get_object_response::Result) -> Result<O
 
             Ok(ObjectRead::Exists(object_ref, object, layout))
         }
-        get_object_response::Result::NotExists(not_exists) => {
+        grpc_read::get_object_response::Result::NotExists(not_exists) => {
             let object_id = parse_object_id(&not_exists.object_id, "object_id")?;
             Ok(ObjectRead::NotExists(object_id))
         }
-        get_object_response::Result::Deleted(deleted) => {
+        grpc_read::get_object_response::Result::Deleted(deleted) => {
             let object_ref = parse_object_ref(&deleted.object_ref, "object_ref")?;
             Ok(ObjectRead::Deleted(object_ref))
         }
@@ -90,7 +88,7 @@ fn convert_proto_to_object_read(result: get_object_response::Result) -> Result<O
 }
 
 /// Convert flattened proto Exists message to core Object
-fn convert_flattened_proto_to_object(exists: &crate::read::Exists) -> Result<Object, Status> {
+fn convert_flattened_proto_to_object(exists: &grpc_read::Exists) -> Result<Object, Status> {
     // Parse data from BCS
     let data_bcs = exists
         .data
@@ -115,29 +113,34 @@ fn convert_flattened_proto_to_object(exists: &crate::read::Exists) -> Result<Obj
 }
 
 /// Convert flattened proto owner oneof to core Owner
-fn convert_flattened_owner(proto_owner: &Option<exists::Owner>) -> Result<Owner, Status> {
+fn convert_flattened_owner(
+    proto_owner: &Option<grpc_read::exists::Owner>,
+) -> Result<Owner, Status> {
     let owner_oneof = proto_owner
         .as_ref()
         .ok_or_else(|| Status::internal("Missing owner in response"))?;
 
     match owner_oneof {
-        exists::Owner::AddressOwner(addr) => {
+        grpc_read::exists::Owner::AddressOwner(addr) => {
             let address = parse_iota_address(&Some(addr.clone()), "address_owner")?;
             Ok(Owner::AddressOwner(address))
         }
-        exists::Owner::ObjectOwner(addr) => {
+        grpc_read::exists::Owner::ObjectOwner(addr) => {
             let address = parse_iota_address(&Some(addr.clone()), "object_owner")?;
             Ok(Owner::ObjectOwner(address))
         }
-        exists::Owner::Shared(shared) => Ok(Owner::Shared {
+        grpc_read::exists::Owner::Shared(shared) => Ok(Owner::Shared {
             initial_shared_version: SequenceNumber::from_u64(shared.initial_shared_version),
         }),
-        exists::Owner::Immutable(_) => Ok(Owner::Immutable),
+        grpc_read::exists::Owner::Immutable(_) => Ok(Owner::Immutable),
     }
 }
 
 // Helper functions
-fn parse_object_id(address: &Option<Address>, field_name: &str) -> Result<ObjectID, Status> {
+fn parse_object_id(
+    address: &Option<grpc_common::Address>,
+    field_name: &str,
+) -> Result<ObjectID, Status> {
     let address = address
         .as_ref()
         .ok_or_else(|| Status::internal(format!("Missing {field_name}")))?;
@@ -155,7 +158,7 @@ fn parse_object_id(address: &Option<Address>, field_name: &str) -> Result<Object
 
 /// Parse ObjectRef from proto
 fn parse_object_ref(
-    proto_ref: &Option<ProtoObjectRef>,
+    proto_ref: &Option<grpc_common::ObjectRef>,
     field_name: &str,
 ) -> Result<(ObjectID, SequenceNumber, ObjectDigest), Status> {
     let proto_ref = proto_ref
@@ -169,7 +172,10 @@ fn parse_object_ref(
     Ok((object_id, version, digest))
 }
 
-fn parse_digest(digest: &Option<Digest>, field_name: &str) -> Result<ObjectDigest, Status> {
+fn parse_digest(
+    digest: &Option<grpc_common::Digest>,
+    field_name: &str,
+) -> Result<ObjectDigest, Status> {
     let digest = digest
         .as_ref()
         .ok_or_else(|| Status::internal(format!("Missing {field_name}")))?;
@@ -179,7 +185,7 @@ fn parse_digest(digest: &Option<Digest>, field_name: &str) -> Result<ObjectDiges
 }
 
 fn parse_transaction_digest(
-    digest: &Option<Digest>,
+    digest: &Option<grpc_common::Digest>,
     field_name: &str,
 ) -> Result<TransactionDigest, Status> {
     let digest = digest
@@ -190,7 +196,10 @@ fn parse_transaction_digest(
         .map_err(|e| Status::internal(format!("Invalid {field_name}: {e}")))
 }
 
-fn parse_iota_address(address: &Option<Address>, field_name: &str) -> Result<IotaAddress, Status> {
+fn parse_iota_address(
+    address: &Option<grpc_common::Address>,
+    field_name: &str,
+) -> Result<IotaAddress, Status> {
     let address = address
         .as_ref()
         .ok_or_else(|| Status::internal(format!("Missing {field_name}")))?;

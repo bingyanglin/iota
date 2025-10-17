@@ -3,7 +3,7 @@
 
 syntax = "proto3";
 
-package iota.grpc.events;
+package iota.grpc.v0.events;
 
 import "common.proto";
 
@@ -17,29 +17,29 @@ message EventStreamRequest {
 
 message Event {
   EventID event_id = 1;
-  iota.grpc.common.Address package_id = 2;
+  iota.grpc.v0.common.Address package_id = 2;
   string transaction_module = 3;
-  iota.grpc.common.Address sender = 4;
-  string type_name = 5;                      
-  string parsed_json = 6;                    
+  iota.grpc.v0.common.Address sender = 4;
+  string type_name = 5;
+  string parsed_json = 6;
   optional uint64 timestamp_ms = 7;
-  iota.grpc.common.BcsData event_data = 8;  
+  iota.grpc.v0.common.BcsData event_data = 8;
 }
 
 message EventID {
   uint64 event_seq = 1;
-  iota.grpc.common.Digest tx_digest = 2;
+  iota.grpc.v0.common.Digest tx_digest = 2;
 }
 
 // Rich event filter that supports gRPC event filtering
 message EventFilter {
   oneof filter {
-    iota.grpc.common.AllFilter all = 1;
-    iota.grpc.common.AddressFilter sender = 2;
-    iota.grpc.common.TransactionDigestFilter transaction = 3;
-    iota.grpc.common.MoveModuleFilter move_module = 4;
-    iota.grpc.common.MoveEventTypeFilter move_event_type = 5;
-    iota.grpc.common.MoveEventModuleFilter move_event_module = 6;
+    iota.grpc.v0.common.AllFilter all = 1;
+    iota.grpc.v0.common.AddressFilter sender = 2;
+    iota.grpc.v0.common.TransactionDigestFilter transaction = 3;
+    iota.grpc.v0.common.MoveModuleFilter move_module = 4;
+    iota.grpc.v0.common.MoveEventTypeFilter move_event_type = 5;
+    iota.grpc.v0.common.MoveEventModuleFilter move_event_module = 6;
     TimeRangeFilter time_range = 7;
   }
 }

@@ -3,7 +3,7 @@
 
 syntax = "proto3";
 
-package iota.grpc.write;
+package iota.grpc.v0.write;
 
 import "common.proto";
 
@@ -58,57 +58,57 @@ message ObjectChange {
 }
 
 message ObjectPublished {
-  iota.grpc.common.Address package_id = 1;
+  iota.grpc.v0.common.Address package_id = 1;
   uint64 version = 2;
-  iota.grpc.common.Digest digest = 3;
+  iota.grpc.v0.common.Digest digest = 3;
   repeated string modules = 4;
 }
 
 message ObjectTransferred {
-  iota.grpc.common.Address sender = 1;
-  iota.grpc.common.Owner recipient = 2;
+  iota.grpc.v0.common.Address sender = 1;
+  iota.grpc.v0.common.Owner recipient = 2;
   string object_type = 3;  // StructTag as string
-  iota.grpc.common.Address object_id = 4;
+  iota.grpc.v0.common.Address object_id = 4;
   uint64 version = 5;
-  iota.grpc.common.Digest digest = 6;
+  iota.grpc.v0.common.Digest digest = 6;
 }
 
 message ObjectMutated {
-  iota.grpc.common.Address sender = 1;
-  iota.grpc.common.Owner owner = 2;
+  iota.grpc.v0.common.Address sender = 1;
+  iota.grpc.v0.common.Owner owner = 2;
   string object_type = 3;  // StructTag as string
-  iota.grpc.common.Address object_id = 4;
+  iota.grpc.v0.common.Address object_id = 4;
   uint64 version = 5;
   uint64 previous_version = 6;
-  iota.grpc.common.Digest digest = 7;
+  iota.grpc.v0.common.Digest digest = 7;
 }
 
 message ObjectDeleted {
-  iota.grpc.common.Address sender = 1;
+  iota.grpc.v0.common.Address sender = 1;
   string object_type = 2;  // StructTag as string
-  iota.grpc.common.Address object_id = 3;
+  iota.grpc.v0.common.Address object_id = 3;
   uint64 version = 4;
 }
 
 message ObjectWrapped {
-  iota.grpc.common.Address sender = 1;
+  iota.grpc.v0.common.Address sender = 1;
   string object_type = 2;  // StructTag as string
-  iota.grpc.common.Address object_id = 3;
+  iota.grpc.v0.common.Address object_id = 3;
   uint64 version = 4;
 }
 
 message ObjectCreated {
-  iota.grpc.common.Address sender = 1;
-  iota.grpc.common.Owner owner = 2;
+  iota.grpc.v0.common.Address sender = 1;
+  iota.grpc.v0.common.Owner owner = 2;
   string object_type = 3;  // StructTag as string
-  iota.grpc.common.Address object_id = 4;
+  iota.grpc.v0.common.Address object_id = 4;
   uint64 version = 5;
-  iota.grpc.common.Digest digest = 6;
+  iota.grpc.v0.common.Digest digest = 6;
 }
 
 // BalanceChange represents balance changes during transaction execution
 message BalanceChange {
-  iota.grpc.common.Owner owner = 1;
+  iota.grpc.v0.common.Owner owner = 1;
   string coin_type = 2;  // TypeTag as string
   // Amount as string to support i128 (can be negative)
   // Format: decimal string representation of i128
@@ -117,22 +117,22 @@ message BalanceChange {
 
 message ExecuteTransactionResponse {
   // Transaction digest (32-byte)
-  iota.grpc.common.Digest digest = 1;
+  iota.grpc.v0.common.Digest digest = 1;
 
   // Transaction input data (optional, based on show_input option)
   // BCS-encoded TransactionData (core type from iota-types)
-  optional iota.grpc.common.BcsData transaction = 2;
+  optional iota.grpc.v0.common.BcsData transaction = 2;
 
   // BCS-encoded SenderSignedData (optional, based on show_raw_input option)
-  optional iota.grpc.common.BcsData raw_transaction = 3;
+  optional iota.grpc.v0.common.BcsData raw_transaction = 3;
 
   // Transaction effects (optional, based on show_effects option)
   // BCS-encoded TransactionEffects (core type from iota-types)
-  optional iota.grpc.common.BcsData effects = 4;
+  optional iota.grpc.v0.common.BcsData effects = 4;
 
   // Transaction events (optional, based on show_events option)
   // BCS-encoded TransactionEvents (core type from iota-types)
-  optional iota.grpc.common.BcsData events = 5;
+  optional iota.grpc.v0.common.BcsData events = 5;
 
   // Object changes (optional, based on show_object_changes option)
   repeated ObjectChange object_changes = 6;
@@ -154,5 +154,5 @@ message ExecuteTransactionResponse {
 
   // BCS-encoded raw effects (optional, based on show_raw_effects option)
   // BCS-encoded TransactionEffects (core type from iota-types)
-  optional iota.grpc.common.BcsData raw_effects = 12;
+  optional iota.grpc.v0.common.BcsData raw_effects = 12;
 }

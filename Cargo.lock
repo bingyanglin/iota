@@ -6407,7 +6407,6 @@ dependencies = [
  "move-bytecode-utils",
  "move-core-types",
  "prometheus",
- "prost",
  "serde",
  "serde_json",
  "test-cluster",
@@ -6415,7 +6414,6 @@ dependencies = [
  "tokio-stream",
  "tokio-util 0.7.12",
  "tonic 0.13.1",
- "tonic-build",
  "tracing",
 ]
 
@@ -6423,9 +6421,13 @@ dependencies = [
 name = "iota-grpc-types"
 version = "1.10.0-alpha"
 dependencies = [
+ "bcs",
  "iota-json-rpc-types",
  "iota-types",
+ "prost",
  "serde",
+ "tonic 0.13.1",
+ "tonic-build",
 ]
 
 [[package]]

@@ -5,7 +5,7 @@
 use std::sync::Arc;
 
 use futures::stream::BoxStream;
-use iota_grpc_types::{
+use iota_grpc_types::transactions::{
     EffectsWithInput as EffectsWithInputGrpc, TransactionFilter as TransactionFilterGrpc,
 };
 use iota_json_rpc_types::{

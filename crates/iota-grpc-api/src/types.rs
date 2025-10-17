@@ -9,8 +9,11 @@ use iota_core::{
     storage::RestReadStore,
 };
 use iota_grpc_types::{
-    CertifiedCheckpointSummary as GrpcCertifiedCheckpointSummary,
-    CheckpointData as GrpcCheckpointData,
+    checkpoints::{
+        CertifiedCheckpointSummary as GrpcCertifiedCheckpointSummary,
+        CheckpointData as GrpcCheckpointData,
+    },
+    v0::{checkpoints as grpc_checkpoints, common as grpc_common},
 };
 use iota_storage::key_value_store::TransactionKeyValueStore;
 use iota_types::{
@@ -20,13 +23,11 @@ use iota_types::{
     object::{Object, ObjectRead},
     storage::{ReadStore, RestStateReader, error::Kind},
 };
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use tokio::sync::broadcast::{Receiver, Sender, error::RecvError};
 use tokio_util::sync::CancellationToken;
 use tonic::Status;
 use tracing::debug;
-
-use crate::{checkpoints::Checkpoint, common::BcsData};
 
 /// Trait for broadcasting checkpoint summaries
 pub trait CheckpointSummaryBroadcaster {
@@ -171,25 +172,8 @@ impl CheckpointDataBroadcaster for () {
     }
 }
 
-impl BcsData {
-    pub fn serialize_from<T>(data: &T) -> Result<Self, bcs::Error>
-    where
-        T: Serialize,
-    {
-        let serialized = bcs::to_bytes(data)?;
-        Ok(BcsData { data: serialized })
-    }
-
-    pub fn deserialize_into<T>(&self) -> Result<T, bcs::Error>
-    where
-        T: for<'de> Deserialize<'de>,
-    {
-        bcs::from_bytes(&self.data)
-    }
-}
-
 // Type aliases and utility types
-pub type CheckpointStreamResult = Result<Checkpoint, Status>;
+pub type CheckpointStreamResult = Result<grpc_checkpoints::Checkpoint, Status>;
 /// Central gRPC data reader that provides unified access to checkpoint data.
 /// It provides methods for streaming both full checkpoint data and checkpoint
 /// summaries.
@@ -360,8 +344,8 @@ impl GrpcReader {
                     if let Some(item) = fetch_historical(&reader, start) {
                         debug!("[profile][grpc] Fetched checkpoint {data_type_name} for index {start} from DB.");
                         let sequence_number = get_sequence_number(&item);
-                        let response = BcsData::serialize_from(&*item)
-                            .map(|data| Checkpoint {
+                        let response = grpc_common::BcsData::serialize_from(&*item)
+                            .map(|data| grpc_checkpoints::Checkpoint {
                                 sequence_number,
                                 bcs_data: Some(data),
                                 is_full,
@@ -383,7 +367,7 @@ impl GrpcReader {
                     // note: tokio::select! cannot return results, so we put the match logic after the select
                     recv_result = rx.recv() => Some(recv_result),
                     _ = cancellation_token.cancelled() => {
-                        debug!("[profile][grpc] Checkpoint {data_type_name} stream cancelled");
+                        debug!("[profile][grpc] grpc_checkpoints::Checkpoint {data_type_name} stream cancelled");
                         None
                     }
                 };
@@ -393,8 +377,8 @@ impl GrpcReader {
                         debug!("[profile][grpc] Get checkpoint {data_type_name} for index {} from broadcast channel", get_sequence_number(&item));
                         let sequence_number = get_sequence_number(&item);
                         if start == sequence_number {
-                            let response = BcsData::serialize_from(&*item)
-                                .map(|data| Checkpoint {
+                            let response = grpc_common::BcsData::serialize_from(&*item)
+                                .map(|data| grpc_checkpoints::Checkpoint {
                                     sequence_number,
                                     bcs_data: Some(data),
                                     is_full,
@@ -414,7 +398,7 @@ impl GrpcReader {
                     }
                     Some(Err(RecvError::Closed)) => {
                         // report internal error to the stream and break
-                        Err(Status::internal(format!("Checkpoint {data_type_name} channel closed.")))?;
+                        Err(Status::internal(format!("grpc_checkpoints::Checkpoint {data_type_name} channel closed.")))?;
                         break;
                     }
                     None => {

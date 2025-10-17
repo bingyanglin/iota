@@ -8,6 +8,7 @@ use iota_core::{
     authority::authority_per_epoch_store::AuthorityPerEpochStore,
     authority_client::NetworkAuthorityClient, transaction_orchestrator::TransactionOrchestrator,
 };
+use iota_grpc_types::v0::{common as grpc_common, write as grpc_write};
 use iota_json_rpc::{ObjectProviderCache, get_balance_changes_from_effect, get_object_changes};
 use iota_json_rpc_types::{
     BalanceChange, IotaTransactionBlock, IotaTransactionBlockEvents, IotaTransactionBlockResponse,
@@ -29,16 +30,7 @@ use iota_types::{
 use tonic::{Request, Response, Status};
 use tracing::{Instrument, debug, instrument};
 
-use crate::{
-    GrpcReader,
-    common::{Address, BcsData, Digest, Owner as ProtoOwner, owner as proto_owner},
-    write::{
-        BalanceChange as ProtoBalanceChange, ExecuteTransactionRequest, ExecuteTransactionResponse,
-        ObjectChange as ProtoObjectChange, ObjectCreated, ObjectDeleted, ObjectMutated,
-        ObjectPublished, ObjectTransferred, ObjectWrapped, TransactionResponseOptions,
-        object_change::Change, write_service_server::WriteService,
-    },
-};
+use crate::GrpcReader;
 
 pub struct WriteGrpcService {
     /// Transaction orchestrator
@@ -64,12 +56,12 @@ impl WriteGrpcService {
         &self,
         tx_bytes: Vec<u8>,
         signatures: Vec<Vec<u8>>,
-        opts: Option<TransactionResponseOptions>,
+        opts: Option<grpc_write::TransactionResponseOptions>,
         epoch_store: &Arc<AuthorityPerEpochStore>,
     ) -> Result<
         (
             ExecuteTransactionRequestV1,
-            TransactionResponseOptions,
+            grpc_write::TransactionResponseOptions,
             IotaAddress,
             Vec<InputObjectKind>,
             Transaction,
@@ -148,40 +140,46 @@ impl WriteGrpcService {
         core_transaction_data: Option<&TransactionData>,
         core_effects: Option<&TransactionEffects>,
         core_events: Option<&TransactionEvents>,
-    ) -> Result<ExecuteTransactionResponse, Status> {
-        Ok(ExecuteTransactionResponse {
-            digest: Some(Digest {
+    ) -> Result<grpc_write::ExecuteTransactionResponse, Status> {
+        Ok(grpc_write::ExecuteTransactionResponse {
+            digest: Some(grpc_common::Digest {
                 digest: response.digest.into_inner().to_vec(),
             }),
             // Use core TransactionData (BCS-serializable)
             transaction: core_transaction_data
                 .map(|t| {
-                    bcs::to_bytes(t).map(|data| BcsData { data }).map_err(|e| {
-                        Status::internal(format!("Failed to serialize TransactionData: {e}"))
-                    })
+                    bcs::to_bytes(t)
+                        .map(|data| grpc_common::BcsData { data })
+                        .map_err(|e| {
+                            Status::internal(format!("Failed to serialize TransactionData: {e}"))
+                        })
                 })
                 .transpose()?,
             raw_transaction: if response.raw_transaction.is_empty() {
                 None
             } else {
-                Some(BcsData {
+                Some(grpc_common::BcsData {
                     data: response.raw_transaction.clone(),
                 })
             },
             // Use core TransactionEffects (BCS-serializable)
             effects: core_effects
                 .map(|e| {
-                    bcs::to_bytes(e).map(|data| BcsData { data }).map_err(|e| {
-                        Status::internal(format!("Failed to serialize TransactionEffects: {e}"))
-                    })
+                    bcs::to_bytes(e)
+                        .map(|data| grpc_common::BcsData { data })
+                        .map_err(|e| {
+                            Status::internal(format!("Failed to serialize TransactionEffects: {e}"))
+                        })
                 })
                 .transpose()?,
             // Use core TransactionEvents (BCS-serializable)
             events: core_events
                 .map(|e| {
-                    bcs::to_bytes(e).map(|data| BcsData { data }).map_err(|e| {
-                        Status::internal(format!("Failed to serialize TransactionEvents: {e}"))
-                    })
+                    bcs::to_bytes(e)
+                        .map(|data| grpc_common::BcsData { data })
+                        .map_err(|e| {
+                            Status::internal(format!("Failed to serialize TransactionEvents: {e}"))
+                        })
                 })
                 .transpose()?,
             // Convert ObjectChange to native proto messages
@@ -215,7 +213,7 @@ impl WriteGrpcService {
             raw_effects: if response.raw_effects.is_empty() {
                 None
             } else {
-                Some(BcsData {
+                Some(grpc_common::BcsData {
                     data: response.raw_effects.clone(),
                 })
             },
@@ -223,19 +221,21 @@ impl WriteGrpcService {
     }
 
     /// Convert ObjectChange (JSON-RPC type) to proto ObjectChange
-    fn convert_object_change_to_proto(change: &ObjectChange) -> Result<ProtoObjectChange, Status> {
+    fn convert_object_change_to_proto(
+        change: &ObjectChange,
+    ) -> Result<grpc_write::ObjectChange, Status> {
         let change_oneof = match change {
             ObjectChange::Published {
                 package_id,
                 version,
                 digest,
                 modules,
-            } => Change::Published(ObjectPublished {
-                package_id: Some(Address {
+            } => grpc_write::object_change::Change::Published(grpc_write::ObjectPublished {
+                package_id: Some(grpc_common::Address {
                     address: package_id.into_bytes().to_vec(),
                 }),
                 version: version.value(),
-                digest: Some(Digest {
+                digest: Some(grpc_common::Digest {
                     digest: digest.into_inner().to_vec(),
                 }),
                 modules: modules.clone(),
@@ -247,17 +247,17 @@ impl WriteGrpcService {
                 object_id,
                 version,
                 digest,
-            } => Change::Transferred(ObjectTransferred {
-                sender: Some(Address {
+            } => grpc_write::object_change::Change::Transferred(grpc_write::ObjectTransferred {
+                sender: Some(grpc_common::Address {
                     address: sender.to_vec(),
                 }),
                 recipient: Some(Self::convert_owner_to_proto(recipient)?),
                 object_type: object_type.to_string(),
-                object_id: Some(Address {
+                object_id: Some(grpc_common::Address {
                     address: object_id.into_bytes().to_vec(),
                 }),
                 version: version.value(),
-                digest: Some(Digest {
+                digest: Some(grpc_common::Digest {
                     digest: digest.into_inner().to_vec(),
                 }),
             }),
@@ -269,18 +269,18 @@ impl WriteGrpcService {
                 version,
                 previous_version,
                 digest,
-            } => Change::Mutated(ObjectMutated {
-                sender: Some(Address {
+            } => grpc_write::object_change::Change::Mutated(grpc_write::ObjectMutated {
+                sender: Some(grpc_common::Address {
                     address: sender.to_vec(),
                 }),
                 owner: Some(Self::convert_owner_to_proto(owner)?),
                 object_type: object_type.to_string(),
-                object_id: Some(Address {
+                object_id: Some(grpc_common::Address {
                     address: object_id.into_bytes().to_vec(),
                 }),
                 version: version.value(),
                 previous_version: previous_version.value(),
-                digest: Some(Digest {
+                digest: Some(grpc_common::Digest {
                     digest: digest.into_inner().to_vec(),
                 }),
             }),
@@ -289,12 +289,12 @@ impl WriteGrpcService {
                 object_type,
                 object_id,
                 version,
-            } => Change::Deleted(ObjectDeleted {
-                sender: Some(Address {
+            } => grpc_write::object_change::Change::Deleted(grpc_write::ObjectDeleted {
+                sender: Some(grpc_common::Address {
                     address: sender.to_vec(),
                 }),
                 object_type: object_type.to_string(),
-                object_id: Some(Address {
+                object_id: Some(grpc_common::Address {
                     address: object_id.into_bytes().to_vec(),
                 }),
                 version: version.value(),
@@ -304,12 +304,12 @@ impl WriteGrpcService {
                 object_type,
                 object_id,
                 version,
-            } => Change::Wrapped(ObjectWrapped {
-                sender: Some(Address {
+            } => grpc_write::object_change::Change::Wrapped(grpc_write::ObjectWrapped {
+                sender: Some(grpc_common::Address {
                     address: sender.to_vec(),
                 }),
                 object_type: object_type.to_string(),
-                object_id: Some(Address {
+                object_id: Some(grpc_common::Address {
                     address: object_id.into_bytes().to_vec(),
                 }),
                 version: version.value(),
@@ -321,23 +321,23 @@ impl WriteGrpcService {
                 object_id,
                 version,
                 digest,
-            } => Change::Created(ObjectCreated {
-                sender: Some(Address {
+            } => grpc_write::object_change::Change::Created(grpc_write::ObjectCreated {
+                sender: Some(grpc_common::Address {
                     address: sender.to_vec(),
                 }),
                 owner: Some(Self::convert_owner_to_proto(owner)?),
                 object_type: object_type.to_string(),
-                object_id: Some(Address {
+                object_id: Some(grpc_common::Address {
                     address: object_id.into_bytes().to_vec(),
                 }),
                 version: version.value(),
-                digest: Some(Digest {
+                digest: Some(grpc_common::Digest {
                     digest: digest.into_inner().to_vec(),
                 }),
             }),
         };
 
-        Ok(ProtoObjectChange {
+        Ok(grpc_write::ObjectChange {
             change: Some(change_oneof),
         })
     }
@@ -345,8 +345,8 @@ impl WriteGrpcService {
     /// Convert BalanceChange (JSON-RPC type) to proto BalanceChange
     fn convert_balance_change_to_proto(
         change: &BalanceChange,
-    ) -> Result<ProtoBalanceChange, Status> {
-        Ok(ProtoBalanceChange {
+    ) -> Result<grpc_write::BalanceChange, Status> {
+        Ok(grpc_write::BalanceChange {
             owner: Some(Self::convert_owner_to_proto(&change.owner)?),
             coin_type: change.coin_type.to_string(),
             amount: change.amount.to_string(),
@@ -354,23 +354,29 @@ impl WriteGrpcService {
     }
 
     /// Convert Owner to proto Owner
-    fn convert_owner_to_proto(owner: &CoreOwner) -> Result<ProtoOwner, Status> {
+    fn convert_owner_to_proto(owner: &CoreOwner) -> Result<grpc_common::Owner, Status> {
         let owner_oneof = match owner {
-            CoreOwner::AddressOwner(addr) => proto_owner::Owner::AddressOwner(Address {
-                address: addr.to_vec(),
-            }),
-            CoreOwner::ObjectOwner(addr) => proto_owner::Owner::ObjectOwner(Address {
-                address: addr.to_vec(),
-            }),
+            CoreOwner::AddressOwner(addr) => {
+                grpc_common::owner::Owner::AddressOwner(grpc_common::Address {
+                    address: addr.to_vec(),
+                })
+            }
+            CoreOwner::ObjectOwner(addr) => {
+                grpc_common::owner::Owner::ObjectOwner(grpc_common::Address {
+                    address: addr.to_vec(),
+                })
+            }
             CoreOwner::Shared {
                 initial_shared_version,
-            } => proto_owner::Owner::Shared(crate::common::SharedOwner {
+            } => grpc_common::owner::Owner::Shared(grpc_common::SharedOwner {
                 initial_shared_version: initial_shared_version.value(),
             }),
-            CoreOwner::Immutable => proto_owner::Owner::Immutable(crate::common::ImmutableOwner {}),
+            CoreOwner::Immutable => {
+                grpc_common::owner::Owner::Immutable(grpc_common::ImmutableOwner {})
+            }
         };
 
-        Ok(ProtoOwner {
+        Ok(grpc_common::Owner {
             owner: Some(owner_oneof),
         })
     }
@@ -379,7 +385,7 @@ impl WriteGrpcService {
         &self,
         response: ExecuteTransactionResponseV1,
         is_executed_locally: IsTransactionExecutedLocally,
-        opts: TransactionResponseOptions,
+        opts: grpc_write::TransactionResponseOptions,
         digest: TransactionDigest,
         input_objs: Vec<InputObjectKind>,
         transaction: Option<IotaTransactionBlock>,
@@ -387,7 +393,7 @@ impl WriteGrpcService {
         sender: IotaAddress,
         core_transaction_data: Option<TransactionData>,
         epoch_store: &Arc<AuthorityPerEpochStore>,
-    ) -> Result<Response<ExecuteTransactionResponse>, Status> {
+    ) -> Result<Response<grpc_write::ExecuteTransactionResponse>, Status> {
         // Store core events for BCS serialization before converting to JSON type
         let core_events = response.events.clone();
 
@@ -511,12 +517,12 @@ impl WriteGrpcService {
 // It's generated by tonic/protobuf and defines the interface that any gRPC
 // write service must implement.
 #[tonic::async_trait]
-impl WriteService for WriteGrpcService {
+impl grpc_write::write_service_server::WriteService for WriteGrpcService {
     #[instrument("grpc_api_execute_transaction", level = "trace", skip_all)]
     async fn execute_transaction(
         &self,
-        request: Request<ExecuteTransactionRequest>,
-    ) -> Result<Response<ExecuteTransactionResponse>, Status> {
+        request: Request<grpc_write::ExecuteTransactionRequest>,
+    ) -> Result<Response<grpc_write::ExecuteTransactionResponse>, Status> {
         let req = request.into_inner();
 
         // Load epoch store once at the beginning to ensure consistency throughout the

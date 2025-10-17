@@ -3,7 +3,7 @@
 
 syntax = "proto3";
 
-package iota.grpc.transactions;
+package iota.grpc.v0.transactions;
 
 import "common.proto";
 
@@ -19,21 +19,21 @@ message TransactionStreamRequest {
 
 // Transaction data
 message Transaction {
-  iota.grpc.common.BcsData bcs_data = 1;  // BCS-encoded TransactionEffects
+  iota.grpc.v0.common.BcsData bcs_data = 1;  // BCS-encoded TransactionEffects
 }
 
 // Rich transaction filter that supports gRPC transaction filtering
 message TransactionFilter {
   oneof filter {
-    iota.grpc.common.AllFilter all = 1;
+    iota.grpc.v0.common.AllFilter all = 1;
     CheckpointFilter checkpoint = 2;
-    iota.grpc.common.MoveFunctionFilter move_function = 3;
+    iota.grpc.v0.common.MoveFunctionFilter move_function = 3;
     InputObjectFilter input_object = 4;
     ChangedObjectFilter changed_object = 5;
-    iota.grpc.common.AddressFilter from_address = 6;
-    iota.grpc.common.AddressFilter to_address = 7;
+    iota.grpc.v0.common.AddressFilter from_address = 6;
+    iota.grpc.v0.common.AddressFilter to_address = 7;
     FromAndToAddressFilter from_and_to_address = 8;
-    iota.grpc.common.AddressFilter from_or_to_address = 9;
+    iota.grpc.v0.common.AddressFilter from_or_to_address = 9;
     TransactionKindFilter transaction_kind = 10;
     TransactionKindInFilter transaction_kind_in = 11;
   }
@@ -46,19 +46,19 @@ message CheckpointFilter {
 
 // Filter by input object ID
 message InputObjectFilter {
-  iota.grpc.common.Address object_id = 1;
+  iota.grpc.v0.common.Address object_id = 1;
 }
 
 // Filter by changed object ID (created, mutated, unwrapped)
 message ChangedObjectFilter {
-  iota.grpc.common.Address object_id = 1;
+  iota.grpc.v0.common.Address object_id = 1;
 }
 
 
 // Filter by sender and recipient addresses
 message FromAndToAddressFilter {
-  iota.grpc.common.Address from_address = 1;
-  iota.grpc.common.Address to_address = 2;
+  iota.grpc.v0.common.Address from_address = 1;
+  iota.grpc.v0.common.Address to_address = 2;
 }
 
 
@@ -82,4 +82,3 @@ enum TransactionKind {
   RANDOMNESS_STATE_UPDATE = 5;
   END_OF_EPOCH_TRANSACTION = 6;
 }
-
