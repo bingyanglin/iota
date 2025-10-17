@@ -11,7 +11,10 @@ use iota_types::{
 use move_core_types::{identifier::Identifier, language_storage::StructTag};
 use tonic::transport::Channel;
 
-use crate::events::{Event, EventStreamRequest, event_service_client::EventServiceClient};
+use crate::{
+    common::Event,
+    events::{EventStreamRequest, event_service_client::EventServiceClient},
+};
 
 /// Dedicated client for event-related gRPC operations.
 ///

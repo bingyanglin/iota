@@ -3,20 +3,25 @@
 
 use std::sync::Arc;
 
+use iota_json_rpc::{ObjectProviderCache, get_balance_changes_from_effect, get_object_changes};
+use iota_json_rpc_types::{BalanceChange, ObjectChange};
 use iota_metrics::spawn_monitored_task;
 use iota_types::{
-    base_types::ObjectID,
+    base_types::{ObjectID, TransactionDigest},
+    effects::{TransactionEffects, TransactionEffectsAPI, TransactionEvents},
     object::{ObjectRead, Owner},
+    transaction::TransactionDataAPI,
 };
 use tonic::{Request, Response, Status};
-use tracing::{debug, instrument, warn};
+use tracing::{Instrument, debug, error, instrument, warn};
 
 use crate::{
     GrpcReader,
-    common::{Address, BcsData, Digest, ObjectRef},
+    common::{Address, BcsData, Digest, ObjectRef, TransactionResponse},
     read::{
-        Deleted, Exists, GetObjectRequest, GetObjectResponse, ImmutableOwner, NotExists,
-        SharedOwner, exists, get_object_response, read_service_server::ReadService,
+        ContainsTransactionRequest, ContainsTransactionResponse, Deleted, Exists, GetObjectRequest,
+        GetObjectResponse, GetTransactionRequest, ImmutableOwner, NotExists, SharedOwner, exists,
+        get_object_response, read_service_server::ReadService,
     },
 };
 
@@ -61,6 +66,505 @@ impl ReadService for ReadGrpcService {
 
         debug!("Object retrieved successfully");
         Ok(Response::new(response))
+    }
+
+    #[instrument(skip(self))]
+    async fn contains_transaction(
+        &self,
+        request: Request<ContainsTransactionRequest>,
+    ) -> Result<Response<ContainsTransactionResponse>, Status> {
+        let req = request.into_inner();
+
+        // Parse transaction digest from request
+        let tx_digest = parse_tx_digest(&req.digest)?;
+
+        // Check if transaction exists
+        let grpc_reader = self.grpc_reader.clone();
+        let exists = spawn_monitored_task!(async move {
+            match grpc_reader.transaction_kv_store() {
+                Some(kv_store) => kv_store.get_tx(tx_digest).await.map(|_| true).or(Ok(false)),
+                None => Err(Status::internal("Transaction KV store not available")),
+            }
+        })
+        .await
+        .map_err(|e| Status::internal(format!("Task execution failed: {e}")))??;
+
+        debug!(tx_digest=?tx_digest, exists, "Checked transaction existence");
+        Ok(Response::new(ContainsTransactionResponse { exists }))
+    }
+
+    #[instrument(skip(self))]
+    async fn get_transaction(
+        &self,
+        request: Request<GetTransactionRequest>,
+    ) -> Result<Response<TransactionResponse>, Status> {
+        let req = request.into_inner();
+        let opts = req.options.unwrap_or_default();
+
+        // Parse transaction digest
+        let tx_digest = parse_tx_digest(&req.digest)?;
+
+        let grpc_reader = self.grpc_reader.clone();
+
+        // Accumulate non-fatal errors for optional fields
+        let mut errors: Vec<String> = vec![];
+
+        // Fetch transaction from KV store
+        let kv_store = grpc_reader
+            .transaction_kv_store()
+            .clone()
+            .ok_or_else(|| Status::internal("Transaction KV store not available"))?;
+
+        let transaction = spawn_monitored_task!(async move {
+            kv_store.get_tx(tx_digest).await.map_err(|err| {
+                debug!(tx_digest=?tx_digest, "Failed to get transaction: {:?}", err);
+                Status::not_found(format!("Transaction not found: {tx_digest}"))
+            })
+        })
+        .await
+        .map_err(|e| Status::internal(format!("Task execution failed: {e}")))??;
+
+        let input_objects = transaction
+            .data()
+            .inner()
+            .intent_message
+            .value
+            .input_objects()
+            .unwrap_or_default();
+
+        // Store transaction data for BCS serialization before consuming
+        let core_transaction_data = transaction.data().intent_message().value.clone();
+        let sender = core_transaction_data.sender();
+
+        // Fetch effects if needed
+        let core_effects = if opts.show_effects
+            || opts.show_events
+            || opts.show_balance_changes
+            || opts.show_object_changes
+        {
+            let kv_store = grpc_reader.transaction_kv_store().clone().unwrap();
+            let effects = spawn_monitored_task!(async move {
+                kv_store
+                    .get_fx_by_tx_digest(tx_digest)
+                    .await
+                    .map_err(|err| {
+                        debug!(tx_digest=?tx_digest, "Failed to get effects: {:?}", err);
+                        Status::internal(format!("Failed to get effects: {err}"))
+                    })
+            })
+            .await
+            .map_err(|e| Status::internal(format!("Task execution failed: {e}")))??;
+            Some(effects)
+        } else {
+            None
+        };
+
+        // Fetch checkpoint info
+        let (checkpoint_seq, timestamp_ms) = {
+            let kv_store = grpc_reader.transaction_kv_store().clone().unwrap();
+            let checkpoint_seq = spawn_monitored_task!(async move {
+                kv_store
+                    .get_transaction_perpetual_checkpoint(tx_digest)
+                    .await
+                    .map_err(|e| {
+                        error!("Failed to retrieve checkpoint sequence for transaction {tx_digest:?}: {e:?}");
+                        Status::internal(format!("Failed to get checkpoint: {e}"))
+                    })
+            })
+            .await
+            .map_err(|e| Status::internal(format!("Task execution failed: {e}")))?;
+
+            let timestamp = if let Ok(Some(seq)) = checkpoint_seq {
+                let kv_store = grpc_reader.transaction_kv_store().clone().unwrap();
+                spawn_monitored_task!(async move {
+                    kv_store
+                        .get_checkpoint_summary(seq)
+                        .await
+                        .ok()
+                        .map(|c| c.timestamp_ms)
+                })
+                .await
+                .ok()
+                .flatten()
+            } else {
+                None
+            };
+
+            (checkpoint_seq.ok().flatten(), timestamp)
+        };
+
+        // Fetch events if needed
+        let core_events = if opts.show_events && core_effects.is_some() {
+            let kv_store = grpc_reader.transaction_kv_store().clone().unwrap();
+            match spawn_monitored_task!(async move {
+                kv_store
+                    .multi_get_events_by_tx_digests(&[tx_digest])
+                    .await
+                    .map_err(|e| {
+                        error!("Failed to get transaction events for {tx_digest:?}: {e:?}");
+                        e
+                    })
+            })
+            .await
+            {
+                Ok(Ok(mut events_list)) => {
+                    // Successfully fetched events
+                    events_list.pop().flatten().or(Some(TransactionEvents::default()))
+                }
+                Ok(Err(e)) => {
+                    // Failed to fetch events - add to errors and continue
+                    errors.push(format!("Failed to get events: {e}"));
+                    Some(TransactionEvents::default())
+                }
+                Err(e) => {
+                    // Task execution failed - add to errors and continue
+                    errors.push(format!("Task execution failed while fetching events: {e}"));
+                    Some(TransactionEvents::default())
+                }
+            }
+        } else {
+            None
+        };
+
+        // Calculate balance changes and object changes
+        let (balance_changes, object_changes) = if opts.show_balance_changes
+            || opts.show_object_changes
+        {
+            if let Some(effects) = &core_effects {
+                let authority_state = grpc_reader
+                    .authority_state()
+                    .ok_or_else(|| Status::internal("Authority state not available"))?;
+                let kv_store = grpc_reader.transaction_kv_store().clone().unwrap();
+                let object_cache = ObjectProviderCache::new((authority_state.clone(), kv_store));
+
+                let balance_changes = if opts.show_balance_changes {
+                    match get_balance_changes_from_effect(
+                        &object_cache,
+                        effects,
+                        input_objects.clone(),
+                        None,
+                    )
+                    .instrument(tracing::trace_span!("resolving balance changes"))
+                    .await
+                    {
+                        Ok(changes) => Some(changes),
+                        Err(e) => {
+                            errors.push(format!("Failed to fetch balance changes: {e:?}"));
+                            None
+                        }
+                    }
+                } else {
+                    None
+                };
+
+                let object_changes = if opts.show_object_changes {
+                    match get_object_changes(
+                        &object_cache,
+                        sender,
+                        effects.modified_at_versions(),
+                        effects.all_changed_objects(),
+                        effects.all_removed_objects(),
+                    )
+                    .instrument(tracing::trace_span!("resolving object changes"))
+                    .await
+                    {
+                        Ok(changes) => Some(changes),
+                        Err(e) => {
+                            errors.push(format!("Failed to fetch object changes: {e:?}"));
+                            None
+                        }
+                    }
+                } else {
+                    None
+                };
+
+                (balance_changes, object_changes)
+            } else {
+                (None, None)
+            }
+        } else {
+            (None, None)
+        };
+
+        // Convert to proto TransactionResponse
+        let response = self.convert_to_transaction_response(
+            tx_digest,
+            opts.show_input.then_some(&core_transaction_data),
+            opts.show_raw_input.then(|| transaction.data()),
+            core_effects.as_ref(),
+            core_events.as_ref(),
+            object_changes,
+            balance_changes,
+            timestamp_ms,
+            checkpoint_seq,
+            opts.show_raw_effects,
+            errors,
+        )?;
+
+        debug!(tx_digest=?tx_digest, "Transaction retrieved successfully");
+        Ok(Response::new(response))
+    }
+}
+
+impl ReadGrpcService {
+    /// Convert transaction data to proto TransactionResponse
+    /// Reuses the same conversion logic as
+    /// write_service::convert_response_to_proto
+    fn convert_to_transaction_response(
+        &self,
+        digest: TransactionDigest,
+        core_transaction_data: Option<&iota_types::transaction::TransactionData>,
+        raw_transaction_data: Option<&iota_types::transaction::SenderSignedData>,
+        core_effects: Option<&TransactionEffects>,
+        core_events: Option<&TransactionEvents>,
+        object_changes: Option<Vec<ObjectChange>>,
+        balance_changes: Option<Vec<BalanceChange>>,
+        timestamp_ms: Option<u64>,
+        checkpoint: Option<u64>,
+        show_raw_effects: bool,
+        errors: Vec<String>,
+    ) -> Result<TransactionResponse, Status> {
+        Ok(TransactionResponse {
+            digest: Some(Digest {
+                digest: digest.into_inner().to_vec(),
+            }),
+            // Use core TransactionData (BCS-serializable)
+            transaction: core_transaction_data
+                .map(|t| {
+                    bcs::to_bytes(t).map(|data| BcsData { data }).map_err(|e| {
+                        Status::internal(format!("Failed to serialize TransactionData: {e}"))
+                    })
+                })
+                .transpose()?,
+            raw_transaction: raw_transaction_data
+                .map(|t| {
+                    bcs::to_bytes(t).map(|data| BcsData { data }).map_err(|e| {
+                        Status::internal(format!("Failed to serialize SenderSignedData: {e}"))
+                    })
+                })
+                .transpose()?,
+            // Use core TransactionEffects (BCS-serializable)
+            effects: core_effects
+                .map(|e| {
+                    bcs::to_bytes(e).map(|data| BcsData { data }).map_err(|e| {
+                        Status::internal(format!("Failed to serialize TransactionEffects: {e}"))
+                    })
+                })
+                .transpose()?,
+            // Use core TransactionEvents (BCS-serializable)
+            events: core_events
+                .map(|e| {
+                    bcs::to_bytes(e).map(|data| BcsData { data }).map_err(|e| {
+                        Status::internal(format!("Failed to serialize TransactionEvents: {e}"))
+                    })
+                })
+                .transpose()?,
+            // Convert ObjectChange to native proto messages
+            object_changes: object_changes
+                .map(|changes| {
+                    changes
+                        .iter()
+                        .map(Self::convert_object_change_to_proto)
+                        .collect::<Result<Vec<_>, _>>()
+                })
+                .transpose()?
+                .unwrap_or_default(),
+            // Convert BalanceChange to native proto messages
+            balance_changes: balance_changes
+                .map(|changes| {
+                    changes
+                        .iter()
+                        .map(Self::convert_balance_change_to_proto)
+                        .collect::<Result<Vec<_>, _>>()
+                })
+                .transpose()?
+                .unwrap_or_default(),
+            timestamp_ms,
+            confirmed_local_execution: None, // Not applicable for historical transactions
+            checkpoint,
+            errors,
+            raw_effects: if show_raw_effects {
+                core_effects
+                    .map(|e| {
+                        bcs::to_bytes(e).map(|data| BcsData { data }).map_err(|e| {
+                            Status::internal(format!("Failed to serialize raw effects: {e}"))
+                        })
+                    })
+                    .transpose()?
+            } else {
+                None
+            },
+        })
+    }
+
+    /// Convert ObjectChange (JSON-RPC type) to proto ObjectChange
+    pub(crate) fn convert_object_change_to_proto(
+        change: &ObjectChange,
+    ) -> Result<crate::common::ObjectChange, Status> {
+        use crate::common::{
+            ObjectCreated, ObjectDeleted, ObjectMutated, ObjectPublished, ObjectTransferred,
+            ObjectWrapped, object_change::Change,
+        };
+
+        let change_oneof = match change {
+            ObjectChange::Published {
+                package_id,
+                version,
+                digest,
+                modules,
+            } => Change::Published(ObjectPublished {
+                package_id: Some(Address {
+                    address: package_id.into_bytes().to_vec(),
+                }),
+                version: version.value(),
+                digest: Some(Digest {
+                    digest: digest.into_inner().to_vec(),
+                }),
+                modules: modules.clone(),
+            }),
+            ObjectChange::Transferred {
+                sender,
+                recipient,
+                object_type,
+                object_id,
+                version,
+                digest,
+            } => Change::Transferred(ObjectTransferred {
+                sender: Some(Address {
+                    address: sender.to_vec(),
+                }),
+                recipient: Some(Self::convert_owner_to_proto(recipient)?),
+                object_type: object_type.to_string(),
+                object_id: Some(Address {
+                    address: object_id.into_bytes().to_vec(),
+                }),
+                version: version.value(),
+                digest: Some(Digest {
+                    digest: digest.into_inner().to_vec(),
+                }),
+            }),
+            ObjectChange::Mutated {
+                sender,
+                owner,
+                object_type,
+                object_id,
+                version,
+                previous_version,
+                digest,
+            } => Change::Mutated(ObjectMutated {
+                sender: Some(Address {
+                    address: sender.to_vec(),
+                }),
+                owner: Some(Self::convert_owner_to_proto(owner)?),
+                object_type: object_type.to_string(),
+                object_id: Some(Address {
+                    address: object_id.into_bytes().to_vec(),
+                }),
+                version: version.value(),
+                previous_version: previous_version.value(),
+                digest: Some(Digest {
+                    digest: digest.into_inner().to_vec(),
+                }),
+            }),
+            ObjectChange::Deleted {
+                sender,
+                object_type,
+                object_id,
+                version,
+            } => Change::Deleted(ObjectDeleted {
+                sender: Some(Address {
+                    address: sender.to_vec(),
+                }),
+                object_type: object_type.to_string(),
+                object_id: Some(Address {
+                    address: object_id.into_bytes().to_vec(),
+                }),
+                version: version.value(),
+            }),
+            ObjectChange::Wrapped {
+                sender,
+                object_type,
+                object_id,
+                version,
+            } => Change::Wrapped(ObjectWrapped {
+                sender: Some(Address {
+                    address: sender.to_vec(),
+                }),
+                object_type: object_type.to_string(),
+                object_id: Some(Address {
+                    address: object_id.into_bytes().to_vec(),
+                }),
+                version: version.value(),
+            }),
+            ObjectChange::Created {
+                sender,
+                owner,
+                object_type,
+                object_id,
+                version,
+                digest,
+            } => Change::Created(ObjectCreated {
+                sender: Some(Address {
+                    address: sender.to_vec(),
+                }),
+                owner: Some(Self::convert_owner_to_proto(owner)?),
+                object_type: object_type.to_string(),
+                object_id: Some(Address {
+                    address: object_id.into_bytes().to_vec(),
+                }),
+                version: version.value(),
+                digest: Some(Digest {
+                    digest: digest.into_inner().to_vec(),
+                }),
+            }),
+        };
+
+        Ok(crate::common::ObjectChange {
+            change: Some(change_oneof),
+        })
+    }
+
+    /// Convert BalanceChange (JSON-RPC type) to proto BalanceChange
+    pub(crate) fn convert_balance_change_to_proto(
+        change: &BalanceChange,
+    ) -> Result<crate::common::BalanceChange, Status> {
+        Ok(crate::common::BalanceChange {
+            owner: Some(Self::convert_owner_to_proto(&change.owner)?),
+            coin_type: change.coin_type.to_string(),
+            amount: change.amount.to_string(),
+        })
+    }
+
+    /// Convert Owner to proto Owner
+    fn convert_owner_to_proto(
+        owner: &iota_types::object::Owner,
+    ) -> Result<crate::common::Owner, Status> {
+        use crate::common::{ImmutableOwner, SharedOwner, owner as proto_owner};
+
+        let owner_oneof = match owner {
+            iota_types::object::Owner::AddressOwner(addr) => {
+                proto_owner::Owner::AddressOwner(Address {
+                    address: addr.to_vec(),
+                })
+            }
+            iota_types::object::Owner::ObjectOwner(addr) => {
+                proto_owner::Owner::ObjectOwner(Address {
+                    address: addr.to_vec(),
+                })
+            }
+            iota_types::object::Owner::Shared {
+                initial_shared_version,
+            } => proto_owner::Owner::Shared(SharedOwner {
+                initial_shared_version: initial_shared_version.value(),
+            }),
+            iota_types::object::Owner::Immutable => {
+                proto_owner::Owner::Immutable(ImmutableOwner {})
+            }
+        };
+
+        Ok(crate::common::Owner {
+            owner: Some(owner_oneof),
+        })
     }
 }
 
@@ -167,4 +671,14 @@ fn parse_object_id(address: &Option<Address>) -> Result<ObjectID, Status> {
     bytes.copy_from_slice(&address.address);
     ObjectID::from_bytes(bytes)
         .map_err(|e| Status::invalid_argument(format!("Invalid object ID: {e}")))
+}
+
+/// Parse transaction digest from protobuf Digest
+fn parse_tx_digest(digest: &Option<Digest>) -> Result<TransactionDigest, Status> {
+    let digest = digest
+        .as_ref()
+        .ok_or_else(|| Status::invalid_argument("Transaction digest is required"))?;
+
+    TransactionDigest::try_from(digest.digest.as_slice())
+        .map_err(|e| Status::invalid_argument(format!("Invalid transaction digest: {e}")))
 }

@@ -16,8 +16,8 @@ use tonic::{Request, Response, Status};
 use tracing::debug;
 
 use crate::{
-    common::{Address, BcsData, Digest},
-    events::{Event, EventId, EventStreamRequest, event_service_server::EventService},
+    common::{Address, BcsData, Digest, Event, EventId},
+    events::{EventStreamRequest, event_service_server::EventService},
 };
 
 pub struct EventGrpcService {

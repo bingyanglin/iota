@@ -3,8 +3,13 @@
 
 use tonic::transport::Channel;
 
-use crate::write::{
-    ExecuteTransactionRequest, ExecuteTransactionResponse, write_service_client::WriteServiceClient,
+use crate::{
+    common::{BcsData, TransactionResponse},
+    write::{
+        DevInspectTransactionRequest, DevInspectTransactionResponse, DryRunTransactionRequest,
+        DryRunTransactionResponse, ExecuteTransactionRequest,
+        write_service_client::WriteServiceClient,
+    },
 };
 
 /// Dedicated client for write-related gRPC operations.
@@ -25,8 +30,29 @@ impl WriteClient {
     pub async fn execute_transaction(
         &mut self,
         request: ExecuteTransactionRequest,
-    ) -> Result<ExecuteTransactionResponse, tonic::Status> {
+    ) -> Result<TransactionResponse, tonic::Status> {
         let response = self.client.execute_transaction(request).await?;
+        Ok(response.into_inner())
+    }
+
+    /// Dev inspect a transaction and return the response.
+    pub async fn dev_inspect_transaction(
+        &mut self,
+        request: DevInspectTransactionRequest,
+    ) -> Result<DevInspectTransactionResponse, tonic::Status> {
+        let response = self.client.dev_inspect_transaction(request).await?;
+        Ok(response.into_inner())
+    }
+
+    /// Dry run a transaction and return the response.
+    pub async fn dry_run_transaction(
+        &mut self,
+        tx_bytes: Vec<u8>,
+    ) -> Result<DryRunTransactionResponse, tonic::Status> {
+        let request = DryRunTransactionRequest {
+            tx_bytes: Some(BcsData { data: tx_bytes }),
+        };
+        let response = self.client.dry_run_transaction(request).await?;
         Ok(response.into_inner())
     }
 }

@@ -6410,6 +6410,7 @@ dependencies = [
  "prost",
  "serde",
  "serde_json",
+ "shared-crypto",
  "test-cluster",
  "tokio",
  "tokio-stream",

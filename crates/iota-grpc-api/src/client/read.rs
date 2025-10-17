@@ -9,8 +9,14 @@ use move_core_types::annotated_value::MoveStructLayout;
 use tonic::{Status, transport::Channel};
 
 use crate::{
-    common::{Address, Digest, ObjectRef as ProtoObjectRef},
-    read::{GetObjectRequest, exists, get_object_response, read_service_client::ReadServiceClient},
+    common::{
+        Address, Digest, ObjectRef as ProtoObjectRef, TransactionResponse,
+        TransactionResponseOptions,
+    },
+    read::{
+        ContainsTransactionRequest, GetObjectRequest, GetTransactionRequest, exists,
+        get_object_response, read_service_client::ReadServiceClient,
+    },
 };
 
 /// Dedicated client for read-related gRPC operations.
@@ -52,6 +58,51 @@ impl ReadClient {
             .ok_or_else(|| Status::internal("Missing result in response"))?;
 
         convert_proto_to_object_read(result)
+    }
+
+    /// Check if a transaction exists.
+    ///
+    /// # Arguments
+    /// * `digest` - The transaction digest to check
+    ///
+    /// # Returns
+    /// Result containing whether the transaction exists
+    pub async fn contains_transaction(
+        &mut self,
+        digest: TransactionDigest,
+    ) -> Result<bool, Status> {
+        let grpc_request = ContainsTransactionRequest {
+            digest: Some(Digest {
+                digest: digest.into_inner().to_vec(),
+            }),
+        };
+
+        let response = self.client.contains_transaction(grpc_request).await?;
+        Ok(response.into_inner().exists)
+    }
+
+    /// Get a transaction by digest.
+    ///
+    /// # Arguments
+    /// * `digest` - The transaction digest to retrieve
+    /// * `options` - Options for what data to include in the response
+    ///
+    /// # Returns
+    /// Result containing the transaction response
+    pub async fn get_transaction(
+        &mut self,
+        digest: TransactionDigest,
+        options: Option<TransactionResponseOptions>,
+    ) -> Result<TransactionResponse, Status> {
+        let grpc_request = GetTransactionRequest {
+            digest: Some(Digest {
+                digest: digest.into_inner().to_vec(),
+            }),
+            options,
+        };
+
+        let response = self.client.get_transaction(grpc_request).await?;
+        Ok(response.into_inner())
     }
 }
 
