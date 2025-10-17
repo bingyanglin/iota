@@ -5,7 +5,9 @@ use futures::{Stream, StreamExt};
 use iota_grpc_types::{CertifiedCheckpointSummary, CheckpointData};
 use tonic::transport::Channel;
 
-use crate::checkpoint::checkpoint_service_client::CheckpointServiceClient;
+use crate::checkpoints::{
+    GetLatestCheckpointRequest, checkpoint_service_client::CheckpointServiceClient,
+};
 
 /// Enum representing the content of a checkpoint, either full data or summary.
 #[derive(Debug, Clone)]
@@ -46,7 +48,7 @@ impl CheckpointClient {
         end_sequence_number: Option<u64>,
         full: bool,
     ) -> Result<impl Stream<Item = Result<CheckpointContent, tonic::Status>>, tonic::Status> {
-        let request = crate::checkpoint::CheckpointStreamRequest {
+        let request = crate::checkpoints::CheckpointStreamRequest {
             start_sequence_number,
             end_sequence_number,
             full,
@@ -67,12 +69,25 @@ impl CheckpointClient {
         &mut self,
         epoch: u64,
     ) -> Result<u64, tonic::Status> {
-        let request = crate::checkpoint::EpochRequest { epoch };
+        let request = crate::checkpoints::EpochRequest { epoch };
         let response = self
             .client
             .get_epoch_first_checkpoint_sequence_number(request)
             .await?;
         Ok(response.into_inner().sequence_number)
+    }
+
+    /// Get the latest checkpoint.
+    pub async fn get_latest_checkpoint(
+        &mut self,
+        full: bool,
+    ) -> Result<CheckpointContent, tonic::Status> {
+        let request = GetLatestCheckpointRequest { full };
+        let response = self.client.get_latest_checkpoint(request).await?;
+        let checkpoint = response.into_inner();
+
+        Self::deserialize_checkpoint(&checkpoint)
+            .map_err(|e| tonic::Status::internal(format!("Failed to deserialize checkpoint: {e}")))
     }
 
     // ========================================
@@ -83,7 +98,7 @@ impl CheckpointClient {
     /// summary). Returns either checkpoint data or summary depending on the
     /// checkpoint type.
     fn deserialize_checkpoint(
-        checkpoint: &crate::checkpoint::Checkpoint,
+        checkpoint: &crate::checkpoints::Checkpoint,
     ) -> anyhow::Result<CheckpointContent> {
         let bcs_data = checkpoint
             .bcs_data

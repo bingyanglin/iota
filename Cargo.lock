@@ -5829,7 +5829,6 @@ dependencies = [
  "iota-execution",
  "iota-framework",
  "iota-genesis-builder",
- "iota-grpc-api",
  "iota-grpc-types",
  "iota-json-rpc-types",
  "iota-macros",
@@ -6395,12 +6394,19 @@ dependencies = [
  "anyhow",
  "async-stream",
  "bcs",
+ "fastcrypto",
  "futures",
  "iota-config",
+ "iota-core",
  "iota-grpc-types",
+ "iota-json-rpc",
  "iota-json-rpc-types",
+ "iota-metrics",
+ "iota-storage",
  "iota-types",
+ "move-bytecode-utils",
  "move-core-types",
+ "prometheus",
  "prost",
  "serde",
  "serde_json",
@@ -6417,6 +6423,7 @@ dependencies = [
 name = "iota-grpc-types"
 version = "1.10.0-alpha"
 dependencies = [
+ "iota-json-rpc-types",
  "iota-types",
  "serde",
 ]
