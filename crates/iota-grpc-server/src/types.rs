@@ -15,6 +15,7 @@ use iota_grpc_types::{
     },
     v0::{checkpoints as grpc_checkpoints, common as grpc_common},
 };
+use iota_json_rpc_types::{EventFilter, IotaEvent};
 use iota_storage::key_value_store::TransactionKeyValueStore;
 use iota_types::{
     base_types::ObjectID,
@@ -37,6 +38,14 @@ pub trait CheckpointSummaryBroadcaster {
 /// Trait for broadcasting checkpoint data
 pub trait CheckpointDataBroadcaster {
     fn send(&self, data: &CheckpointData) -> anyhow::Result<()>;
+}
+
+/// Trait for subscribing to events with filters
+pub trait EventSubscriber: Send + Sync {
+    fn subscribe_events(
+        &self,
+        filter: EventFilter,
+    ) -> Box<dyn futures::Stream<Item = IotaEvent> + Send + Unpin>;
 }
 
 /// Wrapper that converts native CertifiedCheckpointSummary to gRPC type before
@@ -458,5 +467,15 @@ impl GrpcReader {
             },
             |item| item.sequence_number(),
         )
+    }
+}
+
+// Implement EventSubscriber trait for gRPC integration
+impl EventSubscriber for iota_core::subscription_handler::SubscriptionHandler {
+    fn subscribe_events(
+        &self,
+        filter: EventFilter,
+    ) -> Box<dyn futures::Stream<Item = IotaEvent> + Send + Unpin> {
+        Box::new(Box::pin(self.subscribe_events(filter)))
     }
 }

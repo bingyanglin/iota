@@ -14,7 +14,7 @@ use utils::setup_test_cluster_and_client;
 
 async fn setup_test_cluster() -> (
     TestCluster,
-    iota_grpc_api::client::TransactionClient,
+    iota_grpc_client::TransactionClient,
     iota_types::base_types::IotaAddress,
 ) {
     let (cluster, node_client) = setup_test_cluster_and_client().await;
@@ -67,23 +67,23 @@ async fn test_transaction_filtering_and_bcs_serialization() {
             // Wait for the subscription to be established.
             tokio::time::sleep(Duration::from_millis(1000)).await;
 
-            // Generate 2 transactions from sender_1 (using smaller amounts)
+            // Generate 2 transactions from sender_1
             for _i in 0..2 {
                 let tx = cluster
                     .test_transaction_builder_with_sender(sender_1)
                     .await
-                    .transfer_iota(Some(100), sender_2)
+                    .transfer_iota(None, sender_2)
                     .build();
                 let signed_tx = cluster.sign_transaction(&tx);
                 cluster.execute_transaction(signed_tx).await;
                 tokio::time::sleep(Duration::from_millis(500)).await;
             }
 
-            // Generate 1 transaction from sender_2 (using smaller amount)
+            // Generate 1 transaction from sender_2
             let tx = cluster
                 .test_transaction_builder_with_sender(sender_2)
                 .await
-                .transfer_iota(Some(100), sender_1)
+                .transfer_iota(None, sender_1)
                 .build();
             let signed_tx = cluster.sign_transaction(&tx);
             cluster.execute_transaction(signed_tx).await;
@@ -154,7 +154,7 @@ async fn test_transaction_filtering_and_bcs_serialization() {
     });
 
     // Wait for all tasks to finish
-    let (all_results, sender_results, _) = tokio::join!(
+    let (all_results, sender_results, generate_result) = tokio::join!(
         all_transactions_task,
         sender_transactions_task,
         generate_transactions_task
@@ -163,6 +163,7 @@ async fn test_transaction_filtering_and_bcs_serialization() {
         all_results.expect("AllTransactionsFilter task should complete");
     let (sender_count, _sender_transactions) =
         sender_results.expect("FromAddressFilter task should complete");
+    generate_result.expect("Generate transactions task should complete");
 
     // Verify individual filter behaviors:
     // - AllTransactionsFilter: receives all transactions (2 from sender_1 + 1 from
@@ -209,7 +210,7 @@ async fn test_transaction_kind_filtering() {
             let tx = cluster
                 .test_transaction_builder_with_sender(sender)
                 .await
-                .transfer_iota(Some(100), cluster.get_address_1())
+                .transfer_iota(None, cluster.get_address_1())
                 .build();
             let signed_tx = cluster.sign_transaction(&tx);
             cluster.execute_transaction(signed_tx).await;
@@ -241,7 +242,9 @@ async fn test_transaction_kind_filtering() {
         transactions.len()
     });
 
-    let (_, kind_count_result) = tokio::join!(generate_transaction_task, kind_transactions_task);
+    let (generate_result, kind_count_result) =
+        tokio::join!(generate_transaction_task, kind_transactions_task);
+    generate_result.expect("Generate transaction task should complete");
     let kind_count = kind_count_result.expect("Kind transactions task should complete");
     assert_eq!(
         kind_count, 1,

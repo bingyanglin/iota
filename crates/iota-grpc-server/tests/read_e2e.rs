@@ -3,7 +3,7 @@
 
 use std::time::Duration;
 
-use iota_grpc_api::client::ReadClient;
+use iota_grpc_client::ReadClient;
 use iota_types::{base_types::ObjectID, object::ObjectRead};
 use test_cluster::TestCluster;
 

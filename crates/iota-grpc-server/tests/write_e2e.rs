@@ -3,7 +3,7 @@
 
 use std::time::Duration;
 
-use iota_grpc_api::client::WriteClient;
+use iota_grpc_client::WriteClient;
 use iota_grpc_types::v0::write as grpc_write;
 use iota_types::transaction::{TransactionData, TransactionDataAPI};
 use test_cluster::TestCluster;

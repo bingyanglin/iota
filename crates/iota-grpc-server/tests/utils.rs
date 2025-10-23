@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use iota_config::local_ip_utils;
-use iota_grpc_api::client::NodeClient;
+use iota_grpc_client::NodeClient;
 use test_cluster::{TestCluster, TestClusterBuilder};
 
 /// Basic setup that returns cluster and node client

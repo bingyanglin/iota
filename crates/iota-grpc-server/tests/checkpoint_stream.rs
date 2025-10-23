@@ -9,9 +9,9 @@ use std::{
 
 use iota_config::{local_ip_utils, node::GrpcApiConfig};
 use iota_core::subscription_handler::SubscriptionHandler;
-use iota_grpc_api::{
+use iota_grpc_client::{CheckpointClient, CheckpointContent, NodeClient};
+use iota_grpc_server::{
     CheckpointDataBroadcaster, CheckpointSummaryBroadcaster, GrpcReader, GrpcServerHandle,
-    client::{CheckpointClient, CheckpointContent, NodeClient},
     start_grpc_server,
 };
 use iota_types::{

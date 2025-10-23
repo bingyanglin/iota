@@ -1,5 +1,5 @@
 [package]
-name = "iota-grpc-api"
+name = "iota-grpc-server"
 version.workspace = true
 authors = ["IOTA Foundation <info@iota.org>"]
 edition = "2021"
@@ -17,7 +17,6 @@ bcs.workspace = true
 fastcrypto.workspace = true
 futures.workspace = true
 serde.workspace = true
-serde_json.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread"] }
 tokio-stream.workspace = true
 tokio-util.workspace = true
@@ -42,4 +41,5 @@ prometheus.workspace = true
 
 # internal dependencies
 iota-config.workspace = true
+iota-grpc-client.workspace = true
 test-cluster.workspace = true

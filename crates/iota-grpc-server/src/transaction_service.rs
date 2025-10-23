@@ -9,6 +9,7 @@ use iota_grpc_types::{
     transactions::{IotaTransactionKind, TransactionFilter},
     v0::{common as grpc_common, transactions as grpc_transactions},
 };
+use iota_json_rpc_types::Filter;
 use iota_types::{
     base_types::{IotaAddress, ObjectID},
     effects::TransactionEffectsAPI,
@@ -54,11 +55,24 @@ impl grpc_transactions::transaction_service_server::TransactionService for Trans
         let transaction_filter = create_transaction_filter(&proto_filter)?;
         debug!("New gRPC client subscribed with filter: {transaction_filter:?}");
 
-        // Subscribe to transactions using the gRPC subscription method
-        let mut transaction_stream = self
-            .event_subscriber
-            .subscribe_transactions_grpc(transaction_filter);
+        // Subscribe to gRPC transaction stream (all transactions)
+        let transaction_stream = self.event_subscriber.subscribe_transactions_grpc();
         let cancellation_token = self.cancellation_token.clone();
+
+        // Convert core EffectsWithInput to gRPC EffectsWithInput, apply filtering, and
+        // extract effects
+        let mut transaction_stream = transaction_stream
+            .map(
+                |core_effects| iota_grpc_types::transactions::EffectsWithInput {
+                    input: core_effects.input,
+                    effects: core_effects.effects,
+                },
+            )
+            .filter(move |grpc_effects| {
+                let matches = transaction_filter.matches(grpc_effects);
+                futures::future::ready(matches)
+            })
+            .map(|grpc_effects| grpc_effects.effects);
 
         let stream = async_stream::stream! {
             loop {

@@ -3,7 +3,6 @@
 
 // Modules
 pub mod checkpoint_service;
-pub mod client;
 pub mod event_service;
 pub mod read_service;
 pub mod server;
@@ -13,16 +12,12 @@ pub mod write_service;
 
 // Re-export commonly used types and traits
 pub use checkpoint_service::CheckpointGrpcService;
-pub use client::{
-    CheckpointClient, CheckpointContent, EventClient, NodeClient, ReadClient, TransactionClient,
-    WriteClient,
-};
 pub use event_service::EventGrpcService;
 pub use read_service::ReadGrpcService;
 pub use server::{GrpcServerHandle, start_grpc_server};
 pub use transaction_service::TransactionGrpcService;
 pub use types::{
-    CheckpointDataBroadcaster, CheckpointSummaryBroadcaster, GrpcCheckpointDataBroadcaster,
-    GrpcCheckpointSummaryBroadcaster, GrpcReader,
+    CheckpointDataBroadcaster, CheckpointSummaryBroadcaster, EventSubscriber,
+    GrpcCheckpointDataBroadcaster, GrpcCheckpointSummaryBroadcaster, GrpcReader,
 };
 pub use write_service::WriteGrpcService;

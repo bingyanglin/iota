@@ -4,7 +4,7 @@
 use std::time::Duration;
 
 use futures::StreamExt;
-use iota_grpc_api::client::CheckpointClient;
+use iota_grpc_client::{CheckpointClient, CheckpointContent};
 use test_cluster::TestCluster;
 
 mod utils;
@@ -38,7 +38,7 @@ async fn e2e_stream_checkpoints() {
         while let Some(res) = stream.next().await {
             match res {
                 Ok(checkpoint_content) => match checkpoint_content {
-                    iota_grpc_api::client::CheckpointContent::Summary(summary) => match summary {
+                    CheckpointContent::Summary(summary) => match summary {
                         iota_grpc_types::checkpoints::CertifiedCheckpointSummary::V1(
                             v1_summary,
                         ) => {
@@ -49,7 +49,7 @@ async fn e2e_stream_checkpoints() {
                             }
                         }
                     },
-                    iota_grpc_api::client::CheckpointContent::Data(_) => {
+                    CheckpointContent::Data(_) => {
                         panic!("Expected summary, got data");
                     }
                 },
@@ -97,7 +97,7 @@ async fn test_get_epoch_first_checkpoint_sequence_number() {
         while let Some(res) = stream.next().await {
             match res {
                 Ok(checkpoint_content) => match checkpoint_content {
-                    iota_grpc_api::client::CheckpointContent::Summary(summary) => match summary {
+                    CheckpointContent::Summary(summary) => match summary {
                         iota_grpc_types::checkpoints::CertifiedCheckpointSummary::V1(
                             v1_summary,
                         ) => {
@@ -109,7 +109,7 @@ async fn test_get_epoch_first_checkpoint_sequence_number() {
                             }
                         }
                     },
-                    iota_grpc_api::client::CheckpointContent::Data(_) => {
+                    CheckpointContent::Data(_) => {
                         panic!("Expected summary, got data");
                     }
                 },
@@ -153,14 +153,12 @@ async fn test_stream_full_checkpoint_data() {
         if let Some(res) = stream.next().await {
             match res {
                 Ok(checkpoint_content) => match checkpoint_content {
-                    iota_grpc_api::client::CheckpointContent::Data(checkpoint_data) => {
-                        match checkpoint_data {
-                            iota_grpc_types::checkpoints::CheckpointData::V1(v1_data) => {
-                                assert_eq!(v1_data.checkpoint_summary.sequence_number, 2);
-                            }
+                    CheckpointContent::Data(checkpoint_data) => match checkpoint_data {
+                        iota_grpc_types::checkpoints::CheckpointData::V1(v1_data) => {
+                            assert_eq!(v1_data.checkpoint_summary.sequence_number, 2);
                         }
-                    }
-                    iota_grpc_api::client::CheckpointContent::Summary(_) => {
+                    },
+                    CheckpointContent::Summary(_) => {
                         panic!("Expected data, got summary");
                     }
                 },
@@ -202,12 +200,12 @@ async fn test_get_latest_checkpoint() {
 
     // The latest checkpoint should be at least 5
     let sequence_number = match &latest_checkpoint {
-        iota_grpc_api::client::CheckpointContent::Summary(summary) => match summary {
+        CheckpointContent::Summary(summary) => match summary {
             iota_grpc_types::checkpoints::CertifiedCheckpointSummary::V1(v1_summary) => {
                 *v1_summary.data().sequence_number()
             }
         },
-        iota_grpc_api::client::CheckpointContent::Data(data) => match data {
+        CheckpointContent::Data(data) => match data {
             iota_grpc_types::checkpoints::CheckpointData::V1(v1_data) => {
                 v1_data.checkpoint_summary.sequence_number
             }
@@ -229,12 +227,12 @@ async fn test_get_latest_checkpoint() {
 
     // Should have the same sequence number
     let full_sequence_number = match &latest_full_checkpoint {
-        iota_grpc_api::client::CheckpointContent::Summary(summary) => match summary {
+        CheckpointContent::Summary(summary) => match summary {
             iota_grpc_types::checkpoints::CertifiedCheckpointSummary::V1(v1_summary) => {
                 *v1_summary.data().sequence_number()
             }
         },
-        iota_grpc_api::client::CheckpointContent::Data(data) => match data {
+        CheckpointContent::Data(data) => match data {
             iota_grpc_types::checkpoints::CheckpointData::V1(v1_data) => {
                 v1_data.checkpoint_summary.sequence_number
             }

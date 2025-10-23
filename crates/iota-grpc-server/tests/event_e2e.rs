@@ -4,7 +4,7 @@
 use std::time::Duration;
 
 use futures::StreamExt;
-use iota_grpc_api::client::EventClient;
+use iota_grpc_client::EventClient;
 use iota_grpc_types::v0::{common as grpc_common, events as grpc_events};
 use iota_types::{base_types::ObjectID, effects::TransactionEffectsAPI, transaction::CallArg};
 use test_cluster::TestCluster;
