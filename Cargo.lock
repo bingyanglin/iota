@@ -7176,7 +7176,7 @@ dependencies = [
 
 [[package]]
 name = "iota-package-alt"
-version = "1.8.0-alpha"
+version = "1.11.0-alpha"
 dependencies = [
  "move-package-alt",
  "serde",
