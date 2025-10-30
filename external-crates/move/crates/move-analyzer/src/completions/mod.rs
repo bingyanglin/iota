@@ -287,8 +287,7 @@ fn cursor_completion_items(
             let (name_chain_completions, name_chain_finalized) = name_chain_completions(
                 symbols,
                 cursor,
-                // colon_colon_triggered
-                true,
+                true, // colon_colon_triggered
                 auto_import,
             );
             completions.extend(name_chain_completions);
@@ -327,8 +326,7 @@ fn cursor_completion_items(
             let (name_chain_completions, name_chain_finalized) = name_chain_completions(
                 symbols,
                 cursor,
-                // colon_colon_triggered
-                false,
+                false, // colon_colon_triggered
                 auto_import,
             );
             completions.extend(name_chain_completions);

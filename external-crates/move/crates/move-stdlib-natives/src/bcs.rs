@@ -24,7 +24,7 @@ use smallvec::smallvec;
 
 use crate::helpers::make_module_natives;
 /// ****************************************************************************
-/// ********************* native fun to_bytes
+/// native fun to_bytes
 ///
 ///   gas cost: size_of(val_type) * input_unit_cost +        | get type layout
 ///             size_of(val) * input_unit_cost +             | serialize value
@@ -34,7 +34,6 @@ use crate::helpers::make_module_natives;
 /// additional failure_cost             will be charged.
 ///
 /// ****************************************************************************
-/// *******************
 #[derive(Debug, Clone)]
 pub struct ToBytesGasParameters {
     pub per_byte_serialized: InternalGasPerByte,
@@ -111,9 +110,8 @@ pub fn make_native_to_bytes(gas_params: ToBytesGasParameters) -> NativeFunction 
 }
 
 /// ****************************************************************************
-/// ********************* module
+/// module
 /// ****************************************************************************
-/// *******************
 #[derive(Debug, Clone)]
 pub struct GasParameters {
     pub to_bytes: ToBytesGasParameters,

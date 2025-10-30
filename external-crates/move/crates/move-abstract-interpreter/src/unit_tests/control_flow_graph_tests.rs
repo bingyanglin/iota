@@ -15,14 +15,10 @@ fn traversal_no_loops() {
         use Bytecode::*;
         VMControlFlowGraph::new(
             &[
-                // L0
-                LdTrue,
-                //
-                BrTrue(3),
-                // L2
-                Branch(3),
-                // L3
-                Ret,
+                LdTrue,    // L0
+                BrTrue(3), //
+                Branch(3), // L2
+                Ret,       // L3
             ],
             &[],
         )
@@ -39,24 +35,15 @@ fn traversal_no_loops_with_switch() {
         use Bytecode::*;
         VMControlFlowGraph::new(
             &[
-                // L0
-                VariantSwitch(VariantJumpTableIndex::new(0)),
-                //
-                Nop,
-                //
-                Nop,
-                //
-                Nop,
-                //
-                Nop,
-                //
-                Nop,
-                //
-                BrTrue(8),
-                // L2
-                Branch(8),
-                // L3
-                Ret,
+                VariantSwitch(VariantJumpTableIndex::new(0)), // L0
+                Nop,                                          //
+                Nop,                                          //
+                Nop,                                          //
+                Nop,                                          //
+                Nop,                                          //
+                BrTrue(8),                                    //
+                Branch(8),                                    // L2
+                Ret,                                          // L3
             ],
             &[VariantJumpTable {
                 // Doesn't matter
@@ -77,20 +64,13 @@ fn traversal_loops() {
         use Bytecode::*;
         VMControlFlowGraph::new(
             &[
-                // L0: Outer head
-                LdTrue,
-                // Outer break
-                BrTrue(6),
-                // L2: Inner head
-                LdTrue,
-                // Inner break
-                BrTrue(5),
-                // L4: Inner continue
-                Branch(2),
-                // Outer continue
-                Branch(0),
-                // L6:
-                Ret,
+                LdTrue,    // L0: Outer head
+                BrTrue(6), // Outer break
+                LdTrue,    // L2: Inner head
+                BrTrue(5), // Inner break
+                Branch(2), // L4: Inner continue
+                Branch(0), // Outer continue
+                Ret,       // L6:
             ],
             &[],
         )
@@ -107,24 +87,18 @@ fn traversal_loops_with_switch() {
         use Bytecode::*;
         VMControlFlowGraph::new(
             &[
-                // L0: Outer head
-                LdTrue,
-                // Outer break
-                BrTrue(4),
-                // L2: Inner head
-                VariantSwitch(VariantJumpTableIndex::new(0)),
-                // Outer continue
-                Branch(0),
-                // L6:
-                Ret,
+                LdTrue,                                       // L0: Outer head
+                BrTrue(4),                                    // Outer break
+                VariantSwitch(VariantJumpTableIndex::new(0)), // L2: Inner head
+                Branch(0),                                    // Outer continue
+                Ret,                                          // L6:
             ],
             &[VariantJumpTable {
                 // Doesn't matter
                 head_enum: EnumDefinitionIndex::new(0),
                 jump_table: JumpTableInner::Full(vec![
-                    // Inner break
-                    3, // Inner continue
-                    2,
+                    3, // Inner break
+                    2, // Inner continue
                 ]),
             }],
         )
@@ -141,12 +115,9 @@ fn traversal_non_loop_back_branch() {
         use Bytecode::*;
         VMControlFlowGraph::new(
             &[
-                // L0
-                Branch(2),
-                // L1
-                Ret,
-                // L2
-                Branch(1),
+                Branch(2), // L0
+                Ret,       // L1
+                Branch(1), // L2
             ],
             &[],
         )
@@ -163,12 +134,9 @@ fn traversal_non_loop_back_branch_variant_switch() {
         use Bytecode::*;
         VMControlFlowGraph::new(
             &[
-                // L0
-                VariantSwitch(VariantJumpTableIndex::new(0)),
-                // L1
-                Ret,
-                // L2
-                Branch(1),
+                VariantSwitch(VariantJumpTableIndex::new(0)), // L0
+                Ret,                                          // L1
+                Branch(1),                                    // L2
             ],
             &[VariantJumpTable {
                 // Doesn't matter
@@ -192,9 +160,9 @@ fn out_of_order_blocks_variant_switch() {
             (
                 i,
                 vec![
-                    Bytecode::Pop,      // Pop the value from the variant switch
+                    Bytecode::Pop, // Pop the value from the variant switch
                     Bytecode::LdU16(i), /* Ld the number so we can track what block this is
-                                         * canonically */
+                                    * canonically */
                     Bytecode::Pop, // Then pop it
                     Bytecode::Ret, // Then ret
                 ],

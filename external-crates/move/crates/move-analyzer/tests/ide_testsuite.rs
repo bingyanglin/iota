@@ -298,10 +298,8 @@ impl HintTest {
         let inlay_hints = inlay_hints_internal(
             symbols,
             use_file_path.to_path_buf(),
-            // type_hints
-            true,
-            // param_hints
-            true,
+            true, // type_hints
+            true, // param_hints
         )
         .unwrap();
         let lsp_line = self.use_line - 1; // 0th-based

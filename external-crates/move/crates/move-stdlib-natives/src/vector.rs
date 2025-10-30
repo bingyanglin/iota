@@ -25,12 +25,11 @@ use move_vm_types::{
 use crate::helpers::make_module_natives;
 
 /// ****************************************************************************
-/// ********************* native fun empty
+/// native fun empty
 ///
 ///   gas cost: base_cost
 ///
 /// ****************************************************************************
-/// *******************
 #[derive(Debug, Clone)]
 pub struct EmptyGasParameters {
     pub base: InternalGas,
@@ -59,12 +58,11 @@ pub fn make_native_empty(gas_params: EmptyGasParameters) -> NativeFunction {
 }
 
 /// ****************************************************************************
-/// ********************* native fun length
+/// native fun length
 ///
 ///   gas cost: base_cost
 ///
 /// ****************************************************************************
-/// *******************
 #[derive(Debug, Clone)]
 pub struct LengthGasParameters {
     pub base: InternalGas,
@@ -94,12 +92,11 @@ pub fn make_native_length(gas_params: LengthGasParameters) -> NativeFunction {
 }
 
 /// ****************************************************************************
-/// ********************* native fun push_back
+/// native fun push_back
 ///
 ///   gas cost: base_cost + legacy_unit_cost * max(1, size_of(val))
 ///
 /// ****************************************************************************
-/// *******************
 #[derive(Debug, Clone)]
 pub struct PushBackGasParameters {
     pub base: InternalGas,
@@ -145,12 +142,11 @@ pub fn make_native_push_back(gas_params: PushBackGasParameters) -> NativeFunctio
 }
 
 /// ****************************************************************************
-/// ********************* native fun borrow
+/// native fun borrow
 ///
 ///   gas cost: base_cost
 ///
 /// ****************************************************************************
-/// *******************
 #[derive(Debug, Clone)]
 pub struct BorrowGasParameters {
     pub base: InternalGas,
@@ -184,12 +180,11 @@ pub fn make_native_borrow(gas_params: BorrowGasParameters) -> NativeFunction {
 }
 
 /// ****************************************************************************
-/// ********************* native fun pop
+/// native fun pop
 ///
 ///   gas cost: base_cost
 ///
 /// ****************************************************************************
-/// *******************
 #[derive(Debug, Clone)]
 pub struct PopBackGasParameters {
     pub base: InternalGas,
@@ -221,12 +216,11 @@ pub fn make_native_pop_back(gas_params: PopBackGasParameters) -> NativeFunction 
 }
 
 /// ****************************************************************************
-/// ********************* native fun destroy_empty
+/// native fun destroy_empty
 ///
 ///   gas cost: base_cost
 ///
 /// ****************************************************************************
-/// *******************
 #[derive(Debug, Clone)]
 pub struct DestroyEmptyGasParameters {
     pub base: InternalGas,
@@ -259,9 +253,8 @@ pub fn make_native_destroy_empty(gas_params: DestroyEmptyGasParameters) -> Nativ
 }
 
 /// ****************************************************************************
-/// ********************* native fun swap
+/// native fun swap
 /// ****************************************************************************
-/// *******************
 #[derive(Debug, Clone)]
 pub struct SwapGasParameters {
     pub base: InternalGas,
@@ -318,9 +311,8 @@ fn native_error_to_abort(err: PartialVMError) -> PartialVMError {
 }
 
 /// ****************************************************************************
-/// ********************* module
+/// module
 /// ****************************************************************************
-/// *******************
 #[derive(Debug, Clone)]
 pub struct GasParameters {
     pub empty: EmptyGasParameters,

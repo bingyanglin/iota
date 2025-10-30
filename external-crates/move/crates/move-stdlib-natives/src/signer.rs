@@ -22,12 +22,11 @@ use smallvec::smallvec;
 use crate::helpers::make_module_natives;
 
 /// ****************************************************************************
-/// ********************* native fun borrow_address
+/// native fun borrow_address
 ///
 ///   gas cost: base_cost
 ///
 /// ****************************************************************************
-/// *******************
 #[derive(Debug, Clone)]
 pub struct BorrowAddressGasParameters {
     pub base: InternalGas,
@@ -61,9 +60,8 @@ pub fn make_native_borrow_address(gas_params: BorrowAddressGasParameters) -> Nat
 }
 
 /// ****************************************************************************
-/// ********************* module
+/// module
 /// ****************************************************************************
-/// *******************
 #[derive(Debug, Clone)]
 pub struct GasParameters {
     pub borrow_address: BorrowAddressGasParameters,

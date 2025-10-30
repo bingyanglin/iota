@@ -45,9 +45,8 @@ pub fn make_native_poison(gas_params: PoisonGasParameters) -> NativeFunction {
 }
 
 /// ****************************************************************************
-/// ********************* module
+/// module
 /// ****************************************************************************
-/// *******************
 #[derive(Debug, Clone)]
 pub struct GasParameters {
     pub poison: PoisonGasParameters,

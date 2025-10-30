@@ -970,8 +970,7 @@ impl PathExpander for LegacyPathExpander {
                         {
                             let addr = top_level_address(
                                 context,
-                                // suggest_declaration
-                                false,
+                                false, // suggest_declaration
                                 sp(*aloc, LN::Name(*n1)),
                             );
                             let mident =

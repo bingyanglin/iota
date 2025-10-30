@@ -61,7 +61,7 @@ simple_visitor!(
         //         if if_bool != else_bool {
         //             let msg = format!(
         //                 "Detected a redundant conditional expression `if (...) {}
-        // else {}`. Consider using the condition directly.",                 
+        // else {}`. Consider using the condition directly.",
         // if_bool, else_bool             );
         //             let diag = diag!(
         //                 StyleCodes::UnnecessaryConditional.diag_info(),

@@ -796,15 +796,12 @@ impl fmt::Display for DefInfo {
                 //   (modulo primitive types of course, but I think we can live with that)
                 let type_args_str = type_args_to_ide_string(
                     type_args,
-                    // separate_lines
-                    type_args.len() > SINGLE_LINE_TYPE_ARGS_NUM,
-                    // verbose
-                    true,
+                    type_args.len() > SINGLE_LINE_TYPE_ARGS_NUM, // separate_lines
+                    true,                                        // verbose
                 );
                 let args_str = typed_id_list_to_ide_string(
-                    arg_names, arg_types, '(', ')',  // separate_lines
+                    arg_names, arg_types, '(', ')', true, // separate_lines
                     true, // verbose
-                    true,
                 );
                 let ret_type_str = ret_type_to_ide_str(ret_type, /* verbose */ true);
                 write!(
@@ -856,10 +853,8 @@ impl fmt::Display for DefInfo {
                             field_types,
                             '{',
                             '}',
-                            // separate_lines
-                            true,
-                            // verbose
-                            true
+                            true, // separate_lines
+                            true  // verbose
                         ),
                     )
                 }
@@ -909,10 +904,8 @@ impl fmt::Display for DefInfo {
                         name,
                         type_list_to_ide_string(
                             field_types,
-                            // separate_lines
-                            false,
-                            // verbose
-                            true
+                            false, // separate_lines
+                            true   // verbose
                         )
                     )
                 } else {
@@ -927,10 +920,8 @@ impl fmt::Display for DefInfo {
                             field_types,
                             '{',
                             '}',
-                            // separate_lines
-                            false,
-                            // verbose
-                            true,
+                            false, // separate_lines
+                            true,  // verbose
                         ),
                     )
                 }

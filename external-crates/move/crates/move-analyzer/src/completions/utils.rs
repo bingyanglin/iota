@@ -250,12 +250,12 @@ pub fn call_completion_item(
         "fun {}({}){}",
         type_args_to_ide_string(
             type_args, // separate_lines
-            false, // verbose
+            false,     // verbose
             false
         ),
         type_list_to_ide_string(
             arg_types, // separate_lines
-            false, // verbose
+            false,     // verbose
             false
         ),
         ret_type_to_ide_str(ret_type, /* verbose */ false)

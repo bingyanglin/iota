@@ -68,8 +68,7 @@ pub fn dot_completions(
                 arg_names,
                 arg_types,
                 ret_type,
-                // inside_use
-                false,
+                false, // inside_use
             )
         } else {
             // this shouldn't really happen as we should be able to get

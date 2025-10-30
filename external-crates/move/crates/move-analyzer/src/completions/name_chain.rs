@@ -613,8 +613,7 @@ fn single_name_member_completion(
             arg_names,
             arg_types,
             ret_type,
-            // inside_use
-            false,
+            false, // inside_use
         )];
     };
 
@@ -1218,8 +1217,7 @@ fn module_use_completions(
                         cursor,
                         &mod_ident,
                         ChainCompletionKind::All,
-                        // inside_use
-                        true,
+                        true, // inside_use
                     ));
                     // no point in falling through to the members loop below
                     return completions;
@@ -1234,8 +1232,7 @@ fn module_use_completions(
                         cursor,
                         &mod_ident,
                         ChainCompletionKind::All,
-                        // inside_use
-                        true,
+                        true, // inside_use
                     ));
                     // no point checking other locations
                     break;
@@ -1254,8 +1251,7 @@ fn module_use_completions(
                         cursor,
                         &mod_ident,
                         ChainCompletionKind::All,
-                        // inside_use
-                        true,
+                        true, // inside_use
                     ));
                 }
             }

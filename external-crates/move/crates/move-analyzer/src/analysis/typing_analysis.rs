@@ -401,8 +401,7 @@ impl TypingAnalysisContext<'_> {
                     None,
                     use_name,
                     use_pos,
-                    // named_only
-                    false,
+                    false, // named_only
                 );
             }
             _ => (),
@@ -590,8 +589,7 @@ impl TypingAnalysisContext<'_> {
                             Some(&vname.value()),
                             fname,
                             &fpos,
-                            // named_only
-                            false,
+                            false, // named_only
                         );
                     }
                     self.process_match_patterm(pat);
@@ -609,8 +607,7 @@ impl TypingAnalysisContext<'_> {
                             None,
                             fname,
                             &fpos,
-                            // named_only
-                            false,
+                            false, // named_only
                         );
                     }
                     self.process_match_patterm(pat);
@@ -974,8 +971,7 @@ impl TypingVisitorContext for TypingAnalysisContext<'_> {
                             None,
                             fname,
                             &fpos,
-                            // named_only
-                            false,
+                            false, // named_only
                         );
                         lvalue_queue.push(lvalue);
                     }
@@ -992,8 +988,7 @@ impl TypingVisitorContext for TypingAnalysisContext<'_> {
                             Some(&vname.value()),
                             fname,
                             &fpos,
-                            // named_only
-                            false,
+                            false, // named_only
                         );
                         lvalue_queue.push(lvalue);
                     }
@@ -1059,8 +1054,7 @@ impl TypingVisitorContext for TypingAnalysisContext<'_> {
                             None,
                             fname,
                             &fpos,
-                            // named_only
-                            true,
+                            true, // named_only
                         );
                         visitor.visit_exp(init_exp);
                     }
@@ -1084,8 +1078,7 @@ impl TypingVisitorContext for TypingAnalysisContext<'_> {
                             Some(&vname.value()),
                             fname,
                             &fpos,
-                            // named_only
-                            true,
+                            true, // named_only
                         );
                         visitor.visit_exp(init_exp);
                     }

@@ -31,12 +31,11 @@ use crate::helpers::make_module_natives;
 // view, we can call ut8 functions like length, substring, etc.
 
 /// ****************************************************************************
-/// ********************* native fun internal_check_utf8
+/// native fun internal_check_utf8
 ///
 ///   gas cost: base_cost + unit_cost * length_in_bytes
 ///
 /// ****************************************************************************
-/// *******************
 #[derive(Debug, Clone)]
 pub struct CheckUtf8GasParameters {
     pub base: InternalGas,
@@ -72,12 +71,11 @@ pub fn make_native_check_utf8(gas_params: CheckUtf8GasParameters) -> NativeFunct
 }
 
 /// ****************************************************************************
-/// ********************* native fun internal_is_char_boundary
+/// native fun internal_is_char_boundary
 ///
 ///   gas cost: base_cost
 ///
 /// ****************************************************************************
-/// *******************
 #[derive(Debug, Clone)]
 pub struct IsCharBoundaryGasParameters {
     pub base: InternalGas,
@@ -113,12 +111,11 @@ pub fn make_native_is_char_boundary(gas_params: IsCharBoundaryGasParameters) -> 
 }
 
 /// ****************************************************************************
-/// ********************* native fun internal_sub_string
+/// native fun internal_sub_string
 ///
 ///   gas cost: base_cost + unit_cost * sub_string_length_in_bytes
 ///
 /// ****************************************************************************
-/// *******************
 #[derive(Debug, Clone)]
 pub struct SubStringGasParameters {
     pub base: InternalGas,
@@ -164,12 +161,11 @@ pub fn make_native_sub_string(gas_params: SubStringGasParameters) -> NativeFunct
 }
 
 /// ****************************************************************************
-/// ********************* native fun internal_index_of
+/// native fun internal_index_of
 ///
 ///   gas cost: base_cost + unit_cost * bytes_searched
 ///
 /// ****************************************************************************
-/// *******************
 #[derive(Debug, Clone)]
 pub struct IndexOfGasParameters {
     pub base: InternalGas,
@@ -223,9 +219,8 @@ pub fn make_native_index_of(gas_params: IndexOfGasParameters) -> NativeFunction 
 }
 
 /// ****************************************************************************
-/// ********************* module
+/// module
 /// ****************************************************************************
-/// *******************
 #[derive(Debug, Clone)]
 pub struct GasParameters {
     pub check_utf8: CheckUtf8GasParameters,

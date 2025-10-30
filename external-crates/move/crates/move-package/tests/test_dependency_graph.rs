@@ -172,8 +172,7 @@ fn always_deps() {
         true,
         std::io::sink(),
         tempfile::tempdir().unwrap().path().to_path_buf(),
-        // implicit_deps
-        Dependencies::default(),
+        Dependencies::default(), // implicit_deps
     );
     let (graph, _) = dep_graph_builder
         .get_graph(
@@ -592,8 +591,7 @@ fn immediate_dependencies() {
         true,
         std::io::sink(),
         tempfile::tempdir().unwrap().path().to_path_buf(),
-        // implicit_deps
-        Dependencies::default(),
+        Dependencies::default(), // implicit_deps
     );
     let (graph, _) = dep_graph_builder
         .get_graph(

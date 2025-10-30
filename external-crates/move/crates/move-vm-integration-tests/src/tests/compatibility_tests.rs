@@ -16,8 +16,7 @@ fn compile(prog: &str) -> normalized::Module<normalized::RcIdentifier> {
     normalized::Module::new(
         &mut normalized::RcPool::new(),
         &compiled_module,
-        // include code
-        true,
+        true, // include code
     )
 }
 
