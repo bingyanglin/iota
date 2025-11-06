@@ -186,12 +186,8 @@ impl<C: CoreThreadDispatcher> NetworkService for AuthorityService<C> {
             self.context
                 .metrics
                 .node_metrics
-                .invalid_block_headers
-                .with_label_values(&[
-                    peer_hostname.as_str(),
-                    "handle_subscribed_block_bundle",
-                    "UnexpectedAuthority",
-                ])
+                .bundles_with_invalid_parts
+                .with_label_values(&[peer_hostname.as_str(), "header", "UnexpectedAuthority"])
                 .inc();
             let e = ConsensusError::UnexpectedAuthority(signed_block_header.author(), peer);
             info!("Block with wrong authority from {}: {}", peer, e);
@@ -202,12 +198,8 @@ impl<C: CoreThreadDispatcher> NetworkService for AuthorityService<C> {
             self.context
                 .metrics
                 .node_metrics
-                .invalid_block_headers
-                .with_label_values(&[
-                    peer_hostname.as_str(),
-                    "handle_subscribed_block_bundle",
-                    e.clone().name(),
-                ])
+                .bundles_with_invalid_parts
+                .with_label_values(&[peer_hostname.as_str(), "header", e.clone().name()])
                 .inc();
             info!("Invalid block header from {}: {}", peer, e);
             return Err(e);
@@ -291,10 +283,10 @@ impl<C: CoreThreadDispatcher> NetworkService for AuthorityService<C> {
                 self.context
                     .metrics
                     .node_metrics
-                    .invalid_headers_in_bundles
+                    .bundles_with_invalid_parts
                     .with_label_values(&[
                         peer_hostname.as_str(),
-                        "handle_subscribed_block_bundle",
+                        "header",
                         "invalid round in header",
                     ])
                     .inc();
@@ -310,12 +302,8 @@ impl<C: CoreThreadDispatcher> NetworkService for AuthorityService<C> {
                 self.context
                     .metrics
                     .node_metrics
-                    .invalid_headers_in_bundles
-                    .with_label_values(&[
-                        peer_hostname.as_str(),
-                        "handle_subscribed_block_bundle",
-                        e.clone().name(),
-                    ])
+                    .bundles_with_invalid_parts
+                    .with_label_values(&[peer_hostname.as_str(), "header", e.clone().name()])
                     .inc();
                 info!("Invalid additional block header from {}: {}", peer, e);
                 return Err(e);
@@ -360,12 +348,8 @@ impl<C: CoreThreadDispatcher> NetworkService for AuthorityService<C> {
                 self.context
                     .metrics
                     .node_metrics
-                    .invalid_shard_in_bundles
-                    .with_label_values(&[
-                        peer_hostname.as_str(),
-                        "handle_subscribed_block_bundle",
-                        e.clone().name(),
-                    ])
+                    .bundles_with_invalid_parts
+                    .with_label_values(&[peer_hostname.as_str(), "shard", e.clone().name()])
                     .inc();
                 info!("Invalid shard from {}: {}", peer, e);
                 return Err(e);
@@ -386,12 +370,8 @@ impl<C: CoreThreadDispatcher> NetworkService for AuthorityService<C> {
                 self.context
                     .metrics
                     .node_metrics
-                    .invalid_shard_in_bundles
-                    .with_label_values(&[
-                        peer_hostname.as_str(),
-                        "handle_subscribed_block_bundle",
-                        e.clone().name(),
-                    ])
+                    .bundles_with_invalid_parts
+                    .with_label_values(&[peer_hostname.as_str(), "shard", e.clone().name()])
                     .inc();
                 info!("Invalid shard from {}: {}", peer, e);
                 return Err(e);
@@ -504,7 +484,7 @@ impl<C: CoreThreadDispatcher> NetworkService for AuthorityService<C> {
             warn!("Failed to send transaction messages to shard reconstructor: {e}");
         }
 
-        // 10.Add additional headers from bundle to dag, receive missing ancestors for
+        // 10. Add additional headers from bundle to dag, receive missing ancestors for
         // them. Normally, there should be no missing ancestors, as the headers are
         // sent in order of increasing rounds.
         let (mut missing_ancestors, mut missing_committed_txns) = self
