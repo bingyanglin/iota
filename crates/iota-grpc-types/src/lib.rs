@@ -21,6 +21,26 @@ mod proto_generated {
         include!("proto_generated/iota.grpc.v0.events.rs");
         include!("proto_generated/iota.grpc.v0.events.field_info.rs");
     }
+    pub mod dynamic_field {
+        include!("proto_generated/iota.grpc.v0.dynamic_field.rs");
+        include!("proto_generated/iota.grpc.v0.dynamic_field.field_info.rs");
+    }
+    pub mod epoch {
+        include!("proto_generated/iota.grpc.v0.epoch.rs");
+        include!("proto_generated/iota.grpc.v0.epoch.field_info.rs");
+    }
+    pub mod object {
+        include!("proto_generated/iota.grpc.v0.object.rs");
+        include!("proto_generated/iota.grpc.v0.object.field_info.rs");
+    }
+    pub mod state_service {
+        include!("proto_generated/iota.grpc.v0.state_service.rs");
+        include!("proto_generated/iota.grpc.v0.state_service.field_info.rs");
+    }
+    pub mod ledger_service {
+        include!("proto_generated/iota.grpc.v0.ledger_service.rs");
+        include!("proto_generated/iota.grpc.v0.ledger_service.field_info.rs");
+    }
 }
 
 // Re-export under v0 namespace

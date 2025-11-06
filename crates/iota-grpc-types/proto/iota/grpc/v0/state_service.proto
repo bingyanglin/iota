@@ -1,0 +1,36 @@
+// Copyright (c) Mysten Labs, Inc.
+// Modifications Copyright (c) 2025 IOTA Stiftung
+// SPDX-License-Identifier: Apache-2.0
+
+syntax = "proto3";
+
+package iota.grpc.v0.state_service;
+
+import "google/protobuf/field_mask.proto";
+import "common.proto";
+import "dynamic_field.proto";
+
+service StateService {
+  rpc ListDynamicFields(ListDynamicFieldsRequest) returns (stream ListDynamicFieldsResponse);
+}
+
+message ListDynamicFieldsRequest {
+  // Required. The `UID` of the parent, which owns the collections of dynamic fields.
+  optional string parent = 1;
+
+  // Mask specifying which fields to read.
+  // If no mask is specified, defaults to `parent,field_id`.
+  optional google.protobuf.FieldMask read_mask = 2;
+
+  // Optional maximum message size the client can receive (1MB - 128MB)
+  // If not specified, server uses default chunking threshold (4MB)
+  optional uint32 max_message_size_bytes = 3;
+}
+
+message ListDynamicFieldsResponse {
+  // Page of dynamic fields owned by the specified parent.
+  repeated iota.grpc.v0.dynamic_field.DynamicField dynamic_fields = 1;
+  // Whether there are more results to fetch.
+  optional bool has_next = 2;
+}
+

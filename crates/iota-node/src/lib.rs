@@ -2439,6 +2439,9 @@ async fn build_grpc_server(
     let event_subscriber =
         state.subscription_handler.clone() as Arc<dyn iota_grpc_server::EventSubscriber>;
 
+    // Get the chain identifier from the authority state
+    let chain = state.get_chain_identifier().chain();
+
     // Pass the same token to both GrpcReader (already done above) and
     // start_grpc_server
     let handle = start_grpc_server(
@@ -2446,6 +2449,7 @@ async fn build_grpc_server(
         event_subscriber,
         grpc_config.clone(),
         shutdown_token,
+        chain,
     )
     .await?;
 

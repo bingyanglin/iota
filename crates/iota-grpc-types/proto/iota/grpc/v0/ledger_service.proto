@@ -1,0 +1,29 @@
+// Copyright (c) Mysten Labs, Inc.
+// Modifications Copyright (c) 2025 IOTA Stiftung
+// SPDX-License-Identifier: Apache-2.0
+
+syntax = "proto3";
+
+package iota.grpc.v0.ledger_service;
+
+import "google/protobuf/field_mask.proto";
+import "epoch.proto";
+
+service LedgerService {
+  rpc GetEpoch(GetEpochRequest) returns (GetEpochResponse);
+}
+
+message GetEpochRequest {
+  // The requested epoch.
+  // If no epoch is provided the current epoch will be returned.
+  optional uint64 epoch = 1;
+
+  // Mask specifying which fields to read.
+  // If no mask is specified, defaults to `epoch`.
+  optional google.protobuf.FieldMask read_mask = 2;
+}
+
+message GetEpochResponse {
+  optional iota.grpc.v0.epoch.Epoch epoch = 1;
+}
+

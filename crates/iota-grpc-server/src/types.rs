@@ -220,6 +220,34 @@ pub trait GrpcStateReader: Send + Sync + 'static {
         &self,
         epoch: u64,
     ) -> anyhow::Result<Option<CertifiedCheckpointSummary>>;
+
+    /// Get committee for a specific epoch
+    fn get_committee(
+        &self,
+        epoch: u64,
+    ) -> anyhow::Result<Option<Arc<iota_types::committee::Committee>>>;
+
+    /// Get dynamic fields for a parent object
+    /// Returns DynamicFieldInfoExt which includes child_id for dynamic object
+    /// fields
+    fn get_dynamic_fields(
+        &self,
+        parent_object_id: iota_types::base_types::ObjectID,
+        cursor: Option<iota_types::base_types::ObjectID>,
+        limit: usize,
+        fetch_field_object: bool,
+        fetch_child_object: bool,
+    ) -> anyhow::Result<Vec<DynamicFieldInfoExt>>;
+
+    /// Get an object by its ObjectID
+    fn get_object(
+        &self,
+        object_id: &iota_types::base_types::ObjectID,
+    ) -> Option<iota_types::object::Object>;
+
+    /// Get the IOTA system state
+    /// This loads the system state including its dynamic fields
+    fn get_system_state(&self) -> anyhow::Result<iota_types::iota_system_state::IotaSystemState>;
 }
 
 /// Adapter that implements GrpcStateReader for RestStateReader
@@ -263,6 +291,148 @@ impl GrpcStateReader for RestStateReaderAdapter {
             Err(e) => Err(e.into()),
         }
     }
+
+    fn get_committee(
+        &self,
+        epoch: u64,
+    ) -> anyhow::Result<Option<Arc<iota_types::committee::Committee>>> {
+        use iota_types::storage::ReadStore;
+        self.inner.try_get_committee(epoch).map_err(Into::into)
+    }
+
+    fn get_dynamic_fields(
+        &self,
+        parent_object_id: iota_types::base_types::ObjectID,
+        cursor: Option<iota_types::base_types::ObjectID>,
+        limit: usize,
+        fetch_field_object: bool,
+        fetch_child_object: bool,
+    ) -> anyhow::Result<Vec<DynamicFieldInfoExt>> {
+        use iota_types::storage::ObjectStore;
+
+        // Get the indexes from the state reader
+        let indexes = self
+            .inner
+            .indexes()
+            .ok_or_else(|| anyhow::anyhow!("Indexes not available"))?;
+
+        // Get the dynamic field iterator
+        let df_iter = indexes.dynamic_field_iter(parent_object_id, cursor)?;
+
+        // Collect up to limit items
+        let mut results = Vec::new();
+        for (df_key, df_index_info) in df_iter.take(limit) {
+            // Fetch the field object to get full details
+            let field_object = self
+                .inner
+                .get_object(&df_key.field_id)
+                .ok_or_else(|| anyhow::anyhow!("Object not found: {}", df_key.field_id))?;
+
+            // Build DynamicFieldInfoExt from the object
+            // This includes child_id from df_index_info.dynamic_object_id
+            if let Some(df_info_ext) = build_dynamic_field_info(
+                field_object.clone(),
+                df_index_info,
+                fetch_field_object,
+                fetch_child_object,
+                &self.inner,
+            )? {
+                results.push(df_info_ext);
+            }
+        }
+
+        Ok(results)
+    }
+
+    fn get_object(
+        &self,
+        object_id: &iota_types::base_types::ObjectID,
+    ) -> Option<iota_types::object::Object> {
+        use iota_types::storage::ObjectStore;
+        self.inner.get_object(object_id)
+    }
+
+    fn get_system_state(&self) -> anyhow::Result<iota_types::iota_system_state::IotaSystemState> {
+        use iota_types::iota_system_state::get_iota_system_state;
+        // self.inner is Arc<dyn RestStateReader>
+        // RestStateReader extends ObjectStore, so we can pass it directly
+        get_iota_system_state(self.inner.as_ref()).map_err(Into::into)
+    }
+}
+
+/// Extended dynamic field information that includes child object ID for dynamic
+/// object fields This supplements DynamicFieldInfo with information needed for
+/// gRPC responses
+pub struct DynamicFieldInfoExt {
+    pub info: iota_types::dynamic_field::DynamicFieldInfo,
+    /// The ObjectId of the child object when this is a dynamic object field
+    /// (corresponds to DynamicFieldIndexInfo.dynamic_object_id)
+    pub child_id: Option<iota_types::base_types::ObjectID>,
+    /// The field object (Field<K, V> wrapper) when requested
+    pub field_object: Option<iota_types::object::Object>,
+    /// The child object when requested (for DynamicObject fields only)
+    pub child_object: Option<iota_types::object::Object>,
+}
+
+/// Helper function to build DynamicFieldInfo from an Object
+fn build_dynamic_field_info(
+    object: iota_types::object::Object,
+    index_info: iota_types::storage::DynamicFieldIndexInfo,
+    fetch_field_object: bool,
+    fetch_child_object: bool,
+    state_reader: &Arc<dyn RestStateReader>,
+) -> anyhow::Result<Option<DynamicFieldInfoExt>> {
+    use iota_types::{
+        dynamic_field::{DynamicFieldInfo, DynamicFieldName, DynamicFieldType},
+        storage::ObjectStore,
+    };
+    use serde_json::Value;
+
+    let move_object = match object.data.try_as_move() {
+        Some(mo) => mo,
+        None => return Ok(None),
+    };
+
+    // Deserialize the name value from BCS
+    let name_value: Value = bcs::from_bytes(&index_info.name_value)
+        .map_err(|e| anyhow::anyhow!("Failed to deserialize dynamic field name: {}", e))?;
+
+    let df_info = DynamicFieldInfo {
+        name: DynamicFieldName {
+            type_: index_info.name_type.clone(),
+            value: name_value,
+        },
+        bcs_name: index_info.name_value.clone(),
+        type_: index_info.dynamic_field_type,
+        object_type: move_object.type_().to_canonical_string(true),
+        object_id: object.id(),
+        version: object.version(),
+        digest: object.digest(),
+    };
+
+    // Conditionally fetch field object
+    let field_object = if fetch_field_object {
+        Some(object.clone())
+    } else {
+        None
+    };
+
+    // Conditionally fetch child object (only for DynamicObject type)
+    let child_object =
+        if fetch_child_object && index_info.dynamic_field_type == DynamicFieldType::DynamicObject {
+            index_info
+                .dynamic_object_id
+                .and_then(|child_id| state_reader.get_object(&child_id))
+        } else {
+            None
+        };
+
+    Ok(Some(DynamicFieldInfoExt {
+        info: df_info,
+        child_id: index_info.dynamic_object_id,
+        field_object,
+        child_object,
+    }))
 }
 
 /// Central gRPC data reader that provides unified access to checkpoint data.
@@ -270,7 +440,7 @@ impl GrpcStateReader for RestStateReaderAdapter {
 /// summaries.
 #[derive(Clone)]
 pub struct GrpcReader {
-    state_reader: Arc<dyn GrpcStateReader>,
+    pub state_reader: Arc<dyn GrpcStateReader>,
 }
 
 impl GrpcReader {
@@ -293,12 +463,39 @@ impl GrpcReader {
         self.state_reader.get_epoch_last_checkpoint(epoch)
     }
 
+    pub fn get_committee(
+        &self,
+        epoch: u64,
+    ) -> anyhow::Result<Option<Arc<iota_types::committee::Committee>>> {
+        self.state_reader.get_committee(epoch)
+    }
+
+    pub fn get_checkpoint_summary(
+        &self,
+        seq: u64,
+    ) -> anyhow::Result<Option<CertifiedCheckpointSummary>> {
+        Ok(self.state_reader.get_checkpoint_summary(seq))
+    }
+
     fn get_full_checkpoint_data(&self, seq: u64) -> Option<CheckpointData> {
         self.state_reader.get_checkpoint_data(seq)
     }
 
     pub fn get_latest_checkpoint_sequence_number(&self) -> Option<u64> {
         self.state_reader.get_latest_checkpoint_sequence_number()
+    }
+
+    pub fn get_object(
+        &self,
+        object_id: &iota_types::base_types::ObjectID,
+    ) -> Option<iota_types::object::Object> {
+        self.state_reader.get_object(object_id)
+    }
+
+    pub fn get_system_state(
+        &self,
+    ) -> anyhow::Result<iota_types::iota_system_state::IotaSystemState> {
+        self.state_reader.get_system_state()
     }
 
     /// Generic checkpoint streaming implementation that works with checkpoint

@@ -17,25 +17,85 @@ use quote::quote;
 // IOTA uses separate packages (common, events, checkpoints), so when
 // events.proto references Address from common.proto, we need explicit imports.
 // This function identifies all external message types (and their
-// FieldPathBuilders) to generate the necessary `use crate::v0::common::*`
-// statements in the generated code.
+// FieldPathBuilders) and tracks which package they come from to generate
+// the correct import paths like `use crate::v0::object::Object`.
 fn collect_external_types(
     messages: &[DescriptorProto],
     local_messages: &HashSet<String>,
-    external_types: &mut HashSet<String>,
+    external_types: &mut HashMap<String, String>,
+    all_packages: &HashMap<String, FileDescriptorSet>,
 ) {
     for message in messages {
         for field in &message.field {
             if matches!(field.r#type(), Type::Message) && !field.type_name().contains("google") {
                 let field_message_name = field.type_name().split('.').next_back().unwrap();
                 if !local_messages.contains(field_message_name) {
-                    external_types.insert(field_message_name.to_owned());
+                    // Find which package this type belongs to (returns None for map entries)
+                    if let Some(package) = find_package_for_type(field_message_name, all_packages) {
+                        external_types.insert(field_message_name.to_owned(), package);
+                    }
                 }
             }
         }
         // Recurse into nested messages
-        collect_external_types(&message.nested_type, local_messages, external_types);
+        collect_external_types(
+            &message.nested_type,
+            local_messages,
+            external_types,
+            all_packages,
+        );
     }
+}
+
+// Find which package a message type belongs to
+fn find_package_for_type(
+    type_name: &str,
+    all_packages: &HashMap<String, FileDescriptorSet>,
+) -> Option<String> {
+    for (package, fds) in all_packages {
+        for file in &fds.file {
+            // Check top-level messages
+            for message in &file.message_type {
+                if message.name() == type_name {
+                    // Check if this is a map entry (shouldn't be imported)
+                    if message.options.as_ref().is_some_and(|o| o.map_entry()) {
+                        return None;
+                    }
+                    // Extract the last part of the package name (e.g., "common" from
+                    // "iota.grpc.v0.common")
+                    return Some(package.split('.').next_back().unwrap_or(package).to_owned());
+                }
+                // Check nested messages (including map entries)
+                if let Some(pkg) = find_in_nested_messages(type_name, &message.nested_type, package)
+                {
+                    return Some(pkg);
+                }
+            }
+        }
+    }
+    None
+}
+
+// Helper to search nested messages
+fn find_in_nested_messages(
+    type_name: &str,
+    nested: &[DescriptorProto],
+    package: &str,
+) -> Option<String> {
+    for message in nested {
+        if message.name() == type_name {
+            // Skip map entries
+            if message.options.as_ref().is_some_and(|o| o.map_entry()) {
+                return None;
+            }
+            return Some(package.split('.').next_back().unwrap_or(package).to_owned());
+        }
+        // Recurse into nested types
+        if let Some(pkg) = find_in_nested_messages(type_name, &message.nested_type, package) {
+            return Some(pkg);
+        }
+    }
+    None
 }
 
 pub(crate) fn generate_field_info(packages: &HashMap<String, FileDescriptorSet>, out_dir: &Path) {
@@ -54,10 +114,16 @@ pub(crate) fn generate_field_info(packages: &HashMap<String, FileDescriptorSet>,
             .flat_map(|f| f.message_type.iter().map(|m| m.name().to_owned()))
             .collect();
 
-        // Collect external message types that need to be imported
-        let mut external_types: HashSet<String> = HashSet::new();
+        // Collect external message types that need to be imported (maps type name ->
+        // package name)
+        let mut external_types: HashMap<String, String> = HashMap::new();
         for file in &fds.file {
-            collect_external_types(&file.message_type, &local_messages, &mut external_types);
+            collect_external_types(
+                &file.message_type,
+                &local_messages,
+                &mut external_types,
+                packages,
+            );
         }
 
         for file in &fds.file {
@@ -66,20 +132,21 @@ pub(crate) fn generate_field_info(packages: &HashMap<String, FileDescriptorSet>,
             }
         }
 
-        // Sort external types by name
-        let mut external_types: Vec<String> = external_types.into_iter().collect();
-        external_types.sort();
+        // Sort external types by package and name
+        let mut external_types: Vec<(String, String)> = external_types.into_iter().collect();
+        external_types.sort_by(|a, b| a.1.cmp(&b.1).then(a.0.cmp(&b.0)));
 
-        // Generate imports for external types
+        // Generate imports for external types with correct package paths
         let mut imports = TokenStream::new();
-        for ext_type in &external_types {
-            let type_ident = quote::format_ident!("{}", ext_type);
-            let builder_ident = quote::format_ident!("{}FieldPathBuilder", ext_type);
+        for (type_name, package_name) in &external_types {
+            let type_ident = quote::format_ident!("{type_name}");
+            let builder_ident = quote::format_ident!("{type_name}FieldPathBuilder");
+            let package_ident = quote::format_ident!("{package_name}");
             imports.extend(quote! {
                 #[allow(unused_imports)]
-                use crate::v0::common::#type_ident;
+                use crate::v0::#package_ident::#type_ident;
                 #[allow(unused_imports)]
-                use crate::v0::common::#builder_ident;
+                use crate::v0::#package_ident::#builder_ident;
             });
         }
 
@@ -189,7 +256,7 @@ fn generate_field_constant(
             if field_message_name == message_name || map_types.contains(field_message_name) {
                 quote! { None }
             } else {
-                let field_message = quote::format_ident!("{}", field_message_name);
+                let field_message = quote::format_ident!("{field_message_name}");
                 quote! { Some(#field_message::FIELDS) }
             }
         } else {
@@ -288,7 +355,7 @@ fn generate_field_chain_methods(
                 }
             }
         } else {
-            let return_type = quote::format_ident!("{}FieldPathBuilder", field_message_name);
+            let return_type = quote::format_ident!("{field_message_name}FieldPathBuilder");
             quote! {
                 pub fn #name(mut self) -> #return_type {
                     self.path.push(#message_ident::#field_const.name);

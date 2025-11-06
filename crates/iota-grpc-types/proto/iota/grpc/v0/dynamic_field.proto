@@ -1,0 +1,53 @@
+// Copyright (c) Mysten Labs, Inc.
+// Modifications Copyright (c) 2025 IOTA Stiftung
+// SPDX-License-Identifier: Apache-2.0
+
+syntax = "proto3";
+
+package iota.grpc.v0.dynamic_field;
+
+import "common.proto";
+import "object.proto";
+
+message DynamicField {
+  enum DynamicFieldKind {
+    DYNAMIC_FIELD_KIND_UNKNOWN = 0;
+    FIELD = 1;
+    OBJECT = 2;
+  }
+
+  optional DynamicFieldKind kind = 1;
+
+  // ObjectId of this dynamic field's parent.
+  optional string parent = 2;
+
+  // ObjectId of this dynamic field.
+  optional string field_id = 3;
+
+  // The field object itself
+  optional iota.grpc.v0.object.Object field_object = 4;
+
+  // The dynamic field's "name"
+  optional iota.grpc.v0.common.BcsData name = 5;
+
+  // The dynamic field's "value"
+  optional iota.grpc.v0.common.BcsData value = 6;
+
+  // The type of the dynamic field "value".
+  //
+  // If this is a dynamic object field then this is the type of the object
+  // itself (which is a child of this field), otherwise this is the type of the
+  // value of this field.
+  optional string value_type = 7;
+
+  // The ObjectId of the child object when a child is a dynamic
+  // object field.
+  //
+  // The presence or absence of this field can be used to determine if a child
+  // is a dynamic field or a dynamic child object
+  optional string child_id = 8;
+
+  // The object itself when a child is a dynamic object field.
+  optional iota.grpc.v0.object.Object child_object = 9;
+}
+

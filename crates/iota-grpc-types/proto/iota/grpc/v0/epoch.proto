@@ -1,0 +1,58 @@
+// Copyright (c) Mysten Labs, Inc.
+// Modifications Copyright (c) 2025 IOTA Stiftung
+// SPDX-License-Identifier: Apache-2.0
+
+syntax = "proto3";
+
+package iota.grpc.v0.epoch;
+
+import "google/protobuf/timestamp.proto";
+import "common.proto";
+
+// The validator set for a particular epoch.
+message ValidatorCommittee {
+  // The epoch where this committee governs.
+  optional uint64 epoch = 1;
+
+  // The committee members.
+  repeated ValidatorCommitteeMember members = 2;
+}
+
+// A member of a validator committee.
+message ValidatorCommitteeMember {
+  // The 96-byte Bls12381 public key for this validator.
+  optional bytes public_key = 1;
+
+  // voting weight this validator possesses.
+  optional uint64 weight = 2;
+}
+
+message ProtocolConfig {
+  optional uint64 protocol_version = 1;
+  map<string, bool> feature_flags = 2;
+  map<string, string> attributes = 3;
+}
+
+message Epoch {
+  optional uint64 epoch = 1;
+
+  // The committee governing this epoch.
+  optional ValidatorCommittee committee = 2;
+
+  // Snapshot of IOTA's SystemState (`0x3::iota_system::SystemState`) at the
+  // beginning of the epoch, for past epochs, or the current state for the
+  // current epoch.
+  optional iota.grpc.v0.common.BcsData bcs_system_state = 3;
+
+  optional uint64 first_checkpoint = 4;
+  optional uint64 last_checkpoint = 5;
+
+  optional google.protobuf.Timestamp start = 6;
+  optional google.protobuf.Timestamp end = 7;
+
+  // Reference gas price denominated in NANOS
+  optional uint64 reference_gas_price = 8;
+
+  optional ProtocolConfig protocol_config = 9;
+}
+
