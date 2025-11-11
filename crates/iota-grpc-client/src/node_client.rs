@@ -1,20 +1,21 @@
 // Copyright (c) 2025 IOTA Stiftung
 // SPDX-License-Identifier: Apache-2.0
 
-use std::sync::OnceLock;
-
 use tonic::transport::Channel;
 
-use super::{checkpoint::CheckpointClient, event::EventClient};
+// TODO: Re-enable when checkpoint and event clients are ready
+// use std::sync::OnceLock;
+// use super::{checkpoint::CheckpointClient, event::EventClient};
 
 /// gRPC client factory for IOTA node operations.
 pub struct NodeClient {
     /// Shared gRPC channel for all service clients
     channel: Channel,
-    /// Cached checkpoint client (singleton)
-    checkpoint_client: OnceLock<CheckpointClient>,
-    /// Cached event client (singleton)
-    event_client: OnceLock<EventClient>,
+    // TODO: Re-enable when checkpoint and event clients are ready
+    // /// Cached checkpoint client (singleton)
+    // checkpoint_client: OnceLock<CheckpointClient>,
+    // /// Cached event client (singleton)
+    // event_client: OnceLock<EventClient>,
 }
 
 impl NodeClient {
@@ -24,8 +25,9 @@ impl NodeClient {
 
         Ok(Self {
             channel,
-            checkpoint_client: OnceLock::new(),
-            event_client: OnceLock::new(),
+            // TODO: Re-enable when checkpoint and event clients are ready
+            // checkpoint_client: OnceLock::new(),
+            // event_client: OnceLock::new(),
         })
     }
 
@@ -41,33 +43,34 @@ impl NodeClient {
     // Service Client Factories
     // ========================================
 
-    /// Get a checkpoint service client.
-    ///
-    /// Returns `Some(CheckpointClient)` if the node supports checkpoint
-    /// operations, `None` otherwise. The client is created only once and
-    /// cached for subsequent calls.
-    pub fn checkpoint_client(&self) -> Option<CheckpointClient> {
-        // For now, always return Some since checkpoint service is always available
-        // In the future, this could check node capabilities first
-        Some(
-            self.checkpoint_client
-                .get_or_init(|| CheckpointClient::new(self.channel.clone()))
-                .clone(),
-        )
-    }
-
-    /// Get an event service client.
-    ///
-    /// Returns `Some(EventClient)` if the node supports event streaming
-    /// operations, `None` otherwise. The client is created only once and
-    /// cached for subsequent calls.
-    pub fn event_client(&self) -> Option<EventClient> {
-        // For now, always return Some since event service is always available
-        // In the future, this could check node capabilities first
-        Some(
-            self.event_client
-                .get_or_init(|| EventClient::new(self.channel.clone()))
-                .clone(),
-        )
-    }
+    // TODO: Re-enable when checkpoint and event clients are ready
+    // /// Get a checkpoint service client.
+    // ///
+    // /// Returns `Some(CheckpointClient)` if the node supports checkpoint
+    // /// operations, `None` otherwise. The client is created only once and
+    // /// cached for subsequent calls.
+    // pub fn checkpoint_client(&self) -> Option<CheckpointClient> {
+    //     // For now, always return Some since checkpoint service is always
+    // available     // In the future, this could check node capabilities first
+    //     Some(
+    //         self.checkpoint_client
+    //             .get_or_init(|| CheckpointClient::new(self.channel.clone()))
+    //             .clone(),
+    //     )
+    // }
+    //
+    // /// Get an event service client.
+    // ///
+    // /// Returns `Some(EventClient)` if the node supports event streaming
+    // /// operations, `None` otherwise. The client is created only once and
+    // /// cached for subsequent calls.
+    // pub fn event_client(&self) -> Option<EventClient> {
+    //     // For now, always return Some since event service is always available
+    //     // In the future, this could check node capabilities first
+    //     Some(
+    //         self.event_client
+    //             .get_or_init(|| EventClient::new(self.channel.clone()))
+    //             .clone(),
+    //     )
+    // }
 }

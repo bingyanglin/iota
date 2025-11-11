@@ -388,11 +388,17 @@ async fn test_server_and_client_setup<I: Iterator<Item = u64>>(
     // Use the no-op EventSubscriber implementation for unit type
     let dummy_event_subscriber = Arc::new(()) as Arc<dyn EventSubscriber>;
 
+    // Create test chain_id (genesis checkpoint digest)
+    let chain_id = iota_types::digests::ChainIdentifier::from([0u8; 32]);
+
     let server_handle = start_grpc_server(
         grpc_reader,
         dummy_event_subscriber,
         config,
         cancellation_token,
+        iota_protocol_config::Chain::Unknown, // Test environment uses Unknown chain
+        chain_id,
+        Some("test-server/0.1.0".to_string()),
     )
     .await
     .expect("Failed to start gRPC server");

@@ -17,5 +17,5 @@ prost-types.workspace = true
 protox = "0.9"
 quote.workspace = true
 syn = { version = "2.0", features = ["full"] }
-tonic-build.workspace = true
+tonic-prost-build.workspace = true
 walkdir = "2.5"

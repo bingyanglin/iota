@@ -6,15 +6,18 @@
 use std::{net::SocketAddr, sync::Arc};
 
 use anyhow::Result;
-use iota_grpc_types::v0::{checkpoints as grpc_checkpoints, events as grpc_events};
+use iota_grpc_types::v0::ledger_service as grpc_ledger;
 use tokio::sync::broadcast;
 use tokio_stream::wrappers::TcpListenerStream;
 use tokio_util::sync::CancellationToken;
 use tonic::transport::Server;
 
 use crate::{
-    CheckpointGrpcService, EventGrpcService, GrpcCheckpointDataBroadcaster,
-    GrpcCheckpointSummaryBroadcaster, GrpcReader,
+    // CheckpointGrpcService, EventGrpcService,
+    GrpcCheckpointDataBroadcaster,
+    GrpcCheckpointSummaryBroadcaster,
+    GrpcReader,
+    LedgerGrpcService,
 };
 
 /// Handle to control a running gRPC server
@@ -65,9 +68,12 @@ impl GrpcServerHandle {
 /// services in the future.
 pub async fn start_grpc_server(
     grpc_reader: Arc<GrpcReader>,
-    event_subscriber: Arc<dyn crate::EventSubscriber>,
+    _event_subscriber: Arc<dyn crate::EventSubscriber>,
     config: iota_config::node::GrpcApiConfig,
     shutdown_token: CancellationToken,
+    chain: iota_protocol_config::Chain,
+    chain_id: iota_types::digests::ChainIdentifier,
+    server_version: Option<String>,
 ) -> Result<GrpcServerHandle> {
     // Create broadcast channels
     let (checkpoint_summary_tx, _) = broadcast::channel(config.checkpoint_broadcast_buffer_size);
@@ -78,26 +84,37 @@ pub async fn start_grpc_server(
         GrpcCheckpointSummaryBroadcaster::new(checkpoint_summary_tx);
     let checkpoint_data_broadcaster = GrpcCheckpointDataBroadcaster::new(checkpoint_data_tx);
 
-    // Create the gRPC services - both get the cancellation token directly from
+    // Create the gRPC services - all get the cancellation token directly from
     // server level
-    let checkpoint_service = CheckpointGrpcService::new(
+    // TODO: Re-enable checkpoint and event services when implemented
+    // let checkpoint_service = CheckpointGrpcService::new(
+    //     grpc_reader.clone(),
+    //     checkpoint_summary_broadcaster.clone(),
+    //     checkpoint_data_broadcaster.clone(),
+    //     shutdown_token.clone(),
+    // );
+    // let event_service = EventGrpcService::new(event_subscriber,
+    // shutdown_token.clone());
+    let ledger_service = LedgerGrpcService::new(
         grpc_reader.clone(),
-        checkpoint_summary_broadcaster.clone(),
-        checkpoint_data_broadcaster.clone(),
         shutdown_token.clone(),
+        chain,
+        chain_id,
+        server_version,
     );
-    let event_service = EventGrpcService::new(event_subscriber, shutdown_token.clone());
 
     // Create the server with proper address binding
     let server_builder = Server::builder()
-        .add_service(
-            grpc_checkpoints::checkpoint_service_server::CheckpointServiceServer::new(
-                checkpoint_service,
-            ),
-        )
-        .add_service(grpc_events::event_service_server::EventServiceServer::new(
-            event_service,
-        ));
+        // TODO: Re-enable checkpoint and event services when implemented
+        // .add_service(
+        //     grpc_checkpoints::checkpoint_service_server::CheckpointServiceServer::new(
+        //         checkpoint_service,
+        //     ),
+        // )
+        // .add_service(grpc_events::event_service_server::EventServiceServer::new(
+        //     event_service,
+        // ))
+        .add_service(grpc_ledger::ledger_service_server::LedgerServiceServer::new(ledger_service));
 
     // Bind to the address to get the actual local address (especially important for
     // port 0)

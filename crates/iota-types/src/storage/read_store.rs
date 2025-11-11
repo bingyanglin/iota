@@ -835,6 +835,8 @@ pub trait RestIndexes: Send + Sync {
     ) -> Result<Box<dyn Iterator<Item = (DynamicFieldKey, DynamicFieldIndexInfo)> + '_>>;
 
     fn get_coin_info(&self, coin_type: &StructTag) -> Result<Option<CoinInfo>>;
+
+    fn get_epoch_info(&self, epoch: EpochId) -> Result<Option<EpochInfo>>;
 }
 
 pub struct AccountOwnedObjectInfo {
@@ -880,4 +882,21 @@ pub struct DynamicFieldIndexInfo {
 pub struct CoinInfo {
     pub coin_metadata_object_id: Option<ObjectID>,
     pub treasury_object_id: Option<ObjectID>,
+}
+
+/// Epoch information structure for indexing.
+///
+/// Contains metadata about an epoch including timing, checkpoints, protocol
+/// version, and a snapshot of the system state at the start of the epoch.
+#[derive(Clone, Serialize, Deserialize, PartialEq, Eq, Debug, Default)]
+pub struct EpochInfo {
+    pub epoch: u64,
+    pub protocol_version: Option<u64>,
+    pub start_timestamp_ms: Option<u64>,
+    pub end_timestamp_ms: Option<u64>,
+    pub start_checkpoint: Option<u64>,
+    pub end_checkpoint: Option<u64>,
+    pub reference_gas_price: Option<u64>,
+    /// System State as of the start of the epoch
+    pub system_state: Option<crate::iota_system_state::IotaSystemState>,
 }

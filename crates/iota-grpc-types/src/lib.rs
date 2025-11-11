@@ -9,17 +9,69 @@
 
 // Generated protobuf modules with field constants
 mod proto_generated {
-    pub mod common {
-        include!("proto_generated/iota.grpc.v0.common.rs");
-        include!("proto_generated/iota.grpc.v0.common.field_info.rs");
+    pub mod google_rpc {
+        include!("proto_generated/google.rpc.rs");
     }
-    pub mod checkpoints {
-        include!("proto_generated/iota.grpc.v0.checkpoints.rs");
-        include!("proto_generated/iota.grpc.v0.checkpoints.field_info.rs");
+    pub mod bcs {
+        include!("proto_generated/iota.grpc.v0.bcs.rs");
+        include!("proto_generated/iota.grpc.v0.bcs.field_info.rs");
     }
-    pub mod events {
-        include!("proto_generated/iota.grpc.v0.events.rs");
-        include!("proto_generated/iota.grpc.v0.events.field_info.rs");
+    pub mod checkpoint {
+        include!("proto_generated/iota.grpc.v0.checkpoint.rs");
+        // TODO: Re-enable field_info when import paths are fixed
+        // include!("proto_generated/iota.grpc.v0.checkpoint.field_info.rs");
+    }
+    pub mod command {
+        include!("proto_generated/iota.grpc.v0.command.rs");
+        // TODO: Re-enable field_info when import paths are fixed for nested
+        // types include!("proto_generated/iota.grpc.v0.command.
+        // field_info.rs");
+    }
+    pub mod epoch {
+        include!("proto_generated/iota.grpc.v0.epoch.rs");
+        include!("proto_generated/iota.grpc.v0.epoch.field_info.rs");
+    }
+    pub mod event {
+        include!("proto_generated/iota.grpc.v0.event.rs");
+        // TODO: Re-enable field_info when import paths are fixed
+        // include!("proto_generated/iota.grpc.v0.event.field_info.rs");
+    }
+    pub mod filter {
+        include!("proto_generated/iota.grpc.v0.filter.rs");
+        // TODO: Re-enable field_info when import paths are fixed
+        // include!("proto_generated/iota.grpc.v0.filter.field_info.rs");
+    }
+    pub mod object {
+        include!("proto_generated/iota.grpc.v0.object.rs");
+        // TODO: Re-enable field_info when import paths are fixed
+        // include!("proto_generated/iota.grpc.v0.object.field_info.rs");
+    }
+    pub mod signatures {
+        include!("proto_generated/iota.grpc.v0.signatures.rs");
+        // TODO: Re-enable field_info when import paths are fixed
+        // include!("proto_generated/iota.grpc.v0.signatures.field_info.rs");
+    }
+    pub mod transaction {
+        include!("proto_generated/iota.grpc.v0.transaction.rs");
+        // TODO: Re-enable field_info when import paths are fixed
+        // include!("proto_generated/iota.grpc.v0.transaction.field_info.rs");
+    }
+    pub mod transaction_execution_service {
+        include!("proto_generated/iota.grpc.v0.transaction_execution_service.rs");
+        // TODO: Re-enable field_info when import paths are fixed
+        // include!("proto_generated/iota.grpc.v0.transaction_execution_service.
+        // field_info.rs");
+    }
+    pub mod types {
+        include!("proto_generated/iota.grpc.v0.types.rs");
+        // TODO: Re-enable field_info when import paths are fixed
+        // include!("proto_generated/iota.grpc.v0.types.field_info.rs");
+    }
+    pub mod ledger_service {
+        include!("proto_generated/iota.grpc.v0.ledger_service.rs");
+        // TODO: Re-enable field_info when import paths are fixed
+        // include!("proto_generated/iota.grpc.v0.ledger_service.field_info.rs"
+        // );
     }
 }
 
@@ -30,5 +82,9 @@ pub mod v0 {
 
 pub mod bcs;
 pub mod checkpoints;
+pub mod epoch;
 pub mod events;
 pub mod field;
+pub mod ledger_service;
+pub mod merge;
+pub mod proto_helpers;

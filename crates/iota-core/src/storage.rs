@@ -16,8 +16,8 @@ use iota_types::{
     },
     object::Object,
     storage::{
-        AccountOwnedObjectInfo, CoinInfo, DynamicFieldIndexInfo, DynamicFieldKey, ObjectKey,
-        ObjectStore, ReadStore, RestIndexes, RestStateReader, WriteStore,
+        AccountOwnedObjectInfo, CoinInfo, DynamicFieldIndexInfo, DynamicFieldKey, EpochInfo,
+        ObjectKey, ObjectStore, ReadStore, RestIndexes, RestStateReader, WriteStore,
         error::{Error as StorageError, Result},
     },
     transaction::VerifiedTransaction,
@@ -592,5 +592,12 @@ impl RestIndexes for RestIndexStore {
                 },
             )
             .pipe(Ok)
+    }
+
+    fn get_epoch_info(
+        &self,
+        epoch: EpochId,
+    ) -> iota_types::storage::error::Result<Option<EpochInfo>> {
+        self.get_epoch_info(epoch).map_err(StorageError::custom)
     }
 }

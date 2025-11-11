@@ -1,0 +1,1133 @@
+// Copyright (c) 2025 IOTA Stiftung
+// SPDX-License-Identifier: Apache-2.0
+
+use iota_config::local_ip_utils;
+use iota_grpc_types::v0::{
+    ledger_service::{
+        GetEpochRequest, GetEpochResponse, GetObjectsRequest, GetServiceInfoRequest,
+        GetTransactionsRequest, ObjectRequest, ObjectRequests, TransactionRequest,
+        TransactionRequests, ledger_service_client::LedgerServiceClient,
+    },
+    types::{Digest, ObjectReference},
+};
+use prost_types::FieldMask;
+use test_cluster::{TestCluster, TestClusterBuilder};
+
+async fn setup_test_cluster_and_client()
+-> (TestCluster, LedgerServiceClient<tonic::transport::Channel>) {
+    let localhost = local_ip_utils::localhost_for_testing();
+    let grpc_port = local_ip_utils::get_available_port(&localhost);
+    let grpc_addr = format!("{localhost}:{grpc_port}");
+
+    // Start a test cluster with gRPC enabled
+    let cluster = TestClusterBuilder::new()
+        .with_fullnode_grpc_api_address(grpc_addr.parse().expect("Invalid gRPC address"))
+        .with_num_validators(1)
+        .build()
+        .await;
+
+    // Wait for at least one checkpoint to be created
+    cluster.wait_for_checkpoint(1, None).await;
+
+    let client = LedgerServiceClient::connect(format!("http://{grpc_addr}"))
+        .await
+        .expect("Failed to connect to gRPC server");
+
+    (cluster, client)
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_get_epoch_current() {
+    let (_cluster, mut client) = setup_test_cluster_and_client().await;
+
+    // Test GetEpoch without specifying epoch (should return current epoch or fail
+    // if no checkpoints)
+    let request = GetEpochRequest {
+        epoch: None,
+        read_mask: None,
+    };
+
+    let result = client.get_epoch(request).await;
+
+    // The cluster might not have checkpoints yet, so this could fail with
+    // Unavailable
+    match result {
+        Ok(response) => {
+            let response: GetEpochResponse = response.into_inner();
+            assert!(
+                response.epoch.is_some(),
+                "Response should contain epoch data"
+            );
+
+            let epoch = response.epoch.unwrap();
+            assert!(epoch.epoch.is_some(), "Epoch number should be present");
+            assert!(
+                epoch.committee.is_some(),
+                "Committee should be present in default mask"
+            );
+        }
+        Err(status) => {
+            // It's acceptable to get Unavailable if no checkpoints exist yet
+            assert_eq!(
+                status.code(),
+                tonic::Code::Unavailable,
+                "Should fail with Unavailable if no checkpoints"
+            );
+            assert!(
+                status.message().contains("no checkpoints available"),
+                "Error message should indicate no checkpoints: {}",
+                status.message()
+            );
+        }
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_get_epoch_by_number() {
+    let (_cluster, mut client) = setup_test_cluster_and_client().await;
+
+    // Test GetEpoch for epoch 0 (genesis epoch)
+    let request = GetEpochRequest {
+        epoch: Some(0),
+        read_mask: None,
+    };
+
+    let response = client
+        .get_epoch(request)
+        .await
+        .expect("GetEpoch for epoch 0 should succeed");
+
+    let response: GetEpochResponse = response.into_inner();
+    assert!(
+        response.epoch.is_some(),
+        "Response should contain epoch data"
+    );
+
+    let epoch = response.epoch.unwrap();
+    assert_eq!(
+        epoch.epoch,
+        Some(0),
+        "Returned epoch should match requested epoch"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_get_epoch_with_field_mask() {
+    let (_cluster, mut client) = setup_test_cluster_and_client().await;
+
+    // Test with field mask requesting only epoch number
+    let request = GetEpochRequest {
+        epoch: Some(0),
+        read_mask: Some(FieldMask {
+            paths: vec!["epoch".to_string()],
+        }),
+    };
+
+    let response = client
+        .get_epoch(request)
+        .await
+        .expect("GetEpoch with field_mask should succeed");
+
+    let response: GetEpochResponse = response.into_inner();
+    let epoch = response.epoch.expect("Response should contain epoch data");
+
+    assert_eq!(epoch.epoch, Some(0), "Epoch number should be present");
+    // With only "epoch" in mask, committee should still be None or minimal
+    // (depending on implementation details)
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_get_epoch_with_committee_mask() {
+    let (_cluster, mut client) = setup_test_cluster_and_client().await;
+
+    // Test with field mask requesting epoch and committee
+    let request = GetEpochRequest {
+        epoch: Some(0),
+        read_mask: Some(FieldMask {
+            paths: vec!["epoch".to_string(), "committee".to_string()],
+        }),
+    };
+
+    let response = client
+        .get_epoch(request)
+        .await
+        .expect("GetEpoch with committee mask should succeed");
+
+    let response: GetEpochResponse = response.into_inner();
+    let epoch = response.epoch.expect("Response should contain epoch data");
+
+    assert_eq!(epoch.epoch, Some(0), "Epoch number should be present");
+    assert!(
+        epoch.committee.is_some(),
+        "Committee should be present when requested"
+    );
+
+    let committee = epoch.committee.unwrap();
+    assert_eq!(
+        committee.epoch,
+        Some(0),
+        "Committee epoch should match requested epoch"
+    );
+    assert!(committee.members.is_some(), "Committee should have members");
+
+    let members = committee.members.unwrap();
+    assert!(
+        !members.members.is_empty(),
+        "Committee should have at least one validator"
+    );
+
+    // Verify validator member structure
+    let member = &members.members[0];
+    assert!(
+        member.public_key.is_some(),
+        "Validator should have public key"
+    );
+    assert!(member.weight.is_some(), "Validator should have weight");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_get_epoch_with_checkpoint_range_mask() {
+    let (_cluster, mut client) = setup_test_cluster_and_client().await;
+
+    // Test with field mask requesting checkpoint range
+    let request = GetEpochRequest {
+        epoch: Some(0),
+        read_mask: Some(FieldMask {
+            paths: vec![
+                "epoch".to_string(),
+                "first_checkpoint".to_string(),
+                "last_checkpoint".to_string(),
+            ],
+        }),
+    };
+
+    let response = client
+        .get_epoch(request)
+        .await
+        .expect("GetEpoch with checkpoint range mask should succeed");
+
+    let response: GetEpochResponse = response.into_inner();
+    let epoch = response.epoch.expect("Response should contain epoch data");
+
+    assert_eq!(epoch.epoch, Some(0), "Epoch number should be present");
+    // Note: Genesis epoch might not have checkpoint data populated yet
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_get_epoch_with_timestamps_mask() {
+    let (_cluster, mut client) = setup_test_cluster_and_client().await;
+
+    // Test with field mask requesting timestamps
+    let request = GetEpochRequest {
+        epoch: Some(0),
+        read_mask: Some(FieldMask {
+            paths: vec!["epoch".to_string(), "start".to_string(), "end".to_string()],
+        }),
+    };
+
+    let response = client
+        .get_epoch(request)
+        .await
+        .expect("GetEpoch with timestamps mask should succeed");
+
+    let response: GetEpochResponse = response.into_inner();
+    let epoch = response.epoch.expect("Response should contain epoch data");
+
+    assert_eq!(epoch.epoch, Some(0), "Epoch number should be present");
+    // Note: Genesis epoch might not have timestamp data yet, and end might be
+    // None for current epoch
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_get_epoch_with_reference_gas_price_mask() {
+    let (_cluster, mut client) = setup_test_cluster_and_client().await;
+
+    // Test with field mask requesting reference gas price
+    let request = GetEpochRequest {
+        epoch: Some(0),
+        read_mask: Some(FieldMask {
+            paths: vec!["epoch".to_string(), "reference_gas_price".to_string()],
+        }),
+    };
+
+    let response = client
+        .get_epoch(request)
+        .await
+        .expect("GetEpoch with reference_gas_price mask should succeed");
+
+    let response: GetEpochResponse = response.into_inner();
+    let epoch = response.epoch.expect("Response should contain epoch data");
+
+    assert_eq!(epoch.epoch, Some(0), "Epoch number should be present");
+    // Note: Genesis epoch might not have reference gas price populated yet
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_get_epoch_with_all_fields_mask() {
+    let (_cluster, mut client) = setup_test_cluster_and_client().await;
+
+    // Test with field mask requesting all fields using wildcard
+    let request = GetEpochRequest {
+        epoch: Some(0),
+        read_mask: Some(FieldMask {
+            paths: vec!["*".to_string()],
+        }),
+    };
+
+    let response = client
+        .get_epoch(request)
+        .await
+        .expect("GetEpoch with all fields mask should succeed");
+
+    let response: GetEpochResponse = response.into_inner();
+    let epoch = response.epoch.expect("Response should contain epoch data");
+
+    assert_eq!(epoch.epoch, Some(0), "Epoch number should be present");
+    assert!(
+        epoch.committee.is_some(),
+        "Committee should be present with wildcard"
+    );
+    // Note: Other fields like checkpoints, gas price might not be populated for
+    // genesis epoch
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_get_epoch_invalid_field_mask() {
+    let (_cluster, mut client) = setup_test_cluster_and_client().await;
+
+    // Test with invalid field path in mask
+    let request = GetEpochRequest {
+        epoch: Some(0),
+        read_mask: Some(FieldMask {
+            paths: vec!["invalid_field_name".to_string()],
+        }),
+    };
+
+    let result = client.get_epoch(request).await;
+
+    // Should return an error (InvalidArgument)
+    assert!(
+        result.is_err(),
+        "GetEpoch should fail for invalid field mask"
+    );
+
+    let error = result.err().unwrap();
+    assert_eq!(
+        error.code(),
+        tonic::Code::InvalidArgument,
+        "Error should be InvalidArgument for invalid field mask"
+    );
+    assert!(
+        error.message().contains("Invalid field path"),
+        "Error message should mention invalid field path"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_get_epoch_nonexistent_epoch() {
+    let (_cluster, mut client) = setup_test_cluster_and_client().await;
+
+    // Test with a very large epoch number that doesn't exist
+    let request = GetEpochRequest {
+        epoch: Some(99999),
+        read_mask: None,
+    };
+
+    let result = client.get_epoch(request).await;
+
+    // Should return an error (NotFound)
+    assert!(
+        result.is_err(),
+        "GetEpoch should fail for non-existent epoch"
+    );
+
+    let error = result.err().unwrap();
+    assert_eq!(
+        error.code(),
+        tonic::Code::NotFound,
+        "Error should be NotFound for non-existent epoch"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_get_epoch_default_mask_fields() {
+    let (_cluster, mut client) = setup_test_cluster_and_client().await;
+
+    // Test without field mask to verify default fields
+    // Default is: "epoch,committee,first_checkpoint,last_checkpoint"
+    let request = GetEpochRequest {
+        epoch: Some(0),
+        read_mask: None,
+    };
+
+    let response = client
+        .get_epoch(request)
+        .await
+        .expect("GetEpoch should succeed with default mask");
+
+    let response: GetEpochResponse = response.into_inner();
+    let epoch = response.epoch.expect("Response should contain epoch data");
+
+    // Verify default fields are present
+    assert!(epoch.epoch.is_some(), "Epoch number should be in default");
+    assert!(epoch.committee.is_some(), "Committee should be in default");
+    // Note: Genesis epoch might not have checkpoint data populated yet
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_get_epoch_nested_field_mask() {
+    let (_cluster, mut client) = setup_test_cluster_and_client().await;
+
+    // Test with nested field mask for committee members
+    let request = GetEpochRequest {
+        epoch: Some(0),
+        read_mask: Some(FieldMask {
+            paths: vec![
+                "epoch".to_string(),
+                "committee.epoch".to_string(),
+                "committee.members".to_string(),
+            ],
+        }),
+    };
+
+    let response = client
+        .get_epoch(request)
+        .await
+        .expect("GetEpoch with nested field mask should succeed");
+
+    let response: GetEpochResponse = response.into_inner();
+    let epoch = response.epoch.expect("Response should contain epoch data");
+
+    assert!(
+        epoch.committee.is_some(),
+        "Committee should be present with nested mask"
+    );
+
+    let committee = epoch.committee.unwrap();
+    assert!(
+        committee.epoch.is_some(),
+        "Committee epoch should be present"
+    );
+    assert!(
+        committee.members.is_some(),
+        "Committee members should be present"
+    );
+
+    let members = committee.members.unwrap();
+    assert!(
+        !members.members.is_empty(),
+        "Committee should have at least one member"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_get_epoch_protocol_config_mask() {
+    let (_cluster, mut client) = setup_test_cluster_and_client().await;
+
+    // Test with field mask requesting protocol config
+    let request = GetEpochRequest {
+        epoch: Some(0),
+        read_mask: Some(FieldMask {
+            paths: vec!["epoch".to_string(), "protocol_config".to_string()],
+        }),
+    };
+
+    let response = client
+        .get_epoch(request)
+        .await
+        .expect("GetEpoch with protocol_config mask should succeed");
+
+    let response: GetEpochResponse = response.into_inner();
+    let epoch = response.epoch.expect("Response should contain epoch data");
+
+    assert_eq!(epoch.epoch, Some(0), "Epoch number should be present");
+    // Note: Genesis epoch might not have protocol config populated yet
+}
+
+// ============================================================================
+// GetServiceInfo Tests
+// ============================================================================
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_get_service_info_default() {
+    let (_cluster, mut client) = setup_test_cluster_and_client().await;
+
+    // Test GetServiceInfo with default mask
+    let request = GetServiceInfoRequest { read_mask: None };
+
+    let response = client
+        .get_service_info(request)
+        .await
+        .expect("GetServiceInfo should succeed");
+
+    let response = response.into_inner();
+
+    // Default mask includes: chain_id, epoch, executed_checkpoint_height
+    assert!(response.chain_id.is_some(), "chain_id should be present");
+    assert!(response.epoch.is_some(), "epoch should be present");
+    assert!(
+        response.executed_checkpoint_height.is_some(),
+        "executed_checkpoint_height should be present"
+    );
+
+    // Verify chain_id is present and is a valid hex string
+    let chain_id = response.chain_id.unwrap();
+    assert!(chain_id.starts_with("0x"), "chain_id should start with 0x");
+    // Chain ID format can vary, just verify it's a valid hex string
+    assert!(
+        chain_id.len() >= 3,
+        "chain_id should be at least 0x + 1 hex char"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_get_service_info_all_fields() {
+    let (_cluster, mut client) = setup_test_cluster_and_client().await;
+
+    // Test with field mask requesting all fields
+    let request = GetServiceInfoRequest {
+        read_mask: Some(FieldMask {
+            paths: vec![
+                "chain_id".to_string(),
+                "chain".to_string(),
+                "epoch".to_string(),
+                "executed_checkpoint_height".to_string(),
+                "executed_checkpoint_timestamp".to_string(),
+                "lowest_available_checkpoint".to_string(),
+                "lowest_available_checkpoint_objects".to_string(),
+                "server".to_string(),
+            ],
+        }),
+    };
+
+    let response = client
+        .get_service_info(request)
+        .await
+        .expect("GetServiceInfo with all fields should succeed");
+
+    let response = response.into_inner();
+
+    assert!(response.chain_id.is_some(), "chain_id should be present");
+    assert!(response.chain.is_some(), "chain should be present");
+    assert!(response.epoch.is_some(), "epoch should be present");
+    assert!(
+        response.executed_checkpoint_height.is_some(),
+        "executed_checkpoint_height should be present"
+    );
+    assert!(
+        response.executed_checkpoint_timestamp.is_some(),
+        "executed_checkpoint_timestamp should be present"
+    );
+    assert!(
+        response.lowest_available_checkpoint.is_some(),
+        "lowest_available_checkpoint should be present"
+    );
+    assert!(
+        response.lowest_available_checkpoint_objects.is_some(),
+        "lowest_available_checkpoint_objects should be present"
+    );
+    assert!(response.server.is_some(), "server should be present");
+
+    // Verify timestamp structure
+    let timestamp = response.executed_checkpoint_timestamp.unwrap();
+    assert!(timestamp.seconds >= 0, "timestamp seconds should be valid");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_get_service_info_selective_fields() {
+    let (_cluster, mut client) = setup_test_cluster_and_client().await;
+
+    // Test with selective field mask
+    let request = GetServiceInfoRequest {
+        read_mask: Some(FieldMask {
+            paths: vec!["chain".to_string(), "server".to_string()],
+        }),
+    };
+
+    let response = client
+        .get_service_info(request)
+        .await
+        .expect("GetServiceInfo with selective fields should succeed");
+
+    let response = response.into_inner();
+
+    // Only requested fields should be present
+    assert!(response.chain.is_some(), "chain should be present");
+    assert!(response.server.is_some(), "server should be present");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_get_service_info_wildcard() {
+    let (_cluster, mut client) = setup_test_cluster_and_client().await;
+
+    // Test with wildcard mask
+    let request = GetServiceInfoRequest {
+        read_mask: Some(FieldMask {
+            paths: vec!["*".to_string()],
+        }),
+    };
+
+    let response = client
+        .get_service_info(request)
+        .await
+        .expect("GetServiceInfo with wildcard should succeed");
+
+    let response = response.into_inner();
+
+    // All fields should be present with wildcard
+    assert!(response.chain_id.is_some(), "chain_id should be present");
+    assert!(response.epoch.is_some(), "epoch should be present");
+}
+
+// ============================================================================
+// GetObjects Tests
+// ============================================================================
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_get_objects_system_object() {
+    let (_cluster, mut client) = setup_test_cluster_and_client().await;
+
+    // Test GetObjects for system object (0x5 - clock object)
+    let request = GetObjectsRequest {
+        requests: Some(ObjectRequests {
+            requests: vec![ObjectRequest {
+                object_ref: Some(ObjectReference {
+                    object_id: Some(
+                        "0x0000000000000000000000000000000000000000000000000000000000000005"
+                            .to_string(),
+                    ),
+                    version: None,
+                    digest: None,
+                }),
+            }],
+        }),
+        read_mask: None,
+        max_message_size_bytes: None,
+    };
+
+    let mut stream = client
+        .get_objects(request)
+        .await
+        .expect("GetObjects should succeed")
+        .into_inner();
+
+    // Get the first (and only) response from the stream
+    let response = stream
+        .message()
+        .await
+        .expect("Should receive response")
+        .expect("Response should not be None");
+
+    assert_eq!(response.objects.len(), 1, "Should return one object");
+
+    let result = &response.objects[0];
+    assert!(
+        result.result.is_some(),
+        "Result should contain object or error"
+    );
+
+    // Check if it's an object (not an error)
+    if let Some(iota_grpc_types::v0::ledger_service::object_result::Result::Object(obj)) =
+        &result.result
+    {
+        assert!(
+            obj.reference.is_some(),
+            "Object reference should be present"
+        );
+        let reference = obj.reference.as_ref().unwrap();
+        assert!(
+            reference.object_id.is_some(),
+            "object_id should be in default mask"
+        );
+        assert!(
+            reference.version.is_some(),
+            "version should be in default mask"
+        );
+        assert!(
+            reference.digest.is_some(),
+            "digest should be in default mask"
+        );
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_get_objects_with_bcs_mask() {
+    let (_cluster, mut client) = setup_test_cluster_and_client().await;
+
+    // Test GetObjects with BCS field mask
+    let request = GetObjectsRequest {
+        requests: Some(ObjectRequests {
+            requests: vec![ObjectRequest {
+                object_ref: Some(ObjectReference {
+                    object_id: Some(
+                        "0x0000000000000000000000000000000000000000000000000000000000000005"
+                            .to_string(),
+                    ),
+                    version: None,
+                    digest: None,
+                }),
+            }],
+        }),
+        read_mask: Some(FieldMask {
+            paths: vec!["reference.object_id".to_string(), "bcs".to_string()],
+        }),
+        max_message_size_bytes: None,
+    };
+
+    let mut stream = client
+        .get_objects(request)
+        .await
+        .expect("GetObjects with BCS mask should succeed")
+        .into_inner();
+
+    let response = stream
+        .message()
+        .await
+        .expect("Should receive response")
+        .expect("Response should not be None");
+
+    assert_eq!(response.objects.len(), 1, "Should return one object");
+
+    let result = &response.objects[0];
+    if let Some(iota_grpc_types::v0::ledger_service::object_result::Result::Object(obj)) =
+        &result.result
+    {
+        assert!(
+            obj.reference.is_some(),
+            "Object reference should be present"
+        );
+        assert!(
+            obj.bcs.is_some(),
+            "BCS data should be present when requested"
+        );
+
+        let bcs_data = obj.bcs.as_ref().unwrap();
+        assert!(!bcs_data.data.is_empty(), "BCS data should not be empty");
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_get_objects_multiple() {
+    let (_cluster, mut client) = setup_test_cluster_and_client().await;
+
+    // Test GetObjects with multiple objects
+    let request = GetObjectsRequest {
+        requests: Some(ObjectRequests {
+            requests: vec![
+                ObjectRequest {
+                    object_ref: Some(ObjectReference {
+                        object_id: Some(
+                            "0x0000000000000000000000000000000000000000000000000000000000000005"
+                                .to_string(),
+                        ),
+                        version: None,
+                        digest: None,
+                    }),
+                },
+                ObjectRequest {
+                    object_ref: Some(ObjectReference {
+                        object_id: Some(
+                            "0x0000000000000000000000000000000000000000000000000000000000000006"
+                                .to_string(),
+                        ),
+                        version: None,
+                        digest: None,
+                    }),
+                },
+            ],
+        }),
+        read_mask: None,
+        max_message_size_bytes: None,
+    };
+
+    let mut stream = client
+        .get_objects(request)
+        .await
+        .expect("GetObjects with multiple objects should succeed")
+        .into_inner();
+
+    let response = stream
+        .message()
+        .await
+        .expect("Should receive response")
+        .expect("Response should not be None");
+
+    assert_eq!(response.objects.len(), 2, "Should return two results");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_get_objects_not_found() {
+    let (_cluster, mut client) = setup_test_cluster_and_client().await;
+
+    // Test GetObjects with non-existent object
+    let request = GetObjectsRequest {
+        requests: Some(ObjectRequests {
+            requests: vec![ObjectRequest {
+                object_ref: Some(ObjectReference {
+                    object_id: Some(
+                        "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef"
+                            .to_string(),
+                    ),
+                    version: None,
+                    digest: None,
+                }),
+            }],
+        }),
+        read_mask: None,
+        max_message_size_bytes: None,
+    };
+
+    let mut stream = client
+        .get_objects(request)
+        .await
+        .expect("GetObjects should succeed even if object not found")
+        .into_inner();
+
+    let response = stream
+        .message()
+        .await
+        .expect("Should receive response")
+        .expect("Response should not be None");
+
+    assert_eq!(response.objects.len(), 1, "Should return one result");
+
+    let result = &response.objects[0];
+    // Should be an error result
+    if let Some(iota_grpc_types::v0::ledger_service::object_result::Result::Error(status)) =
+        &result.result
+    {
+        assert_eq!(
+            status.code,
+            tonic::Code::NotFound as i32,
+            "Error should be NotFound"
+        );
+        assert!(
+            status.message.contains("not found"),
+            "Error message should indicate object not found"
+        );
+    } else {
+        panic!("Expected error result for non-existent object");
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_get_objects_invalid_object_id() {
+    let (_cluster, mut client) = setup_test_cluster_and_client().await;
+
+    // Test GetObjects with invalid object ID
+    let request = GetObjectsRequest {
+        requests: Some(ObjectRequests {
+            requests: vec![ObjectRequest {
+                object_ref: Some(ObjectReference {
+                    object_id: Some("invalid_id".to_string()),
+                    version: None,
+                    digest: None,
+                }),
+            }],
+        }),
+        read_mask: None,
+        max_message_size_bytes: None,
+    };
+
+    let mut stream = client
+        .get_objects(request)
+        .await
+        .expect("GetObjects should succeed even with invalid ID")
+        .into_inner();
+
+    let response = stream
+        .message()
+        .await
+        .expect("Should receive response")
+        .expect("Response should not be None");
+
+    assert_eq!(response.objects.len(), 1, "Should return one result");
+
+    let result = &response.objects[0];
+    // Should be an error result
+    if let Some(iota_grpc_types::v0::ledger_service::object_result::Result::Error(status)) =
+        &result.result
+    {
+        assert_eq!(
+            status.code,
+            tonic::Code::InvalidArgument as i32,
+            "Error should be InvalidArgument"
+        );
+        assert!(
+            status.message.contains("Invalid object_id"),
+            "Error message should indicate invalid object_id"
+        );
+    } else {
+        panic!("Expected error result for invalid object ID");
+    }
+}
+
+// ============================================================================
+// GetTransactions Tests
+// ============================================================================
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_get_transactions_basic() {
+    let (_cluster, mut client) = setup_test_cluster_and_client().await;
+
+    // TODO: This test requires actual transaction data
+    // For now, test with a fake digest to verify error handling
+    let fake_digest = vec![0u8; 32];
+
+    // Test GetTransactions with default mask (digest only)
+    let request = GetTransactionsRequest {
+        requests: Some(TransactionRequests {
+            requests: vec![TransactionRequest {
+                digest: Some(Digest {
+                    digest: fake_digest,
+                }),
+            }],
+        }),
+        read_mask: None,
+        max_message_size_bytes: None,
+    };
+
+    let mut stream = client
+        .get_transactions(request)
+        .await
+        .expect("GetTransactions should succeed even if transaction not found")
+        .into_inner();
+
+    let response = stream
+        .message()
+        .await
+        .expect("Should receive response")
+        .expect("Response should not be None");
+
+    assert_eq!(response.transactions.len(), 1, "Should return one result");
+
+    let result = &response.transactions[0];
+    // Should be an error result for non-existent transaction
+    assert!(result.result.is_some(), "Result should contain error");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_get_transactions_with_full_mask() {
+    let (cluster, mut client) = setup_test_cluster_and_client().await;
+
+    // Create a transaction by transferring coins
+    let tx_digest = execute_transfer_transaction(&cluster).await;
+
+    // Wait for the next checkpoint to ensure transaction is indexed
+    tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+
+    // Request with full mask
+    let request = GetTransactionsRequest {
+        requests: Some(TransactionRequests {
+            requests: vec![TransactionRequest {
+                digest: Some(Digest {
+                    digest: tx_digest.into_inner().to_vec(),
+                }),
+            }],
+        }),
+        read_mask: Some(FieldMask {
+            paths: vec![
+                "digest".to_string(),
+                "transaction".to_string(),
+                "signatures".to_string(),
+                "effects".to_string(),
+                "events".to_string(),
+                "checkpoint".to_string(),
+                "timestamp".to_string(),
+            ],
+        }),
+        max_message_size_bytes: None,
+    };
+
+    let mut stream = client
+        .get_transactions(request)
+        .await
+        .expect("GetTransactions should succeed")
+        .into_inner();
+
+    let response = stream
+        .message()
+        .await
+        .expect("Should receive response")
+        .expect("Response should not be None");
+
+    assert_eq!(
+        response.transactions.len(),
+        1,
+        "Should return one transaction"
+    );
+
+    let result = &response.transactions[0];
+    if let Some(iota_grpc_types::v0::ledger_service::transaction_result::Result::Transaction(tx)) =
+        &result.result
+    {
+        assert!(tx.digest.is_some(), "digest should be present");
+        assert!(tx.transaction.is_some(), "transaction should be present");
+        assert!(tx.signatures.is_some(), "signatures should be present");
+        assert!(tx.effects.is_some(), "effects should be present");
+        // events may or may not be present depending on transaction
+        assert!(tx.checkpoint.is_some(), "checkpoint should be present");
+        assert!(tx.timestamp.is_some(), "timestamp should be present");
+    } else {
+        panic!("Expected transaction result, got error");
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_get_transactions_not_found() {
+    let (_cluster, mut client) = setup_test_cluster_and_client().await;
+
+    // Test with non-existent transaction digest
+    let fake_digest = vec![0u8; 32]; // Invalid digest
+
+    let request = GetTransactionsRequest {
+        requests: Some(TransactionRequests {
+            requests: vec![TransactionRequest {
+                digest: Some(Digest {
+                    digest: fake_digest,
+                }),
+            }],
+        }),
+        read_mask: None,
+        max_message_size_bytes: None,
+    };
+
+    let mut stream = client
+        .get_transactions(request)
+        .await
+        .expect("GetTransactions should succeed even if transaction not found")
+        .into_inner();
+
+    let response = stream
+        .message()
+        .await
+        .expect("Should receive response")
+        .expect("Response should not be None");
+
+    assert_eq!(response.transactions.len(), 1, "Should return one result");
+
+    let result = &response.transactions[0];
+    // Should be an error result
+    if let Some(iota_grpc_types::v0::ledger_service::transaction_result::Result::Error(status)) =
+        &result.result
+    {
+        assert!(
+            status.message.contains("not found") || status.message.contains("Not found"),
+            "Error message should indicate transaction not found: {}",
+            status.message
+        );
+    } else {
+        panic!("Expected error result for non-existent transaction");
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_get_transactions_with_bcs_mask() {
+    let (cluster, mut client) = setup_test_cluster_and_client().await;
+
+    // Create a transaction by transferring coins
+    let tx_digest = execute_transfer_transaction(&cluster).await;
+
+    // Wait for the next checkpoint to ensure transaction is indexed
+    tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+
+    // Request with BCS fields only
+    let request = GetTransactionsRequest {
+        requests: Some(TransactionRequests {
+            requests: vec![TransactionRequest {
+                digest: Some(Digest {
+                    digest: tx_digest.into_inner().to_vec(),
+                }),
+            }],
+        }),
+        read_mask: Some(FieldMask {
+            paths: vec![
+                "digest".to_string(),
+                "transaction.bcs".to_string(),
+                "signatures".to_string(),
+                "effects.bcs".to_string(),
+            ],
+        }),
+        max_message_size_bytes: None,
+    };
+
+    let mut stream = client
+        .get_transactions(request)
+        .await
+        .expect("GetTransactions should succeed")
+        .into_inner();
+
+    let response = stream
+        .message()
+        .await
+        .expect("Should receive response")
+        .expect("Response should not be None");
+
+    assert_eq!(
+        response.transactions.len(),
+        1,
+        "Should return one transaction"
+    );
+
+    let result = &response.transactions[0];
+    if let Some(iota_grpc_types::v0::ledger_service::transaction_result::Result::Transaction(tx)) =
+        &result.result
+    {
+        assert!(tx.digest.is_some(), "digest should be present");
+        assert!(tx.transaction.is_some(), "transaction should be present");
+
+        let transaction = tx.transaction.as_ref().unwrap();
+        assert!(
+            transaction.bcs.is_some(),
+            "transaction.bcs should be present"
+        );
+        assert!(
+            !transaction.bcs.as_ref().unwrap().data.is_empty(),
+            "transaction.bcs data should not be empty"
+        );
+
+        assert!(tx.signatures.is_some(), "signatures should be present");
+        assert!(tx.effects.is_some(), "effects should be present");
+
+        let effects = tx.effects.as_ref().unwrap();
+        assert!(effects.bcs.is_some(), "effects.bcs should be present");
+        assert!(
+            !effects.bcs.as_ref().unwrap().data.is_empty(),
+            "effects.bcs data should not be empty"
+        );
+    } else {
+        panic!("Expected transaction result, got error");
+    }
+}
+
+/// Helper function to execute a simple transfer transaction
+async fn execute_transfer_transaction(
+    cluster: &TestCluster,
+) -> iota_types::digests::TransactionDigest {
+    use iota_types::crypto::{AccountKeyPair, KeypairTraits, get_key_pair};
+
+    // Get the wallet context
+    let context = &cluster.wallet;
+
+    // Get gas price and accounts
+    let gas_price = context.get_reference_gas_price().await.unwrap();
+    let accounts_and_objs = context.get_all_accounts_and_gas_objects().await.unwrap();
+
+    let sender = accounts_and_objs[0].0;
+    let gas_object = accounts_and_objs[0].1[0];
+
+    // Get a recipient address (use a different account or generate new one)
+    let (_recipient_addr, recipient_key): (_, AccountKeyPair) = get_key_pair();
+    let recipient = recipient_key.public().into();
+
+    // Build transfer transaction
+    let txn = context.sign_transaction(
+        &iota_test_transaction_builder::TestTransactionBuilder::new(sender, gas_object, gas_price)
+            .transfer_iota(Some(1000), recipient)
+            .build(),
+    );
+
+    // Execute transaction
+    let resp = context.execute_transaction_must_succeed(txn).await;
+    resp.digest
+}

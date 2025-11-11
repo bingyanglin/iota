@@ -3,24 +3,20 @@
 
 use std::sync::Arc;
 
-use anyhow::Result;
-use iota_grpc_types::{
-    checkpoints::{
-        CertifiedCheckpointSummary as GrpcCertifiedCheckpointSummary,
-        CheckpointData as GrpcCheckpointData,
-    },
-    v0::{checkpoints as grpc_checkpoints, common as grpc_common},
+use iota_grpc_types::checkpoints::{
+    CertifiedCheckpointSummary as GrpcCertifiedCheckpointSummary,
+    CheckpointData as GrpcCheckpointData,
 };
 use iota_json_rpc_types::{EventFilter, IotaEvent};
 use iota_types::{
+    digests::TransactionDigest,
+    effects::{TransactionEffects, TransactionEvents},
     full_checkpoint_content::CheckpointData,
     messages_checkpoint::CertifiedCheckpointSummary,
     storage::{RestStateReader, error::Kind},
+    transaction::VerifiedTransaction,
 };
-use serde::Serialize;
-use tokio::sync::broadcast::{Receiver, Sender, error::RecvError};
-use tokio_util::sync::CancellationToken;
-use tonic::Status;
+use tokio::sync::broadcast::{Receiver, Sender};
 use tracing::debug;
 
 /// Trait for broadcasting checkpoint summaries
@@ -197,7 +193,9 @@ impl EventSubscriber for () {
 }
 
 // Type aliases and utility types
-pub type CheckpointStreamResult = Result<grpc_checkpoints::Checkpoint, Status>;
+// TODO: Re-enable when checkpoint streaming is implemented
+// pub type CheckpointStreamResult = Result<grpc_checkpoints::Checkpoint,
+// Status>;
 
 // Storage abstraction traits for gRPC access
 // These traits provide an abstraction layer over the storage backend,
@@ -220,6 +218,49 @@ pub trait GrpcStateReader: Send + Sync + 'static {
         &self,
         epoch: u64,
     ) -> anyhow::Result<Option<CertifiedCheckpointSummary>>;
+
+    /// Get committee for a specific epoch
+    fn get_committee(
+        &self,
+        epoch: u64,
+    ) -> anyhow::Result<Option<Arc<iota_types::committee::Committee>>>;
+
+    /// Get an object by its ObjectID
+    fn get_object(
+        &self,
+        object_id: &iota_types::base_types::ObjectID,
+    ) -> Option<iota_types::object::Object>;
+
+    /// Get the IOTA system state
+    /// This loads the system state including its dynamic fields
+    fn get_system_state(&self) -> anyhow::Result<iota_types::iota_system_state::IotaSystemState>;
+
+    /// Get indexed epoch information
+    fn get_epoch_info(&self, epoch: u64) -> Option<iota_types::storage::EpochInfo>;
+
+    /// Get a transaction by its digest
+    fn get_transaction(
+        &self,
+        digest: &iota_types::digests::TransactionDigest,
+    ) -> Option<Arc<iota_types::transaction::VerifiedTransaction>>;
+
+    /// Get transaction effects by digest
+    fn get_transaction_effects(
+        &self,
+        digest: &iota_types::digests::TransactionDigest,
+    ) -> Option<iota_types::effects::TransactionEffects>;
+
+    /// Get transaction events by event digest
+    fn get_transaction_events(
+        &self,
+        digest: &iota_types::digests::TransactionEventsDigest,
+    ) -> Option<iota_types::effects::TransactionEvents>;
+
+    /// Get checkpoint sequence number for a transaction
+    fn get_transaction_checkpoint(
+        &self,
+        digest: &iota_types::digests::TransactionDigest,
+    ) -> Option<u64>;
 }
 
 /// Adapter that implements GrpcStateReader for RestStateReader
@@ -263,6 +304,68 @@ impl GrpcStateReader for RestStateReaderAdapter {
             Err(e) => Err(e.into()),
         }
     }
+
+    fn get_committee(
+        &self,
+        epoch: u64,
+    ) -> anyhow::Result<Option<Arc<iota_types::committee::Committee>>> {
+        use iota_types::storage::ReadStore;
+        self.inner.try_get_committee(epoch).map_err(Into::into)
+    }
+
+    fn get_object(
+        &self,
+        object_id: &iota_types::base_types::ObjectID,
+    ) -> Option<iota_types::object::Object> {
+        use iota_types::storage::ObjectStore;
+        self.inner.get_object(object_id)
+    }
+
+    fn get_system_state(&self) -> anyhow::Result<iota_types::iota_system_state::IotaSystemState> {
+        use iota_types::iota_system_state::get_iota_system_state;
+        // self.inner is Arc<dyn RestStateReader>
+        // RestStateReader extends ObjectStore, so we can pass it directly
+        get_iota_system_state(self.inner.as_ref()).map_err(Into::into)
+    }
+
+    fn get_epoch_info(&self, epoch: u64) -> Option<iota_types::storage::EpochInfo> {
+        self.inner
+            .indexes()
+            .and_then(|indexes| indexes.get_epoch_info(epoch).ok().flatten())
+    }
+
+    fn get_transaction(
+        &self,
+        digest: &iota_types::digests::TransactionDigest,
+    ) -> Option<Arc<iota_types::transaction::VerifiedTransaction>> {
+        use iota_types::storage::ReadStore;
+        self.inner.get_transaction(digest)
+    }
+
+    fn get_transaction_effects(
+        &self,
+        digest: &iota_types::digests::TransactionDigest,
+    ) -> Option<iota_types::effects::TransactionEffects> {
+        use iota_types::storage::ReadStore;
+        self.inner.get_transaction_effects(digest)
+    }
+
+    fn get_transaction_events(
+        &self,
+        digest: &iota_types::digests::TransactionEventsDigest,
+    ) -> Option<iota_types::effects::TransactionEvents> {
+        use iota_types::storage::ReadStore;
+        self.inner.get_events(digest)
+    }
+
+    fn get_transaction_checkpoint(
+        &self,
+        digest: &iota_types::digests::TransactionDigest,
+    ) -> Option<u64> {
+        self.inner
+            .indexes()
+            .and_then(|indexes| indexes.get_transaction_checkpoint(digest).ok().flatten())
+    }
 }
 
 /// Central gRPC data reader that provides unified access to checkpoint data.
@@ -270,7 +373,7 @@ impl GrpcStateReader for RestStateReaderAdapter {
 /// summaries.
 #[derive(Clone)]
 pub struct GrpcReader {
-    state_reader: Arc<dyn GrpcStateReader>,
+    pub state_reader: Arc<dyn GrpcStateReader>,
 }
 
 impl GrpcReader {
@@ -293,6 +396,20 @@ impl GrpcReader {
         self.state_reader.get_epoch_last_checkpoint(epoch)
     }
 
+    pub fn get_committee(
+        &self,
+        epoch: u64,
+    ) -> anyhow::Result<Option<Arc<iota_types::committee::Committee>>> {
+        self.state_reader.get_committee(epoch)
+    }
+
+    pub fn get_checkpoint_summary(
+        &self,
+        seq: u64,
+    ) -> anyhow::Result<Option<CertifiedCheckpointSummary>> {
+        Ok(self.state_reader.get_checkpoint_summary(seq))
+    }
+
     fn get_full_checkpoint_data(&self, seq: u64) -> Option<CheckpointData> {
         self.state_reader.get_checkpoint_data(seq)
     }
@@ -301,157 +418,171 @@ impl GrpcReader {
         self.state_reader.get_latest_checkpoint_sequence_number()
     }
 
-    /// Generic checkpoint streaming implementation that works with checkpoint
-    /// data and summaries.
-    fn create_checkpoint_stream<T>(
-        &self,
-        mut rx: Receiver<Arc<T>>,
-        start_sequence_number: Option<u64>,
-        end_sequence_number: Option<u64>,
-        is_full: bool,
-        cancellation_token: CancellationToken,
-        fetch_historical: impl Fn(&Self, u64) -> Option<Arc<T>> + Send,
-        get_sequence_number: impl Fn(&Arc<T>) -> u64 + Send,
-    ) -> impl futures::Stream<Item = CheckpointStreamResult> + Send
-    where
-        T: Serialize + Send + Sync + 'static,
-    {
-        // Clone self to avoid lifetime issues with the async stream
-        let reader = self.clone();
-        async_stream::try_stream! {
-            let data_type_name = if is_full { "data" } else { "summary" };
-            // Link to issue (https://github.com/iotaledger/iota/issues/7943)
-            // TODO: Modify the latest checkpoint to start from 1.
-            // Note that we do not stream the Genesis checkpoint because its size
-            // can be very big. The genesis checkpoint should be imported directly.
-            let mut latest = reader.get_latest_checkpoint_sequence_number().unwrap_or(0);
-            debug!("[profile][grpc] Latest checkpoint index: {latest}.");
-            let (mut start, end) = match (start_sequence_number, end_sequence_number) {
-                (None, None) => (latest, u64::MAX),
-                (None, Some(end)) => (end, end),
-                (Some(start), None) => (start, u64::MAX),
-                (Some(start), Some(end)) => (start, end),
-            };
-            while start <= end {
-                // try fetching historical data from the DB first
-                if start <= latest {
-                    if let Some(item) = fetch_historical(&reader, start) {
-                        debug!("[profile][grpc] Fetched checkpoint {data_type_name} for index {start} from DB.");
-                        let sequence_number = get_sequence_number(&item);
-                        let response = grpc_common::BcsData::serialize_from(&*item)
-                            .map(|data| grpc_checkpoints::Checkpoint {
-                                sequence_number,
-                                bcs_data: Some(data),
-                                is_full,
-                            })
-                            .map_err(|e| Status::internal(format!("BCS serialization error: {e}")))?;
-                        yield response;
-                        if start == end {
-                            break;
-                        }
-                        start += 1;
-                        continue;
-                    } else {
-                        Err(Status::internal(format!("Historical checkpoint {data_type_name} missing/pruned: index={start} latest={latest}.")))?;
-                    }
-                }
-                // latest < start, live phase
-                // wait for broadcast or cancellation
-                let item_result = tokio::select! {
-                    // note: tokio::select! cannot return results, so we put the match logic after the select
-                    recv_result = rx.recv() => Some(recv_result),
-                    _ = cancellation_token.cancelled() => {
-                        debug!("[profile][grpc] Checkpoint {data_type_name} stream cancelled");
-                        None
-                    }
-                };
-
-                match item_result {
-                    Some(Ok(item)) => {
-                        debug!("[profile][grpc] Get checkpoint {data_type_name} for index {} from broadcast channel", get_sequence_number(&item));
-                        let sequence_number = get_sequence_number(&item);
-                        if start == sequence_number {
-                            let response = grpc_common::BcsData::serialize_from(&*item)
-                                .map(|data| grpc_checkpoints::Checkpoint {
-                                    sequence_number,
-                                    bcs_data: Some(data),
-                                    is_full,
-                                })
-                                .map_err(|e| Status::internal(format!("BCS serialization error: {e}")))?;
-                            yield response;
-                            if start == end {
-                                break;
-                            }
-                            start += 1;
-                            continue;
-                        }
-                        // else item sequence doesn't match, drop it and continue
-                    }
-                    Some(Err(RecvError::Lagged(_))) => {
-                        // continue, lagged item should be picked up from history DB
-                    }
-                    Some(Err(RecvError::Closed)) => {
-                        // report internal error to the stream and break
-                        Err(Status::internal(format!("Checkpoint {data_type_name} channel closed.")))?;
-                        break;
-                    }
-                    None => {
-                        // Cancellation was triggered
-                        break;
-                    }
-                }
-                latest = reader.get_latest_checkpoint_sequence_number().unwrap_or(start);
-                debug!("[profile][grpc] Updating latest checkpoint index to {latest}.");
-            }
-        }
+    pub fn get_latest_checkpoint(&self) -> crate::error::Result<CertifiedCheckpointSummary> {
+        let seq = self
+            .state_reader
+            .get_latest_checkpoint_sequence_number()
+            .ok_or_else(|| {
+                crate::error::RpcError::Internal(
+                    "Unable to determine current epoch: no checkpoints available".to_string(),
+                )
+            })?;
+        self.get_checkpoint_summary(seq)
+            .map_err(|e| {
+                crate::error::RpcError::Internal(format!("Failed to get checkpoint: {e}"))
+            })?
+            .ok_or_else(|| crate::error::RpcError::NotFound(format!("Checkpoint {seq} not found")))
     }
 
-    /// Create a checkpoint stream for full checkpoint data
-    pub fn create_checkpoint_data_stream(
+    pub fn get_object(
         &self,
-        rx: Receiver<Arc<GrpcCheckpointData>>,
-        start_sequence_number: Option<u64>,
-        end_sequence_number: Option<u64>,
-        cancellation_token: CancellationToken,
-    ) -> impl futures::Stream<Item = CheckpointStreamResult> + Send {
-        self.create_checkpoint_stream(
-            rx,
-            start_sequence_number,
-            end_sequence_number,
-            true,
-            cancellation_token,
-            |reader, seq| {
-                reader
-                    .get_full_checkpoint_data(seq)
-                    .map(GrpcCheckpointData::from)
-                    .map(Arc::new)
-            },
-            |item| item.sequence_number(),
-        )
+        object_id: &iota_types::base_types::ObjectID,
+    ) -> Option<iota_types::object::Object> {
+        self.state_reader.get_object(object_id)
     }
 
-    /// Create a checkpoint stream for checkpoint summaries
-    pub fn create_checkpoint_summary_stream(
+    pub fn get_system_state(
         &self,
-        rx: Receiver<Arc<GrpcCertifiedCheckpointSummary>>,
-        start_sequence_number: Option<u64>,
-        end_sequence_number: Option<u64>,
-        cancellation_token: CancellationToken,
-    ) -> impl futures::Stream<Item = CheckpointStreamResult> + Send {
-        self.create_checkpoint_stream(
-            rx,
-            start_sequence_number,
-            end_sequence_number,
-            false,
-            cancellation_token,
-            |reader, seq| {
-                reader
-                    .state_reader
-                    .get_checkpoint_summary(seq)
-                    .map(GrpcCertifiedCheckpointSummary::from)
-                    .map(Arc::new)
-            },
-            |item| item.sequence_number(),
-        )
+    ) -> anyhow::Result<iota_types::iota_system_state::IotaSystemState> {
+        self.state_reader.get_system_state()
+    }
+
+    // TODO: Re-enable when checkpoint streaming is needed
+    // /// Generic checkpoint streaming implementation that works with checkpoint
+    // /// data and summaries.
+    // fn create_checkpoint_stream<T>(
+    //     &self,
+    //     mut rx: Receiver<Arc<T>>,
+    //     start_sequence_number: Option<u64>,
+    //     end_sequence_number: Option<u64>,
+    //     is_full: bool,
+    //     cancellation_token: CancellationToken,
+    //     fetch_historical: impl Fn(&Self, u64) -> Option<Arc<T>> + Send,
+    //     get_sequence_number: impl Fn(&Arc<T>) -> u64 + Send,
+    // ) -> impl futures::Stream<Item = CheckpointStreamResult> + Send
+    // where
+    //     T: Serialize + Send + Sync + 'static,
+    // {
+    //     // Clone self to avoid lifetime issues with the async stream
+    //     let reader = self.clone();
+    //     async_stream::try_stream! {
+    //         // ... checkpoint streaming implementation commented out ...
+    //     }
+    // }
+
+    // /// Create a checkpoint stream for full checkpoint data
+    // pub fn create_checkpoint_data_stream(
+    //     &self,
+    //     rx: Receiver<Arc<GrpcCheckpointData>>,
+    //     start_sequence_number: Option<u64>,
+    //     end_sequence_number: Option<u64>,
+    //     cancellation_token: CancellationToken,
+    // ) -> impl futures::Stream<Item = CheckpointStreamResult> + Send {
+    //     self.create_checkpoint_stream(
+    //         rx,
+    //         start_sequence_number,
+    //         end_sequence_number,
+    //         true,
+    //         cancellation_token,
+    //         |reader, seq| {
+    //             reader
+    //                 .get_full_checkpoint_data(seq)
+    //                 .map(GrpcCheckpointData::from)
+    //                 .map(Arc::new)
+    //         },
+    //         |item| item.sequence_number(),
+    //     )
+    // }
+
+    // /// Create a checkpoint stream for checkpoint summaries
+    // pub fn create_checkpoint_summary_stream(
+    //     &self,
+    //     rx: Receiver<Arc<GrpcCertifiedCheckpointSummary>>,
+    //     start_sequence_number: Option<u64>,
+    //     end_sequence_number: Option<u64>,
+    //     cancellation_token: CancellationToken,
+    // ) -> impl futures::Stream<Item = CheckpointStreamResult> + Send {
+    //     self.create_checkpoint_stream(
+    //         rx,
+    //         start_sequence_number,
+    //         end_sequence_number,
+    //         false,
+    //         cancellation_token,
+    //         |reader, seq| {
+    //             reader
+    //                 .state_reader
+    //                 .get_checkpoint_summary(seq)
+    //                 .map(GrpcCertifiedCheckpointSummary::from)
+    //                 .map(Arc::new)
+    //         },
+    //         |item| item.sequence_number(),
+    //     )
+    // }
+}
+
+/// Internal struct to hold all transaction-related data fetched from storage
+#[derive(Debug)]
+pub struct TransactionRead {
+    pub digest: TransactionDigest,
+    pub transaction: Arc<VerifiedTransaction>,
+    pub effects: TransactionEffects,
+    pub events: Option<TransactionEvents>,
+    pub checkpoint: Option<u64>,
+    pub timestamp_ms: Option<u64>,
+}
+
+impl GrpcReader {
+    /// Get transaction data for a single transaction digest
+    ///
+    /// This fetches all available data for the transaction including:
+    /// - Transaction itself
+    /// - Effects
+    /// - Events (if any)
+    /// - Checkpoint and timestamp (if indexed)
+    #[tracing::instrument(skip(self))]
+    pub fn get_transaction_read(
+        &self,
+        digest: TransactionDigest,
+    ) -> Result<TransactionRead, crate::error::RpcError> {
+        use iota_types::effects::TransactionEffectsAPI;
+
+        // Get the transaction
+        let transaction = self.state_reader.get_transaction(&digest).ok_or_else(|| {
+            crate::error::RpcError::NotFound(format!("Transaction not found: {digest}"))
+        })?;
+
+        // Get the effects - required
+        let effects = self
+            .state_reader
+            .get_transaction_effects(&digest)
+            .ok_or_else(|| {
+                crate::error::RpcError::NotFound(format!("Transaction effects not found: {digest}"))
+            })?;
+
+        // Get events if they exist
+        let events = effects
+            .events_digest()
+            .and_then(|event_digest| self.state_reader.get_transaction_events(event_digest));
+
+        // Get checkpoint from indexes if available
+        let checkpoint = self.state_reader.get_transaction_checkpoint(&digest);
+
+        // Get timestamp from checkpoint if we have it
+        let timestamp_ms = if let Some(checkpoint_seq) = checkpoint {
+            self.state_reader
+                .get_checkpoint_summary(checkpoint_seq)
+                .map(|summary| summary.data().timestamp_ms)
+        } else {
+            None
+        };
+
+        Ok(TransactionRead {
+            digest,
+            transaction,
+            effects,
+            events,
+            checkpoint,
+            timestamp_ms,
+        })
     }
 }

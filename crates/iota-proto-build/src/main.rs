@@ -13,6 +13,12 @@ mod generate_fields;
 fn main() {
     let root_dir = PathBuf::from(std::env!("CARGO_MANIFEST_DIR"));
 
+    // Root proto directory containing both iota and google protos
+    let proto_root = root_dir
+        .join("../iota-grpc-types/proto")
+        .canonicalize()
+        .unwrap();
+
     let proto_dir = root_dir
         .join("../iota-grpc-types/proto/iota/grpc/v0")
         .canonicalize()
@@ -44,7 +50,7 @@ fn main() {
         .collect::<Result<Vec<_>, walkdir::Error>>()
         .unwrap();
 
-    let mut fds = protox::Compiler::new(std::slice::from_ref(&proto_dir))
+    let mut fds = protox::Compiler::new(std::slice::from_ref(&proto_root))
         .unwrap()
         .include_source_info(true)
         .include_imports(true)
@@ -54,14 +60,14 @@ fn main() {
     // Sort files by name to have deterministic codegen output
     fds.file.sort_by(|a, b| a.name.cmp(&b.name));
 
-    tonic_build::configure()
+    tonic_prost_build::configure()
         .build_client(true)
         .build_server(true)
         .out_dir(&out_dir)
-        .compile_protos(&proto_files, std::slice::from_ref(&proto_dir))
+        .compile_protos(&proto_files, std::slice::from_ref(&proto_root))
         .unwrap();
 
-    // Add IOTA license headers to tonic-generated files
+    // Add IOTA license headers to tonic-generated files and fix clippy warnings
     for entry in std::fs::read_dir(&out_dir).unwrap() {
         let entry = entry.unwrap();
         let path = entry.path();
@@ -74,13 +80,28 @@ fn main() {
                 .unwrap()
                 .contains("field_info")
         {
-            let content = std::fs::read_to_string(&path).unwrap();
+            let mut content = std::fs::read_to_string(&path).unwrap();
+
+            // Add license header if missing
             if !content.starts_with("// Copyright") {
-                let new_content = format!(
+                content = format!(
                     "// Copyright (c) Mysten Labs, Inc.\n// Modifications Copyright (c) 2025 IOTA Stiftung\n// SPDX-License-Identifier: Apache-2.0\n\n{content}"
                 );
-                std::fs::write(&path, new_content).unwrap();
             }
+
+            // Fix clippy::module_inception warning for nested modules with same name
+            // This pattern appears in generated protobuf files like:
+            //   pub struct Foo { ... }
+            //   pub mod foo { ... }
+            // We need to add #[allow(clippy::module_inception)] before such modules
+            if content.contains("/// Nested message and enum types in") {
+                content = content.replace(
+                    "/// Nested message and enum types in",
+                    "#[allow(clippy::module_inception)]\n/// Nested message and enum types in",
+                );
+            }
+
+            std::fs::write(&path, content).unwrap();
         }
     }
 

@@ -86,6 +86,54 @@ impl CheckpointData {
             .chain(self.transactions.iter().flat_map(|tx| &tx.output_objects))
             .collect()
     }
+
+    pub fn epoch_info(
+        &self,
+    ) -> Result<Option<crate::storage::EpochInfo>, crate::storage::error::Error> {
+        use crate::{
+            iota_system_state::{IotaSystemStateTrait, get_iota_system_state},
+            storage::EpochInfo,
+            transaction::{TransactionDataAPI, TransactionKind},
+        };
+
+        if self.checkpoint_summary.end_of_epoch_data.is_none()
+            && self.checkpoint_summary.sequence_number != 0
+        {
+            return Ok(None);
+        }
+        let (start_checkpoint, transaction) = if self.checkpoint_summary.sequence_number == 0 {
+            (0, &self.transactions[0])
+        } else {
+            let Some(transaction) = self.transactions.iter().find(|tx| {
+                matches!(
+                    tx.transaction.intent_message().value.kind(),
+                    TransactionKind::EndOfEpochTransaction(_)
+                )
+            }) else {
+                return Err(crate::storage::error::Error::custom(format!(
+                    "Failed to get end of epoch transaction in checkpoint {} with EndOfEpochData",
+                    self.checkpoint_summary.sequence_number,
+                )));
+            };
+            (self.checkpoint_summary.sequence_number + 1, transaction)
+        };
+        let output_objects_slice = transaction.output_objects.as_slice();
+        let system_state = get_iota_system_state(&output_objects_slice).map_err(|e| {
+            crate::storage::error::Error::custom(format!(
+                "Failed to find system state object output from end of epoch transaction: {e}"
+            ))
+        })?;
+        Ok(Some(EpochInfo {
+            epoch: system_state.epoch(),
+            protocol_version: Some(system_state.protocol_version()),
+            start_timestamp_ms: Some(system_state.epoch_start_timestamp_ms()),
+            end_timestamp_ms: None,
+            start_checkpoint: Some(start_checkpoint),
+            end_checkpoint: None,
+            reference_gas_price: Some(system_state.reference_gas_price()),
+            system_state: Some(system_state),
+        }))
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

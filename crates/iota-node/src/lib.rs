@@ -2097,7 +2097,7 @@ impl IotaNode {
 
         // Shutdown the gRPC server if it's running
         if let Some(grpc_handle) = self.grpc_server_handle.lock().await.take() {
-            info!("Shutting down gRPC server");
+            info!("gRPC server shutdown initiated");
             if let Err(e) = grpc_handle.shutdown().await {
                 warn!("Failed to gracefully shutdown gRPC server: {e}");
             }
@@ -2439,6 +2439,13 @@ async fn build_grpc_server(
     let event_subscriber =
         state.subscription_handler.clone() as Arc<dyn iota_grpc_server::EventSubscriber>;
 
+    // Get the chain identifier from the authority state
+    let chain_id = state.get_chain_identifier();
+    let chain = chain_id.chain();
+
+    // Get server version
+    let server_version = Some(format!("iota-node/{}", env!("CARGO_PKG_VERSION")));
+
     // Pass the same token to both GrpcReader (already done above) and
     // start_grpc_server
     let handle = start_grpc_server(
@@ -2446,6 +2453,9 @@ async fn build_grpc_server(
         event_subscriber,
         grpc_config.clone(),
         shutdown_token,
+        chain,
+        chain_id,
+        server_version,
     )
     .await?;
 
