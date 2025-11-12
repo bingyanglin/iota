@@ -8,8 +8,13 @@ use std::{collections::HashMap, path::PathBuf};
 
 use crate::generate_fields::FileDescriptorWithPackageVersion;
 
+mod codegen;
+mod comments;
+mod context;
 mod dependency_graph;
 mod generate_fields;
+mod ident;
+mod message_graph;
 
 fn main() {
     let root_dir = PathBuf::from(std::env!("CARGO_MANIFEST_DIR"));
@@ -19,7 +24,7 @@ fn main() {
         .canonicalize()
         .unwrap();
     let out_dir = root_dir
-        .join("../iota-grpc-types/src/proto_generated")
+        .join("../iota-grpc-types/src/proto/generated")
         .canonicalize()
         .unwrap();
 
