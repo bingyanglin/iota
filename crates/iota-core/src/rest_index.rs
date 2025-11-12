@@ -15,7 +15,6 @@ use iota_types::{
     digests::TransactionDigest,
     dynamic_field::visitor as DFV,
     full_checkpoint_content::CheckpointData,
-    iota_system_state::IotaSystemStateTrait,
     layout_resolver::LayoutResolver,
     messages_checkpoint::{CheckpointContents, CheckpointSequenceNumber},
     object::{Object, Owner},
@@ -23,7 +22,6 @@ use iota_types::{
         BackingPackageStore, DynamicFieldIndexInfo, DynamicFieldKey, EpochInfo, TransactionInfo,
         error::Error as StorageError,
     },
-    transaction::{TransactionDataAPI, TransactionKind},
 };
 use move_core_types::language_storage::StructTag;
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
@@ -134,8 +132,8 @@ struct IndexStoreTables {
 
     /// An index of extra metadata for Epochs.
     ///
-    /// Only contains entries for transactions which have yet to be pruned from
-    /// the main database.
+    /// Only contains entries for epochs which have yet to be pruned from the
+    /// main database.
     epochs: DBMap<EpochId, EpochInfo>,
 
     /// An index of extra metadata for Transactions.
@@ -228,6 +226,8 @@ impl IndexStoreTables {
         if let Some(checkpoint_range) = checkpoint_range {
             self.index_existing_transactions(authority_store, checkpoint_store, checkpoint_range)?;
         }
+
+        self.initialize_current_epoch(authority_store, checkpoint_store)?;
 
         let coin_index = Mutex::new(HashMap::new());
 
@@ -353,55 +353,24 @@ impl IndexStoreTables {
         checkpoint: &CheckpointData,
         batch: &mut typed_store::rocks::DBBatch,
     ) -> Result<(), StorageError> {
-        let CheckpointData {
-            checkpoint_summary,
-            transactions,
-            ..
-        } = checkpoint;
-
-        let Some(_end_of_epoch) = checkpoint_summary.end_of_epoch_data.as_ref() else {
+        let Some(epoch_info) = checkpoint.epoch_info()? else {
             return Ok(());
         };
 
-        let Some(transaction) = transactions.iter().find(|tx| {
-            matches!(
-                tx.transaction.intent_message().value.kind(),
-                TransactionKind::EndOfEpochTransaction(_)
-            )
-        }) else {
-            return Err(StorageError::custom(format!(
-                "Failed to get end of epoch transaction in checkpoint {} with EndOfEpochData",
-                checkpoint_summary.sequence_number,
-            )));
-        };
+        // We need to handle closing the previous epoch by updating the entry for it, if
+        // it exists.
+        if epoch_info.epoch > 0 {
+            let prev_epoch = epoch_info.epoch - 1;
 
-        // We need to handle closing out the current epoch by updating the entry for
-        // this epoch in case it exists.
-        if let Some(mut current_epoch) = self.epochs.get(&checkpoint_summary.epoch)? {
-            current_epoch.end_timestamp_ms = Some(checkpoint_summary.timestamp_ms);
-            current_epoch.end_checkpoint = Some(checkpoint_summary.sequence_number);
-            batch.insert_batch(&self.epochs, [(current_epoch.epoch, current_epoch)])?;
+            if let Some(mut previous_epoch) = self.epochs.get(&prev_epoch)? {
+                previous_epoch.end_timestamp_ms = Some(epoch_info.start_timestamp_ms);
+                previous_epoch.end_checkpoint = Some(epoch_info.start_checkpoint - 1);
+                batch.insert_batch(&self.epochs, [(prev_epoch, previous_epoch)])?;
+            }
         }
 
-        let system_state = iota_types::iota_system_state::get_iota_system_state(
-            &transaction.output_objects.as_slice(),
-        )
-        .map_err(|e| {
-            StorageError::custom(format!(
-                "Failed to find system state object output from end of epoch transaction: {e}"
-            ))
-        })?;
-        let next_epoch = EpochInfo {
-            epoch: system_state.epoch(),
-            protocol_version: system_state.protocol_version(),
-            start_timestamp_ms: system_state.epoch_start_timestamp_ms(),
-            end_timestamp_ms: None,
-            start_checkpoint: checkpoint_summary.sequence_number + 1,
-            end_checkpoint: None,
-            reference_gas_price: system_state.reference_gas_price(),
-            system_state,
-        };
-        batch.insert_batch(&self.epochs, [(next_epoch.epoch, next_epoch)])?;
+        // Insert the current epoch info
+        batch.insert_batch(&self.epochs, [(epoch_info.epoch, epoch_info)])?;
 
         Ok(())
     }
@@ -517,6 +486,46 @@ impl IndexStoreTables {
 
     fn get_epoch_info(&self, epoch: EpochId) -> Result<Option<EpochInfo>, TypedStoreError> {
         self.epochs.get(&epoch)
+    }
+
+    // After attempting to reindex past epochs, ensure that the current epoch is at
+    // least partially initialized
+    fn initialize_current_epoch(
+        &mut self,
+        authority_store: &AuthorityStore,
+        checkpoint_store: &CheckpointStore,
+    ) -> Result<(), StorageError> {
+        use iota_types::iota_system_state::IotaSystemStateTrait;
+
+        let Some(checkpoint) = checkpoint_store.get_highest_executed_checkpoint()? else {
+            return Ok(());
+        };
+
+        let system_state = iota_types::iota_system_state::get_iota_system_state(authority_store)
+            .map_err(|e| StorageError::custom(format!("Failed to find system state: {e}")))?;
+
+        let mut epoch = self.epochs.get(&checkpoint.epoch)?.unwrap_or_default();
+        epoch.epoch = checkpoint.epoch;
+
+        if epoch.protocol_version.is_none() {
+            epoch.protocol_version = Some(system_state.protocol_version());
+        }
+
+        if epoch.start_timestamp_ms.is_none() {
+            epoch.start_timestamp_ms = Some(system_state.epoch_start_timestamp_ms());
+        }
+
+        if epoch.reference_gas_price.is_none() {
+            epoch.reference_gas_price = Some(system_state.reference_gas_price());
+        }
+
+        if epoch.system_state.is_none() {
+            epoch.system_state = Some(system_state);
+        }
+
+        self.epochs.insert(&epoch.epoch, &epoch)?;
+
+        Ok(())
     }
 
     fn get_transaction_info(
