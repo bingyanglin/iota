@@ -537,6 +537,13 @@ impl RestStateReader for RestReadStore {
 }
 
 impl RestIndexes for RestIndexStore {
+    fn get_epoch_info(
+        &self,
+        epoch: iota_types::committee::EpochId,
+    ) -> iota_types::storage::error::Result<Option<iota_types::storage::EpochInfo>> {
+        self.get_epoch_info(epoch).map_err(StorageError::custom)
+    }
+
     fn get_transaction_checkpoint(
         &self,
         digest: &TransactionDigest,
@@ -592,12 +599,5 @@ impl RestIndexes for RestIndexStore {
                 },
             )
             .pipe(Ok)
-    }
-
-    fn get_epoch_info(
-        &self,
-        epoch: iota_types::committee::EpochId,
-    ) -> iota_types::storage::error::Result<Option<iota_types::storage::EpochInfo>> {
-        self.get_epoch_info(epoch).map_err(StorageError::custom)
     }
 }

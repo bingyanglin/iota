@@ -15,6 +15,7 @@ use iota_types::{
     digests::TransactionDigest,
     dynamic_field::visitor as DFV,
     full_checkpoint_content::CheckpointData,
+    iota_system_state::IotaSystemStateTrait,
     layout_resolver::LayoutResolver,
     messages_checkpoint::CheckpointContents,
     object::{Object, Owner},
@@ -231,6 +232,8 @@ impl IndexStoreTables {
             );
         }
 
+        self.initialize_current_epoch(authority_store, checkpoint_store)?;
+
         let coin_index = Mutex::new(HashMap::new());
 
         let make_live_object_indexer = RestParLiveObjectSetIndexer {
@@ -246,8 +249,6 @@ impl IndexStoreTables {
         )?;
 
         self.coin.multi_insert(coin_index.into_inner().unwrap())?;
-
-        self.initialize_current_epoch(authority_store, checkpoint_store)?;
 
         self.meta.insert(
             &(),
@@ -426,10 +427,6 @@ impl IndexStoreTables {
         Ok(())
     }
 
-    fn get_epoch_info(&self, epoch: EpochId) -> Result<Option<EpochInfo>, TypedStoreError> {
-        self.epochs.get(&epoch)
-    }
-
     // After attempting to reindex past epochs, ensure that the current epoch is at
     // least partially initialized
     fn initialize_current_epoch(
@@ -437,8 +434,6 @@ impl IndexStoreTables {
         authority_store: &AuthorityStore,
         checkpoint_store: &CheckpointStore,
     ) -> Result<(), StorageError> {
-        use iota_types::iota_system_state::IotaSystemStateTrait;
-
         let Some(checkpoint) = checkpoint_store.get_highest_executed_checkpoint()? else {
             return Ok(());
         };
@@ -468,6 +463,10 @@ impl IndexStoreTables {
         self.epochs.insert(&epoch.epoch, &epoch)?;
 
         Ok(())
+    }
+
+    fn get_epoch_info(&self, epoch: EpochId) -> Result<Option<EpochInfo>, TypedStoreError> {
+        self.epochs.get(&epoch)
     }
 
     fn get_transaction_info(
@@ -615,6 +614,10 @@ impl RestIndexStore {
         Ok(batch.write()?)
     }
 
+    pub fn get_epoch_info(&self, epoch: EpochId) -> Result<Option<EpochInfo>, TypedStoreError> {
+        self.tables.get_epoch_info(epoch)
+    }
+
     pub fn get_transaction_info(
         &self,
         digest: &TransactionDigest,
@@ -644,10 +647,6 @@ impl RestIndexStore {
         coin_type: &StructTag,
     ) -> Result<Option<CoinIndexInfo>, TypedStoreError> {
         self.tables.get_coin_info(coin_type)
-    }
-
-    pub fn get_epoch_info(&self, epoch: EpochId) -> Result<Option<EpochInfo>, TypedStoreError> {
-        self.tables.get_epoch_info(epoch)
     }
 }
 

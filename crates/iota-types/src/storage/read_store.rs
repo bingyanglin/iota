@@ -817,6 +817,8 @@ pub trait RestStateReader: ObjectStore + ReadStore + Send + Sync {
 }
 
 pub trait RestIndexes: Send + Sync {
+    fn get_epoch_info(&self, epoch: EpochId) -> Result<Option<EpochInfo>>;
+
     fn get_transaction_checkpoint(
         &self,
         digest: &TransactionDigest,
@@ -835,8 +837,6 @@ pub trait RestIndexes: Send + Sync {
     ) -> Result<Box<dyn Iterator<Item = (DynamicFieldKey, DynamicFieldIndexInfo)> + '_>>;
 
     fn get_coin_info(&self, coin_type: &StructTag) -> Result<Option<CoinInfo>>;
-
-    fn get_epoch_info(&self, epoch: EpochId) -> Result<Option<EpochInfo>>;
 }
 
 pub struct AccountOwnedObjectInfo {
