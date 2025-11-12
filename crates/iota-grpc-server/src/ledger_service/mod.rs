@@ -5,7 +5,6 @@ mod get_epoch;
 
 use std::{pin::Pin, sync::Arc};
 
-pub use get_epoch::protocol_config_to_proto;
 use iota_grpc_types::v0::ledger_service::{self as grpc_ledger_service};
 use iota_protocol_config::Chain;
 use tokio_util::sync::CancellationToken;
