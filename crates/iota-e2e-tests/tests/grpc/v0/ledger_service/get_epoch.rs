@@ -2,7 +2,6 @@
 // Modifications Copyright (c) 2025 IOTA Stiftung
 // SPDX-License-Identifier: Apache-2.0
 
-use iota_config::local_ip_utils;
 use iota_grpc_types::v0::ledger_service::{
     GetEpochRequest, ledger_service_client::LedgerServiceClient,
 };
@@ -12,19 +11,15 @@ use test_cluster::TestClusterBuilder;
 
 #[sim_test]
 async fn get_epoch() {
-    let localhost = local_ip_utils::localhost_for_testing();
-    let grpc_port = local_ip_utils::get_available_port(&localhost);
-    let grpc_addr = format!("{localhost}:{grpc_port}");
-
     let test_cluster = TestClusterBuilder::new()
-        .with_fullnode_grpc_api_address(grpc_addr.parse().expect("Invalid gRPC address"))
+        .with_fullnode_enable_grpc_api(true)
         .build()
         .await;
 
     // Wait for at least one checkpoint to be created
     test_cluster.wait_for_checkpoint(1, None).await;
 
-    let mut client = LedgerServiceClient::connect(format!("http://{grpc_addr}"))
+    let mut client = LedgerServiceClient::connect(test_cluster.grpc_url())
         .await
         .unwrap();
 
