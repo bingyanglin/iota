@@ -5,7 +5,10 @@
 use crate::{
     field::FieldMaskTree,
     merge::Merge,
-    v0::epoch::{Epoch, ProtocolConfig, ValidatorCommittee, ValidatorCommitteeMember},
+    v0::epoch::{
+        Epoch, ProtocolConfig, ValidatorCommittee, ValidatorCommitteeMember,
+        ValidatorCommitteeMembers,
+    },
 };
 
 impl Merge<&Epoch> for Epoch {
@@ -109,15 +112,11 @@ impl Merge<ProtocolConfig> for ProtocolConfig {
 /// Convert iota_types::committee::Committee to protobuf ValidatorCommittee
 impl From<&iota_types::committee::Committee> for ValidatorCommittee {
     fn from(committee: &iota_types::committee::Committee) -> Self {
-        use iota_types::crypto::ToFromBytes;
-
-        use crate::v0::epoch::ValidatorCommitteeMembers;
-
         let members_vec: Vec<ValidatorCommitteeMember> = committee
             .voting_rights
             .iter()
             .map(|(public_key, weight)| ValidatorCommitteeMember {
-                public_key: Some(public_key.as_bytes().to_vec().into()),
+                public_key: Some(public_key.0.to_vec().into()),
                 weight: Some(*weight),
             })
             .collect();

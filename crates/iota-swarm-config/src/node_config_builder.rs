@@ -607,7 +607,7 @@ impl FullnodeConfigBuilder {
             enable_db_write_stall: None,
             iota_names_config: self.iota_names_config,
             enable_grpc_api: self.enable_grpc_api,
-            grpc_api_config: grpc_api_config,
+            grpc_api_config,
         }
     }
 
