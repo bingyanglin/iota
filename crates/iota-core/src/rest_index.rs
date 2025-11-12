@@ -11,6 +11,7 @@ use std::{
 
 use iota_types::{
     base_types::{IotaAddress, MoveObjectType, ObjectID, SequenceNumber},
+    committee::EpochId,
     digests::TransactionDigest,
     dynamic_field::visitor as DFV,
     full_checkpoint_content::CheckpointData,
@@ -18,7 +19,8 @@ use iota_types::{
     messages_checkpoint::CheckpointContents,
     object::{Object, Owner},
     storage::{
-        BackingPackageStore, DynamicFieldIndexInfo, DynamicFieldKey, error::Error as StorageError,
+        BackingPackageStore, DynamicFieldIndexInfo, DynamicFieldKey, EpochInfo,
+        error::Error as StorageError,
     },
 };
 use move_core_types::language_storage::StructTag;
@@ -119,6 +121,12 @@ struct IndexStoreTables {
     /// - version of the DB. Everytime a new table or schema is changed the
     ///   version number needs to be incremented.
     meta: DBMap<(), MetadataInfo>,
+
+    /// An index of extra metadata for Epochs.
+    ///
+    /// Only contains entries for epochs which have yet to be pruned from the
+    /// main database.
+    epochs: DBMap<EpochId, EpochInfo>,
 
     /// An index of extra metadata for Transactions.
     ///
@@ -239,6 +247,8 @@ impl IndexStoreTables {
 
         self.coin.multi_insert(coin_index.into_inner().unwrap())?;
 
+        self.initialize_current_epoch(authority_store, checkpoint_store)?;
+
         self.meta.insert(
             &(),
             &MetadataInfo {
@@ -279,6 +289,8 @@ impl IndexStoreTables {
         );
 
         let mut batch = self.transactions.batch();
+
+        self.index_epoch(checkpoint, &mut batch)?;
 
         // transactions index
         {
@@ -392,6 +404,70 @@ impl IndexStoreTables {
         );
 
         Ok(batch)
+    }
+
+    fn index_epoch(
+        &self,
+        checkpoint: &CheckpointData,
+        batch: &mut typed_store::rocks::DBBatch,
+    ) -> Result<(), StorageError> {
+        let Some(epoch_info) = checkpoint.epoch_info()? else {
+            return Ok(());
+        };
+        if epoch_info.epoch > 0 {
+            let prev_epoch = epoch_info.epoch - 1;
+            let mut current_epoch = self.epochs.get(&prev_epoch)?.unwrap_or_default();
+            current_epoch.epoch = prev_epoch; // set this incase there wasn't an entry
+            current_epoch.end_timestamp_ms = epoch_info.start_timestamp_ms;
+            current_epoch.end_checkpoint = epoch_info.start_checkpoint.map(|sq| sq - 1);
+            batch.insert_batch(&self.epochs, [(prev_epoch, current_epoch)])?;
+        }
+        batch.insert_batch(&self.epochs, [(epoch_info.epoch, epoch_info)])?;
+        Ok(())
+    }
+
+    fn get_epoch_info(&self, epoch: EpochId) -> Result<Option<EpochInfo>, TypedStoreError> {
+        self.epochs.get(&epoch)
+    }
+
+    // After attempting to reindex past epochs, ensure that the current epoch is at
+    // least partially initialized
+    fn initialize_current_epoch(
+        &mut self,
+        authority_store: &AuthorityStore,
+        checkpoint_store: &CheckpointStore,
+    ) -> Result<(), StorageError> {
+        use iota_types::iota_system_state::IotaSystemStateTrait;
+
+        let Some(checkpoint) = checkpoint_store.get_highest_executed_checkpoint()? else {
+            return Ok(());
+        };
+
+        let system_state = iota_types::iota_system_state::get_iota_system_state(authority_store)
+            .map_err(|e| StorageError::custom(format!("Failed to find system state: {e}")))?;
+
+        let mut epoch = self.epochs.get(&checkpoint.epoch)?.unwrap_or_default();
+        epoch.epoch = checkpoint.epoch;
+
+        if epoch.protocol_version.is_none() {
+            epoch.protocol_version = Some(system_state.protocol_version());
+        }
+
+        if epoch.start_timestamp_ms.is_none() {
+            epoch.start_timestamp_ms = Some(system_state.epoch_start_timestamp_ms());
+        }
+
+        if epoch.reference_gas_price.is_none() {
+            epoch.reference_gas_price = Some(system_state.reference_gas_price());
+        }
+
+        if epoch.system_state.is_none() {
+            epoch.system_state = Some(system_state);
+        }
+
+        self.epochs.insert(&epoch.epoch, &epoch)?;
+
+        Ok(())
     }
 
     fn get_transaction_info(
@@ -568,6 +644,10 @@ impl RestIndexStore {
         coin_type: &StructTag,
     ) -> Result<Option<CoinIndexInfo>, TypedStoreError> {
         self.tables.get_coin_info(coin_type)
+    }
+
+    pub fn get_epoch_info(&self, epoch: EpochId) -> Result<Option<EpochInfo>, TypedStoreError> {
+        self.tables.get_epoch_info(epoch)
     }
 }
 
