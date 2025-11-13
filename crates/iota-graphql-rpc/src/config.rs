@@ -51,6 +51,10 @@ pub struct ConnectionConfig {
     /// Port to bind the prom server to
     #[clap(long, default_value_t = ConnectionConfig::default().prom_port)]
     pub prom_port: u16,
+    /// Skip checking whether the service is compatible with the DB it is about
+    /// to connect to, on start-up.
+    #[clap(long, default_value_t = ConnectionConfig::default().skip_migration_consistency_check)]
+    pub skip_migration_consistency_check: bool,
 }
 
 /// Configuration on features supported by the GraphQL service, passed in a
@@ -362,6 +366,7 @@ impl ConnectionConfig {
         db_pool_size: Option<u32>,
         prom_host: Option<String>,
         prom_port: Option<u16>,
+        skip_migration_consistency_check: Option<bool>,
     ) -> Self {
         let default = Self::default();
         Self {
@@ -371,6 +376,8 @@ impl ConnectionConfig {
             db_pool_size: db_pool_size.unwrap_or(default.db_pool_size),
             prom_host: prom_host.unwrap_or(default.prom_host),
             prom_port: prom_port.unwrap_or(default.prom_port),
+            skip_migration_consistency_check: skip_migration_consistency_check
+                .unwrap_or(default.skip_migration_consistency_check),
         }
     }
 
@@ -477,6 +484,7 @@ impl Default for ConnectionConfig {
             db_pool_size: 10,
             prom_host: "0.0.0.0".to_string(),
             prom_port: 9184,
+            skip_migration_consistency_check: false,
         }
     }
 }

@@ -94,7 +94,6 @@ pub(crate) struct Server {
     system_package_task: SystemPackageTask,
     trigger_exchange_rates_task: TriggerExchangeRatesTask,
     state: AppState,
-    db_reader: Db,
 }
 
 impl Server {
@@ -103,14 +102,6 @@ impl Server {
     /// tasks to complete before returning.
     pub async fn run(mut self) -> Result<(), Error> {
         get_or_init_server_start_time().await;
-
-        {
-            // Compatibility check
-            info!("Starting compatibility check");
-            let mut connection = get_pool_connection(&self.db_reader.inner.get_pool())?;
-            check_db_migration_consistency(&mut connection)?;
-            info!("Compatibility check passed");
-        }
 
         // A handle that spawns a background task to periodically update the
         // `Watermark`, which consists of the checkpoint upper bound and current
@@ -364,7 +355,7 @@ impl ServerBuilder {
         );
 
         let trigger_exchange_rates_task = TriggerExchangeRatesTask::new(
-            db_reader.clone(),
+            db_reader,
             watermark_task.epoch_receiver(),
             state.cancellation_token.clone(),
         );
@@ -391,7 +382,6 @@ impl ServerBuilder {
             system_package_task,
             trigger_exchange_rates_task,
             state,
-            db_reader,
         })
     }
 
@@ -449,6 +439,14 @@ impl ServerBuilder {
             config.service.limits.request_timeout_ms.into(),
         )
         .map_err(|e| Error::ServerInit(format!("Failed to create pg connection pool: {e}")))?;
+
+        {
+            // Compatibility check
+            info!("Starting compatibility check");
+            let mut connection = get_pool_connection(&reader.get_pool())?;
+            check_db_migration_consistency(&mut connection)?;
+            info!("Compatibility check passed");
+        }
 
         // DB
         let db = Db::new(
