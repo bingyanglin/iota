@@ -417,10 +417,20 @@ impl IndexStoreTables {
         };
         if epoch_info.epoch > 0 {
             let prev_epoch = epoch_info.epoch - 1;
+
+            // Retrieve the previous epoch's entry (which may be incomplete or non-existent)
             let mut current_epoch = self.epochs.get(&prev_epoch)?.unwrap_or_default();
-            current_epoch.epoch = prev_epoch; // set this incase there wasn't an entry
+
+            // Ensure the epoch field is set correctly (in case this is a newly created
+            // entry)
+            current_epoch.epoch = prev_epoch;
+
+            // Now that the new epoch has started, we can finalize the previous epoch's
+            // end_timestamp and end_checkpoint using the new epoch's start values
             current_epoch.end_timestamp_ms = epoch_info.start_timestamp_ms;
             current_epoch.end_checkpoint = epoch_info.start_checkpoint.map(|sq| sq - 1);
+
+            // Write the updated (finalized) previous epoch data back to the database
             batch.insert_batch(&self.epochs, [(prev_epoch, current_epoch)])?;
         }
         batch.insert_batch(&self.epochs, [(epoch_info.epoch, epoch_info)])?;
