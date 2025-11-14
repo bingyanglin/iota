@@ -53,6 +53,10 @@ pub(crate) enum TransactionSource {
     /// have been collected to reconstruct it.
     ShardReconstructor,
 
+    /// Transactions received via commit synchronization. Transactions are
+    /// fetched for all the committed blocks in synced commits.
+    CommitSyncer,
+
     /// Data added during testing.
     /// Only used in test code.
     #[cfg(test)]
@@ -67,6 +71,7 @@ impl TransactionSource {
             TransactionSource::TransactionSynchronizer => "Transactions synchronizer",
             TransactionSource::BlockStreaming => "Block streaming",
             TransactionSource::ShardReconstructor => "Shard reconstructor",
+            TransactionSource::CommitSyncer => "Commit syncer",
             #[cfg(test)]
             TransactionSource::Test => "test",
         }
@@ -126,7 +131,7 @@ pub(crate) struct DagState {
     /// Highest round of blocks accepted.
     highest_accepted_round: Round,
 
-    /// Last consensus commit of the dag.
+    /// Last pending consensus commit of the dag.
     last_commit: Option<TrustedCommit>,
 
     /// Last wall time when commit round advanced. Does not persist across
