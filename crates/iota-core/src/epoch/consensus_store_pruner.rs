@@ -164,7 +164,7 @@ impl ConsensusStorePruner {
             };
 
             if file_epoch < drop_boundary {
-                if let Err(e) = safe_drop_db(f.path()) {
+                if let Err(e) = safe_drop_db(f.path().to_path_buf(), std::time::Duration::from_secs(30)).await {
                     warn!(
                         "Could not prune old consensus storage \"{:?}\" directory with safe approach. Will fallback to force delete: {:?}",
                         f.path(),

@@ -39,7 +39,7 @@ impl AuthorityPerEpochStorePruner {
                 tokio::select! {
                     _ = prune_interval.tick() => {
                         info!("Starting pruning of epoch tables");
-                        match Self::prune_old_directories(&parent_path, num_latest_epoch_dbs_to_retain) {
+                        match Self::prune_old_directories(&parent_path, num_latest_epoch_dbs_to_retain).await {
                             Ok(pruned_count) => info!("Finished pruning old epoch databases. Pruned {} dbs", pruned_count),
                             Err(err) => error!("Error while removing old epoch databases {:?}", err),
                         }
@@ -56,7 +56,7 @@ impl AuthorityPerEpochStorePruner {
     /// identifies epoch directories, sorts them, and deletes the older
     /// ones. Returns the number of directories pruned or an error if the
     /// pruning process encounters an issue.
-    fn prune_old_directories(
+    async fn prune_old_directories(
         parent_path: &PathBuf,
         num_latest_epoch_dbs_to_retain: usize,
     ) -> Result<usize, anyhow::Error> {
@@ -77,11 +77,14 @@ impl AuthorityPerEpochStorePruner {
             for (_, path) in candidates.into_iter().sorted().take(to_prune) {
                 info!("Dropping epoch directory {:?}", path);
                 pruned += 1;
-                gc_results.push(safe_drop_db(path.join("recovery_log")));
-                gc_results.push(safe_drop_db(path));
+                gc_results.push(safe_drop_db(path.join("recovery_log"), std::time::Duration::from_secs(30)));
+                gc_results.push(safe_drop_db(path, std::time::Duration::from_secs(30)));
             }
         }
-        gc_results.into_iter().collect::<Result<Vec<_>, _>>()?;
+        futures::future::join_all(gc_results)
+            .await
+            .into_iter()
+            .collect::<Result<Vec<_>, _>>()?;
         Ok(pruned)
     }
 }

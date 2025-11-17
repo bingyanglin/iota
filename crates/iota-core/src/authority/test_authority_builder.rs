@@ -339,7 +339,7 @@ impl<'a> TestAuthorityBuilder<'a> {
                 &checkpoint_store,
                 &epoch_store,
                 &cache_traits.backing_package_store,
-            )))
+            ).await))
         };
 
         let transaction_deny_config = self.transaction_deny_config.unwrap_or_default();

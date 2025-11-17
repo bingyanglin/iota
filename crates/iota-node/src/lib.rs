@@ -672,7 +672,7 @@ impl IotaNode {
                 &checkpoint_store,
                 &epoch_store,
                 &cache_traits.backing_package_store,
-            )))
+            ).await))
         } else {
             None
         };
