@@ -15275,6 +15275,7 @@ dependencies = [
 name = "typed-store"
 version = "1.12.0-alpha"
 dependencies = [
+ "backoff",
  "bcs",
  "bincode",
  "collectable",
