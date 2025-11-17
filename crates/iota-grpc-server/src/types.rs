@@ -15,7 +15,7 @@ use iota_json_rpc_types::{EventFilter, IotaEvent};
 use iota_types::{
     full_checkpoint_content::CheckpointData,
     messages_checkpoint::CertifiedCheckpointSummary,
-    storage::{RestStateReader, error::Kind},
+    storage::{ObjectStore, ReadStore, RestStateReader, error::Kind},
 };
 use serde::Serialize;
 use tokio::sync::broadcast::{Receiver, Sender, error::RecvError};
@@ -235,6 +235,57 @@ pub trait GrpcStateReader: Send + Sync + 'static {
 
     /// Get indexed epoch information
     fn get_epoch_info(&self, epoch: u64) -> Option<iota_types::storage::EpochInfo>;
+
+    /// Get an object by its ObjectID
+    fn get_object(
+        &self,
+        object_id: &iota_types::base_types::ObjectID,
+    ) -> Option<iota_types::object::Object>;
+
+    /// Get an object by its ObjectID and version
+    fn get_object_by_key(
+        &self,
+        object_id: &iota_types::base_types::ObjectID,
+        version: iota_types::base_types::VersionNumber,
+    ) -> Option<iota_types::object::Object>;
+
+    /// Get a transaction by its digest
+    fn get_transaction(
+        &self,
+        digest: &iota_types::digests::TransactionDigest,
+    ) -> Option<Arc<iota_types::transaction::VerifiedTransaction>>;
+
+    /// Get transaction effects by digest
+    fn get_transaction_effects(
+        &self,
+        digest: &iota_types::digests::TransactionDigest,
+    ) -> Option<iota_types::effects::TransactionEffects>;
+
+    /// Get transaction events by event digest
+    fn get_transaction_events(
+        &self,
+        digest: &iota_types::digests::TransactionEventsDigest,
+    ) -> Option<iota_types::effects::TransactionEvents>;
+
+    /// Get checkpoint sequence number for a transaction
+    fn get_transaction_checkpoint(
+        &self,
+        digest: &iota_types::digests::TransactionDigest,
+    ) -> Option<u64>;
+
+    /// Get the lowest available checkpoint for which checkpoint and transaction
+    /// data are available
+    fn get_lowest_available_checkpoint(&self) -> anyhow::Result<u64>;
+
+    /// Get the lowest available checkpoint for which object data is available
+    fn get_lowest_available_checkpoint_objects(&self) -> anyhow::Result<u64>;
+
+    /// Get the Move type layout for a struct tag.
+    /// This is used for deserializing Move values (e.g., for JSON rendering).
+    fn get_struct_layout(
+        &self,
+        struct_tag: &move_core_types::language_storage::StructTag,
+    ) -> anyhow::Result<Option<move_core_types::annotated_value::MoveTypeLayout>>;
 }
 
 /// Adapter that implements GrpcStateReader for RestStateReader
@@ -297,6 +348,73 @@ impl GrpcStateReader for RestStateReaderAdapter {
         self.inner
             .indexes()
             .and_then(|indexes| indexes.get_epoch_info(epoch).ok().flatten())
+    }
+
+    fn get_object(
+        &self,
+        object_id: &iota_types::base_types::ObjectID,
+    ) -> Option<iota_types::object::Object> {
+        self.inner.get_object(object_id)
+    }
+
+    fn get_object_by_key(
+        &self,
+        object_id: &iota_types::base_types::ObjectID,
+        version: iota_types::base_types::VersionNumber,
+    ) -> Option<iota_types::object::Object> {
+        self.inner.get_object_by_key(object_id, version)
+    }
+
+    fn get_transaction(
+        &self,
+        digest: &iota_types::digests::TransactionDigest,
+    ) -> Option<Arc<iota_types::transaction::VerifiedTransaction>> {
+        self.inner.get_transaction(digest)
+    }
+
+    fn get_transaction_effects(
+        &self,
+        digest: &iota_types::digests::TransactionDigest,
+    ) -> Option<iota_types::effects::TransactionEffects> {
+        use iota_types::storage::ReadStore;
+        self.inner.get_transaction_effects(digest)
+    }
+
+    fn get_transaction_events(
+        &self,
+        digest: &iota_types::digests::TransactionEventsDigest,
+    ) -> Option<iota_types::effects::TransactionEvents> {
+        use iota_types::storage::ReadStore;
+        self.inner.get_events(digest)
+    }
+
+    fn get_transaction_checkpoint(
+        &self,
+        digest: &iota_types::digests::TransactionDigest,
+    ) -> Option<u64> {
+        self.inner
+            .indexes()
+            .and_then(|indexes| indexes.get_transaction_checkpoint(digest).ok().flatten())
+    }
+
+    fn get_lowest_available_checkpoint(&self) -> anyhow::Result<u64> {
+        use iota_types::storage::ReadStore;
+        self.inner
+            .try_get_lowest_available_checkpoint()
+            .map_err(Into::into)
+    }
+
+    fn get_lowest_available_checkpoint_objects(&self) -> anyhow::Result<u64> {
+        self.inner
+            .get_lowest_available_checkpoint_objects()
+            .map_err(Into::into)
+    }
+
+    fn get_struct_layout(
+        &self,
+        struct_tag: &move_core_types::language_storage::StructTag,
+    ) -> anyhow::Result<Option<move_core_types::annotated_value::MoveTypeLayout>> {
+        self.inner.get_struct_layout(struct_tag).map_err(Into::into)
     }
 }
 
@@ -369,6 +487,38 @@ impl GrpcReader {
 
     pub fn get_epoch_info(&self, epoch: u64) -> Option<iota_types::storage::EpochInfo> {
         self.state_reader.get_epoch_info(epoch)
+    }
+
+    pub fn get_object(
+        &self,
+        object_id: &iota_types::base_types::ObjectID,
+    ) -> Option<iota_types::object::Object> {
+        self.state_reader.get_object(object_id)
+    }
+
+    pub fn get_object_by_key(
+        &self,
+        object_id: &iota_types::base_types::ObjectID,
+        version: iota_types::base_types::VersionNumber,
+    ) -> Option<iota_types::object::Object> {
+        self.state_reader.get_object_by_key(object_id, version)
+    }
+
+    pub fn get_lowest_available_checkpoint(&self) -> anyhow::Result<u64> {
+        self.state_reader.get_lowest_available_checkpoint()
+    }
+
+    pub fn get_lowest_available_checkpoint_objects(&self) -> anyhow::Result<u64> {
+        self.state_reader.get_lowest_available_checkpoint_objects()
+    }
+
+    /// Get the Move type layout for a struct tag.
+    /// This is used for deserializing Move values (e.g., for JSON rendering in events).
+    pub fn get_struct_layout(
+        &self,
+        struct_tag: &move_core_types::language_storage::StructTag,
+    ) -> anyhow::Result<Option<move_core_types::annotated_value::MoveTypeLayout>> {
+        self.state_reader.get_struct_layout(struct_tag)
     }
 
     /// Generic checkpoint streaming implementation that works with checkpoint
@@ -496,4 +646,69 @@ impl GrpcReader {
             |item| item.sequence_number(),
         )
     }
+
+    /// Get transaction data for a single transaction digest
+    ///
+    /// This fetches all available data for the transaction including:
+    /// - Transaction itself
+    /// - Effects
+    /// - Events (if any)
+    /// - Checkpoint and timestamp (if indexed)
+    #[tracing::instrument(skip(self))]
+    pub fn get_transaction_read(
+        &self,
+        digest: iota_types::digests::TransactionDigest,
+    ) -> Result<TransactionRead, crate::error::RpcError> {
+        use iota_types::effects::TransactionEffectsAPI;
+
+        // Get the transaction
+        let transaction = self.state_reader.get_transaction(&digest).ok_or_else(|| {
+            crate::error::RpcError::NotFound(format!("Transaction not found: {digest}"))
+        })?;
+
+        // Get the effects - required
+        let effects = self
+            .state_reader
+            .get_transaction_effects(&digest)
+            .ok_or_else(|| {
+                crate::error::RpcError::NotFound(format!("Transaction effects not found: {digest}"))
+            })?;
+
+        // Get events if they exist
+        let events = effects
+            .events_digest()
+            .and_then(|event_digest| self.state_reader.get_transaction_events(event_digest));
+
+        // Get checkpoint from indexes if available
+        let checkpoint = self.state_reader.get_transaction_checkpoint(&digest);
+
+        // Get timestamp from checkpoint if we have it
+        let timestamp_ms = if let Some(checkpoint_seq) = checkpoint {
+            self.state_reader
+                .get_checkpoint_summary(checkpoint_seq)
+                .map(|summary| summary.data().timestamp_ms)
+        } else {
+            None
+        };
+
+        Ok(TransactionRead {
+            digest,
+            transaction,
+            effects,
+            events,
+            checkpoint,
+            timestamp_ms,
+        })
+    }
+}
+
+/// Internal struct to hold all transaction-related data fetched from storage
+#[derive(Debug)]
+pub struct TransactionRead {
+    pub digest: iota_types::digests::TransactionDigest,
+    pub transaction: std::sync::Arc<iota_types::transaction::VerifiedTransaction>,
+    pub effects: iota_types::effects::TransactionEffects,
+    pub events: Option<iota_types::effects::TransactionEvents>,
+    pub checkpoint: Option<u64>,
+    pub timestamp_ms: Option<u64>,
 }

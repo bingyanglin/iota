@@ -361,6 +361,14 @@ impl RestStateReader for MockRestStateReader {
     fn indexes(&self) -> Option<&dyn RestIndexes> {
         None
     }
+
+    fn get_struct_layout(
+        &self,
+        _struct_tag: &move_core_types::language_storage::StructTag,
+    ) -> StorageResult<Option<move_core_types::annotated_value::MoveTypeLayout>> {
+        // Mock implementation - not used in checkpoint stream tests
+        Ok(None)
+    }
 }
 
 async fn test_server_and_client_setup<I: Iterator<Item = u64>>(

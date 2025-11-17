@@ -2,11 +2,17 @@
 // SPDX-License-Identifier: Apache-2.0
 
 mod get_epoch;
+mod get_objects;
+mod get_service_info;
+mod get_transactions;
 
 use std::{pin::Pin, sync::Arc};
 
+pub use get_epoch::protocol_config_to_proto;
+pub use get_transactions::get_transactions as get_transactions_impl;
 use iota_grpc_types::v0::ledger_service::{self as grpc_ledger_service};
 use iota_protocol_config::Chain;
+use iota_types::digests::ChainIdentifier;
 use tokio_util::sync::CancellationToken;
 use tonic::{Request, Response, Status};
 use tracing::info;
@@ -19,6 +25,8 @@ pub struct LedgerGrpcService {
     pub checkpoint_data_broadcaster: GrpcCheckpointDataBroadcaster,
     pub cancellation_token: CancellationToken,
     pub chain: Chain,
+    pub chain_id: ChainIdentifier,
+    pub server_version: Option<String>,
 }
 
 impl LedgerGrpcService {
@@ -28,6 +36,8 @@ impl LedgerGrpcService {
         checkpoint_data_broadcaster: GrpcCheckpointDataBroadcaster,
         cancellation_token: CancellationToken,
         chain: Chain,
+        chain_id: ChainIdentifier,
+        server_version: Option<String>,
     ) -> Self {
         Self {
             reader,
@@ -35,6 +45,8 @@ impl LedgerGrpcService {
             checkpoint_data_broadcaster,
             cancellation_token,
             chain,
+            chain_id,
+            server_version,
         }
     }
 }
@@ -68,43 +80,43 @@ impl grpc_ledger_service::ledger_service_server::LedgerService for LedgerGrpcSer
     /// Query the service for general information about its current state.
     async fn get_service_info(
         &self,
-        _request: tonic::Request<grpc_ledger_service::GetServiceInfoRequest>,
+        request: tonic::Request<grpc_ledger_service::GetServiceInfoRequest>,
     ) -> std::result::Result<
         tonic::Response<grpc_ledger_service::GetServiceInfoResponse>,
         tonic::Status,
     > {
         info!("[grpc][ledger] GetServiceInfo called");
-        let response = grpc_ledger_service::GetServiceInfoResponse {
-            chain_id: None,
-            chain: None,
-            epoch: None,
-            executed_checkpoint_height: None,
-            executed_checkpoint_timestamp: None,
-            lowest_available_checkpoint: None,
-            lowest_available_checkpoint_objects: None,
-            server: None,
-        };
-        Ok(Response::new(response))
+        get_service_info::get_service_info(
+            (*self.reader).clone(),
+            self.chain_id,
+            self.server_version.clone(),
+            request.into_inner(),
+        )
+        .map(Response::new)
+        .map_err(Into::into)
     }
 
     async fn get_objects(
         &self,
-        _request: tonic::Request<grpc_ledger_service::GetObjectsRequest>,
+        request: tonic::Request<grpc_ledger_service::GetObjectsRequest>,
     ) -> std::result::Result<tonic::Response<Self::GetObjectsStream>, tonic::Status> {
-        // not implemented - return empty stream
-        let stream = futures::stream::empty();
-        let stream: Self::GetObjectsStream = Box::pin(stream);
-        Ok(Response::new(stream))
+        let responses = get_objects::get_objects((*self.reader).clone(), request.into_inner())?;
+
+        // Convert Vec of responses to stream
+        let stream = futures::stream::iter(responses.into_iter().map(Ok));
+        Ok(Response::new(Box::pin(stream)))
     }
 
     async fn get_transactions(
         &self,
-        _request: tonic::Request<grpc_ledger_service::GetTransactionsRequest>,
+        request: tonic::Request<grpc_ledger_service::GetTransactionsRequest>,
     ) -> std::result::Result<tonic::Response<Self::GetTransactionsStream>, tonic::Status> {
-        // not implemented - return empty stream
-        let stream = futures::stream::empty();
-        let stream: Self::GetTransactionsStream = Box::pin(stream);
-        Ok(Response::new(stream))
+        let responses =
+            get_transactions_impl(&self.reader, request.into_inner()).map_err(Status::from)?;
+
+        // Convert Vec of responses to stream
+        let stream = futures::stream::iter(responses.into_iter().map(Ok));
+        Ok(Response::new(Box::pin(stream)))
     }
 
     /// Checkpoint operations

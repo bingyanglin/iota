@@ -59,6 +59,32 @@ impl Balance {
             && s.name.as_ident_str() == BALANCE_STRUCT_NAME
     }
 
+    pub fn is_balance_layout(struct_layout: &MoveStructLayout) -> bool {
+        let ty = &struct_layout.type_;
+
+        if !Self::is_balance(ty) {
+            return false;
+        }
+
+        if ty.type_params.len() != 1 {
+            return false;
+        }
+
+        if struct_layout.fields.len() != 1 {
+            return false;
+        }
+
+        let Some(field) = struct_layout.fields.first() else {
+            return false;
+        };
+
+        if field.name.as_str() != "value" {
+            return false;
+        }
+
+        matches!(field.layout, MoveTypeLayout::U64)
+    }
+
     pub fn withdraw(&mut self, amount: u64) -> Result<(), ExecutionError> {
         fp_ensure!(
             self.value >= amount,

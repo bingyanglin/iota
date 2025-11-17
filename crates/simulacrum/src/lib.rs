@@ -596,6 +596,42 @@ impl<T: Send + Sync, V: store::SimulatorStore + Send + Sync> RestStateReader for
     fn indexes(&self) -> Option<&dyn iota_types::storage::RestIndexes> {
         None
     }
+
+    fn get_struct_layout(
+        &self,
+        struct_tag: &move_core_types::language_storage::StructTag,
+    ) -> iota_types::storage::error::Result<Option<move_core_types::annotated_value::MoveTypeLayout>> {
+        use iota_types::layout_resolver::get_layout_from_struct_tag;
+
+        // Get the package object
+        let package = match self.get_object(&struct_tag.address.into()) {
+            Some(obj) => obj,
+            None => return Ok(None),
+        };
+
+        // Extract the Move package
+        let move_package = match package.data.try_as_package() {
+            Some(pkg) => pkg,
+            None => return Ok(None),
+        };
+
+        // Get the struct layout
+        match get_layout_from_struct_tag(struct_tag.clone(), move_package) {
+            Ok(datatype_layout) => {
+                // Convert MoveDatatypeLayout to MoveTypeLayout
+                let layout = match datatype_layout {
+                    move_core_types::annotated_value::MoveDatatypeLayout::Struct(s) => {
+                        move_core_types::annotated_value::MoveTypeLayout::Struct(s)
+                    }
+                    move_core_types::annotated_value::MoveDatatypeLayout::Enum(e) => {
+                        move_core_types::annotated_value::MoveTypeLayout::Enum(e)
+                    }
+                };
+                Ok(Some(layout))
+            }
+            Err(_) => Ok(None),
+        }
+    }
 }
 
 impl Simulacrum {

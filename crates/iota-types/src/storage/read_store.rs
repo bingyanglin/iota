@@ -814,6 +814,13 @@ pub trait RestStateReader: ObjectStore + ReadStore + Send + Sync {
 
     // Get a handle to an instance of the RpcIndexes
     fn indexes(&self) -> Option<&dyn RestIndexes>;
+
+    /// Get the Move type layout for a struct tag.
+    /// This is used for deserializing Move values (e.g., for JSON rendering in gRPC).
+    fn get_struct_layout(
+        &self,
+        struct_tag: &move_core_types::language_storage::StructTag,
+    ) -> Result<Option<move_core_types::annotated_value::MoveTypeLayout>>;
 }
 
 pub trait RestIndexes: Send + Sync {
