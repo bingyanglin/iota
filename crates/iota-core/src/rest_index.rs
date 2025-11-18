@@ -15,6 +15,7 @@ use iota_types::{
     digests::TransactionDigest,
     dynamic_field::visitor as DFV,
     full_checkpoint_content::CheckpointData,
+    iota_system_state::IotaSystemStateTrait,
     layout_resolver::LayoutResolver,
     messages_checkpoint::{CheckpointContents, CheckpointSequenceNumber},
     object::{Object, Owner},
@@ -386,31 +387,95 @@ impl IndexStoreTables {
             return Ok(());
         };
 
+        if self.epochs.get(&checkpoint.epoch)?.is_some() {
+            // no need to initialize if it already exists
+            return Ok(());
+        }
+
         let system_state = iota_types::iota_system_state::get_iota_system_state(authority_store)
             .map_err(|e| StorageError::custom(format!("Failed to find system state: {e}")))?;
 
-        let mut epoch = self.epochs.get(&checkpoint.epoch)?.unwrap_or_default();
-        epoch.epoch = checkpoint.epoch;
+        // Determine the start checkpoint of the current epoch
+        let start_checkpoint = if checkpoint.epoch != 0 {
+            let previous_epoch = checkpoint.epoch - 1;
 
-        if epoch.protocol_version.is_none() {
-            epoch.protocol_version = Some(system_state.protocol_version());
-        }
+            // Find the last checkpoint of the previous epoch
+            if let Some(previous_epoch_info) = self.epochs.get(&previous_epoch)? {
+                if let Some(end_checkpoint) = previous_epoch_info.end_checkpoint {
+                    end_checkpoint + 1
+                } else {
+                    // Fall back to scanning checkpoints if the end_checkpoint is None
+                    self.scan_for_epoch_start_checkpoint(
+                        checkpoint_store,
+                        checkpoint.sequence_number,
+                        previous_epoch,
+                    )?
+                }
+            } else {
+                // Fall back to scanning checkpoints if the previous epoch info is missing
+                self.scan_for_epoch_start_checkpoint(
+                    checkpoint_store,
+                    checkpoint.sequence_number,
+                    previous_epoch,
+                )?
+            }
+        } else {
+            // First epoch starts at checkpoint 0
+            0
+        };
 
-        if epoch.start_timestamp_ms.is_none() {
-            epoch.start_timestamp_ms = Some(system_state.epoch_start_timestamp_ms());
-        }
+        let epoch_info = EpochInfo {
+            epoch: checkpoint.epoch,
+            protocol_version: system_state.protocol_version(),
+            start_timestamp_ms: system_state.epoch_start_timestamp_ms(),
+            end_timestamp_ms: None,
+            start_checkpoint,
+            end_checkpoint: None,
+            reference_gas_price: system_state.reference_gas_price(),
+            system_state,
+        };
 
-        if epoch.reference_gas_price.is_none() {
-            epoch.reference_gas_price = Some(system_state.reference_gas_price());
-        }
-
-        if epoch.system_state.is_none() {
-            epoch.system_state = Some(system_state);
-        }
-
-        self.epochs.insert(&epoch.epoch, &epoch)?;
+        self.epochs.insert(&epoch_info.epoch, &epoch_info)?;
 
         Ok(())
+    }
+
+    fn scan_for_epoch_start_checkpoint(
+        &self,
+        checkpoint_store: &CheckpointStore,
+        current_checkpoint_seq_number: u64,
+        previous_epoch: EpochId,
+    ) -> Result<u64, StorageError> {
+        // Scan from current checkpoint backwards to 0 to find the start of this epoch.
+        let mut last_checkpoint_seq_number_of_prev_epoch = None;
+        for seq in (0..=current_checkpoint_seq_number).rev() {
+            let Some(chkpt) = checkpoint_store
+                .get_checkpoint_by_sequence_number(seq)
+                .ok()
+                .flatten()
+            else {
+                // continue if there is a gap in the checkpoints
+                continue;
+            };
+
+            if chkpt.epoch < previous_epoch {
+                // we must stop searching if we are past the previous epoch
+                break;
+            }
+
+            if chkpt.epoch == previous_epoch && chkpt.end_of_epoch_data.is_some() {
+                // We found the checkpoint with end of epoch data for the previous epoch
+                last_checkpoint_seq_number_of_prev_epoch = Some(chkpt.sequence_number);
+                break;
+            }
+        }
+
+        let last_checkpoint_seq_number_of_prev_epoch = last_checkpoint_seq_number_of_prev_epoch
+            .ok_or(StorageError::custom(format!(
+                "Failed to get the last checkpoint of the previous epoch {previous_epoch}",
+            )))?;
+
+        Ok(last_checkpoint_seq_number_of_prev_epoch + 1)
     }
 
     fn index_transactions(
