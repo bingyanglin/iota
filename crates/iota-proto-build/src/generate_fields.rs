@@ -13,23 +13,10 @@ use prost_types::{
 };
 use quote::quote;
 
-use crate::dependency_graph::{DependencyGraph, build_dependency_graph};
-
-// Helper function to convert PascalCase to snake_case
-fn to_snake_case(s: &str) -> String {
-    let mut result = String::new();
-    let chars = s.chars().peekable();
-
-    for ch in chars {
-        if ch.is_uppercase() && !result.is_empty() {
-            // Add underscore before uppercase letters (except the first one)
-            result.push('_');
-        }
-        result.push(ch.to_lowercase().next().unwrap());
-    }
-
-    result
-}
+use crate::{
+    dependency_graph::{DependencyGraph, build_dependency_graph},
+    ident::to_snake,
+};
 
 // Helper to search nested messages
 fn find_type_in_nested_messages(
@@ -135,7 +122,7 @@ fn collect_nested_message_imports(
         // For messages with nested types, we need to import the nested message types
         // but not their field builders (since those are defined in this same file)
         if !message.nested_type.is_empty() {
-            let parent_module = to_snake_case(message.name());
+            let parent_module = to_snake(message.name());
             let package_ident =
                 quote::format_ident!("{}", package.split('.').next_back().unwrap_or(package));
             let parent_ident = quote::format_ident!("{parent_module}");
@@ -275,7 +262,7 @@ fn build_nested_messages_map(messages: &[DescriptorProto]) -> HashMap<String, St
 
     for message in messages {
         if !message.nested_type.is_empty() {
-            let parent_module = to_snake_case(message.name());
+            let parent_module = to_snake(message.name());
             for nested in &message.nested_type {
                 // Skip map entry messages
                 if nested.options.as_ref().is_some_and(|o| o.map_entry()) {
@@ -323,7 +310,7 @@ fn generate_field_info_for_all_messages(
 
         // Generate nested modules for nested messages
         if !message.nested_type.is_empty() {
-            let module_name = quote::format_ident!("{}", to_snake_case(message.name()));
+            let module_name = quote::format_ident!("{}", to_snake(message.name()));
             let nested_content =
                 generate_field_info_for_all_messages(package, &message.nested_type, boxed_types);
 

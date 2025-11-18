@@ -6,7 +6,7 @@
 
 use std::{collections::HashMap, path::PathBuf};
 
-use crate::generate_fields::FileDescriptorWithPackageVersion;
+use crate::{generate_fields::FileDescriptorWithPackageVersion, message_graph::DescriptorGraph};
 
 mod codegen;
 mod comments;
@@ -62,6 +62,8 @@ fn main() {
 
     // Define boxing configuration
     let boxed_types = vec![
+        // TODO: should we box all bcs types?
+        ".iota.grpc.v0.Epoch.bcs_system_state".to_string(),
         ".iota.grpc.v0.types.TypeTagVector.inner_type".to_string(),
         ".iota.grpc.v0.filter.AllEventFilter.filters".to_string(),
         ".iota.grpc.v0.filter.AnyEventFilter.filters".to_string(),
@@ -129,6 +131,12 @@ fn main() {
             std::fs::write(&path, content).unwrap();
         }
     }
+
+    // Setup for extended codegen
+    let extern_paths = context::extern_paths::ExternPaths::new(&[], true).unwrap();
+    let graph = DescriptorGraph::new(fds.file.iter());
+    let context = context::Context::new(extern_paths, graph);
+    codegen::accessors::generate_accessors(&context, &out_dir);
 
     // Group files by package for field info generation
     let mut packages: HashMap<String, FileDescriptorWithPackageVersion> = HashMap::new();
