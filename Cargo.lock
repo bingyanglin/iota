@@ -6481,10 +6481,12 @@ version = "1.12.0-alpha"
 dependencies = [
  "bcs",
  "iota-json-rpc-types",
+ "iota-rust-sdk",
  "iota-types",
  "prost 0.14.1",
  "prost-types 0.14.1",
  "serde",
+ "tap",
  "tonic 0.14.2",
  "tonic-prost",
 ]
