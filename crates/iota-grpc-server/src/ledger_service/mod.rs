@@ -4,6 +4,7 @@
 mod get_epoch;
 mod get_objects;
 mod get_service_info;
+mod get_transactions;
 
 use std::{pin::Pin, sync::Arc};
 
@@ -106,12 +107,13 @@ impl grpc_ledger_service::ledger_service_server::LedgerService for LedgerGrpcSer
 
     async fn get_transactions(
         &self,
-        _request: tonic::Request<grpc_ledger_service::GetTransactionsRequest>,
+        request: tonic::Request<grpc_ledger_service::GetTransactionsRequest>,
     ) -> std::result::Result<tonic::Response<Self::GetTransactionsStream>, tonic::Status> {
-        // not implemented - return empty stream
-        let stream = futures::stream::empty();
-        let stream: Self::GetTransactionsStream = Box::pin(stream);
-        Ok(Response::new(stream))
+        let responses = get_transactions::get_transactions(&self.reader, request.into_inner())?;
+
+        // Convert Vec of responses to stream
+        let stream = futures::stream::iter(responses.into_iter().map(Ok));
+        Ok(Response::new(Box::pin(stream)))
     }
 
     /// Checkpoint operations

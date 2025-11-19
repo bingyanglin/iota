@@ -596,6 +596,16 @@ impl<T: Send + Sync, V: store::SimulatorStore + Send + Sync> RestStateReader for
     fn indexes(&self) -> Option<&dyn iota_types::storage::RestIndexes> {
         None
     }
+
+    fn get_struct_layout(
+        &self,
+        _struct_tag: &move_core_types::language_storage::StructTag,
+    ) -> iota_types::storage::error::Result<Option<move_core_types::annotated_value::MoveTypeLayout>>
+    {
+        // Simulacrum doesn't support struct layout resolution for JSON rendering
+        // This is only used for grpc json_contents field which is optional
+        Ok(None)
+    }
 }
 
 impl Simulacrum {

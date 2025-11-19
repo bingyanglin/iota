@@ -90,3 +90,4 @@ pub mod ledger_service;
 pub mod merge;
 pub mod object;
 pub mod proto_helpers;
+pub mod transaction;

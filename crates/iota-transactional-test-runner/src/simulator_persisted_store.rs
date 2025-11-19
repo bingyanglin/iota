@@ -710,6 +710,16 @@ impl RestStateReader for PersistedStoreInnerReadOnlyWrapper {
     ) -> iota_types::storage::error::Result<Option<VerifiedCheckpoint>> {
         todo!()
     }
+
+    fn get_struct_layout(
+        &self,
+        _struct_tag: &move_core_types::language_storage::StructTag,
+    ) -> iota_types::storage::error::Result<Option<move_core_types::annotated_value::MoveTypeLayout>>
+    {
+        // PersistedStore doesn't support struct layout resolution for JSON rendering
+        // This is only used for grpc json_contents field which is optional
+        Ok(None)
+    }
 }
 
 impl PersistedStoreInnerReadOnlyWrapper {

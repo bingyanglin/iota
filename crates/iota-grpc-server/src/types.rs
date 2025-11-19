@@ -14,11 +14,15 @@ use iota_grpc_types::{
 use iota_json_rpc_types::{EventFilter, IotaEvent};
 use iota_types::{
     base_types::{ObjectID, VersionNumber},
+    digests::{TransactionDigest, TransactionEventsDigest},
+    effects::{TransactionEffects, TransactionEffectsAPI, TransactionEvents},
     full_checkpoint_content::CheckpointData,
     messages_checkpoint::CertifiedCheckpointSummary,
     object::Object,
     storage::{ObjectStore, ReadStore, RestStateReader, error::Kind},
+    transaction::VerifiedTransaction,
 };
+use move_core_types::{annotated_value::MoveTypeLayout, language_storage::StructTag};
 use serde::Serialize;
 use tokio::sync::broadcast::{Receiver, Sender, error::RecvError};
 use tokio_util::sync::CancellationToken;
@@ -244,6 +248,23 @@ pub trait GrpcStateReader: Send + Sync + 'static {
         epoch: u64,
     ) -> anyhow::Result<Option<Arc<iota_types::committee::Committee>>>;
 
+    /// Get a transaction by its digest
+    fn get_transaction(&self, digest: &TransactionDigest) -> Option<Arc<VerifiedTransaction>>;
+
+    /// Get transaction effects by digest
+    fn get_transaction_effects(&self, digest: &TransactionDigest) -> Option<TransactionEffects>;
+
+    /// Get transaction events by event digest
+    fn get_transaction_events(&self, digest: &TransactionEventsDigest)
+    -> Option<TransactionEvents>;
+
+    /// Get checkpoint sequence number for a transaction
+    fn get_transaction_checkpoint(&self, digest: &TransactionDigest) -> Option<u64>;
+
+    /// Get the Move type layout for a struct tag.
+    /// This is used for deserializing Move values (e.g., for JSON rendering).
+    fn get_struct_layout(&self, struct_tag: &StructTag) -> anyhow::Result<Option<MoveTypeLayout>>;
+
     /// Get the IOTA system state
     /// This loads the system state including its dynamic fields
     fn get_system_state(&self) -> anyhow::Result<iota_types::iota_system_state::IotaSystemState>;
@@ -295,7 +316,6 @@ impl GrpcStateReader for RestStateReaderAdapter {
     }
 
     fn get_lowest_available_checkpoint(&self) -> anyhow::Result<u64> {
-        use iota_types::storage::ReadStore;
         self.inner
             .try_get_lowest_available_checkpoint()
             .map_err(Into::into)
@@ -320,6 +340,35 @@ impl GrpcStateReader for RestStateReaderAdapter {
         epoch: u64,
     ) -> anyhow::Result<Option<Arc<iota_types::committee::Committee>>> {
         self.inner.try_get_committee(epoch).map_err(Into::into)
+    }
+
+    fn get_transaction(&self, digest: &TransactionDigest) -> Option<Arc<VerifiedTransaction>> {
+        self.inner.get_transaction(digest)
+    }
+
+    fn get_transaction_effects(&self, digest: &TransactionDigest) -> Option<TransactionEffects> {
+        self.inner.get_transaction_effects(digest)
+    }
+
+    fn get_transaction_events(
+        &self,
+        digest: &TransactionEventsDigest,
+    ) -> Option<TransactionEvents> {
+        self.inner.get_events(digest)
+    }
+
+    fn get_transaction_checkpoint(&self, digest: &TransactionDigest) -> Option<u64> {
+        self.inner.indexes().and_then(|indexes| {
+            indexes
+                .get_transaction_info(digest)
+                .ok()
+                .flatten()
+                .map(|info| info.checkpoint)
+        })
+    }
+
+    fn get_struct_layout(&self, struct_tag: &StructTag) -> anyhow::Result<Option<MoveTypeLayout>> {
+        self.inner.get_struct_layout(struct_tag).map_err(Into::into)
     }
 
     fn get_system_state(&self) -> anyhow::Result<iota_types::iota_system_state::IotaSystemState> {
@@ -552,4 +601,77 @@ impl GrpcReader {
             |item| item.sequence_number(),
         )
     }
+
+    /// Get transaction data for a single transaction digest
+    #[tracing::instrument(skip(self))]
+    pub fn get_transaction_read(
+        &self,
+        digest: TransactionDigest,
+    ) -> Result<TransactionRead, crate::error::RpcError> {
+        // Get the transaction
+        let transaction = self.state_reader.get_transaction(&digest).ok_or_else(|| {
+            crate::error::RpcError::new(
+                tonic::Code::NotFound,
+                format!("Transaction not found: {digest}"),
+            )
+        })?;
+
+        // Get the effects - required
+        let effects = self
+            .state_reader
+            .get_transaction_effects(&digest)
+            .ok_or_else(|| {
+                crate::error::RpcError::new(
+                    tonic::Code::NotFound,
+                    format!("Transaction effects not found: {digest}"),
+                )
+            })?;
+
+        // Get events if they exist
+        let events = effects
+            .events_digest()
+            .and_then(|event_digest| self.state_reader.get_transaction_events(event_digest));
+
+        // Get checkpoint from indexes if available
+        let checkpoint = self.state_reader.get_transaction_checkpoint(&digest);
+
+        // Get timestamp from checkpoint if we have it
+        let timestamp_ms = if let Some(checkpoint_seq) = checkpoint {
+            self.state_reader
+                .get_checkpoint_summary(checkpoint_seq)
+                .map(|summary| summary.data().timestamp_ms)
+        } else {
+            None
+        };
+
+        Ok(TransactionRead {
+            digest,
+            transaction,
+            effects,
+            events,
+            checkpoint,
+            timestamp_ms,
+        })
+    }
+
+    /// Get the Move type layout for a struct tag.
+    /// This is used for deserializing Move values (e.g., for JSON rendering in
+    /// events).
+    pub fn get_struct_layout(
+        &self,
+        struct_tag: &StructTag,
+    ) -> anyhow::Result<Option<MoveTypeLayout>> {
+        self.state_reader.get_struct_layout(struct_tag)
+    }
+}
+
+/// Internal struct to hold all transaction-related data fetched from storage
+#[derive(Debug)]
+pub struct TransactionRead {
+    pub digest: TransactionDigest,
+    pub transaction: std::sync::Arc<VerifiedTransaction>,
+    pub effects: TransactionEffects,
+    pub events: Option<TransactionEvents>,
+    pub checkpoint: Option<u64>,
+    pub timestamp_ms: Option<u64>,
 }
