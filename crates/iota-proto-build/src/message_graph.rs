@@ -315,7 +315,7 @@ impl<'a> FileParser<'a> {
             .collect();
         self.path.pop();
 
-        // Handle Nested Messagse and Enums
+        // Handle Nested Messages and Enums
         self.type_path.push(descriptor.name().to_owned());
 
         self.path.push(3);
@@ -335,7 +335,7 @@ impl<'a> FileParser<'a> {
         self.path.pop();
 
         self.type_path.pop();
-        // End Handling Nested Messagse and Enums
+        // End Handling Nested Messages and Enums
 
         let message = Message {
             descriptor,
