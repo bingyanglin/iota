@@ -1,3 +1,7 @@
+// Copyright (c) Mysten Labs, Inc.
+// Modifications Copyright (c) 2025 IOTA Stiftung
+// SPDX-License-Identifier: Apache-2.0
+
 mod _accessor_impls {
     #![allow(clippy::useless_conversion)]
     impl super::CheckpointData {
@@ -1869,7 +1873,11 @@ mod _accessor_impls {
         ///If `transaction` is set, returns [`Some`] with a mutable reference to the value; otherwise returns [`None`].
         pub fn transaction_opt_mut(
             &mut self,
-        ) -> Option<&mut super::super::transaction::ExecutedTransaction> {
+        ) -> Option<
+            &mut ::prost::alloc::boxed::Box<
+                super::super::transaction::ExecutedTransaction,
+            >,
+        > {
             if let Some(super::transaction_result::Result::Transaction(field)) = &mut self
                 .result
             {
@@ -1883,11 +1891,13 @@ mod _accessor_impls {
         ///If any other oneof field in the same oneof is set, it will be cleared.
         pub fn transaction_mut(
             &mut self,
-        ) -> &mut super::super::transaction::ExecutedTransaction {
+        ) -> &mut ::prost::alloc::boxed::Box<
+            super::super::transaction::ExecutedTransaction,
+        > {
             if self.transaction_opt_mut().is_none() {
                 self.result = Some(
                     super::transaction_result::Result::Transaction(
-                        super::super::transaction::ExecutedTransaction::default(),
+                        ::prost::alloc::boxed::Box::default(),
                     ),
                 );
             }
@@ -1895,20 +1905,26 @@ mod _accessor_impls {
         }
         ///Sets `transaction` with the provided value.
         ///If any other oneof field in the same oneof is set, it will be cleared.
-        pub fn set_transaction<T: Into<super::super::transaction::ExecutedTransaction>>(
-            &mut self,
-            field: T,
-        ) {
+        pub fn set_transaction<
+            T: Into<
+                    ::prost::alloc::boxed::Box<
+                        super::super::transaction::ExecutedTransaction,
+                    >,
+                >,
+        >(&mut self, field: T) {
             self.result = Some(
                 super::transaction_result::Result::Transaction(field.into().into()),
             );
         }
         ///Sets `transaction` with the provided value.
         ///If any other oneof field in the same oneof is set, it will be cleared.
-        pub fn with_transaction<T: Into<super::super::transaction::ExecutedTransaction>>(
-            mut self,
-            field: T,
-        ) -> Self {
+        pub fn with_transaction<
+            T: Into<
+                    ::prost::alloc::boxed::Box<
+                        super::super::transaction::ExecutedTransaction,
+                    >,
+                >,
+        >(mut self, field: T) -> Self {
             self.set_transaction(field.into());
             self
         }

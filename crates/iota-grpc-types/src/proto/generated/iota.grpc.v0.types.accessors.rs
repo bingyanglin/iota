@@ -1,3 +1,7 @@
+// Copyright (c) Mysten Labs, Inc.
+// Modifications Copyright (c) 2025 IOTA Stiftung
+// SPDX-License-Identifier: Apache-2.0
+
 mod _accessor_impls {
     #![allow(clippy::useless_conversion)]
     impl super::Address {
@@ -557,7 +561,9 @@ mod _accessor_impls {
             }
         }
         ///If `vector_tag` is set, returns [`Some`] with a mutable reference to the value; otherwise returns [`None`].
-        pub fn vector_tag_opt_mut(&mut self) -> Option<&mut super::TypeTagVector> {
+        pub fn vector_tag_opt_mut(
+            &mut self,
+        ) -> Option<&mut ::prost::alloc::boxed::Box<super::TypeTagVector>> {
             if let Some(super::type_tag::TypeTag::VectorTag(field)) = &mut self.type_tag
             {
                 Some(field as _)
@@ -568,27 +574,33 @@ mod _accessor_impls {
         ///Returns a mutable reference to `vector_tag`.
         ///If the field is unset, it is first initialized with the default value.
         ///If any other oneof field in the same oneof is set, it will be cleared.
-        pub fn vector_tag_mut(&mut self) -> &mut super::TypeTagVector {
+        pub fn vector_tag_mut(
+            &mut self,
+        ) -> &mut ::prost::alloc::boxed::Box<super::TypeTagVector> {
             if self.vector_tag_opt_mut().is_none() {
                 self.type_tag = Some(
-                    super::type_tag::TypeTag::VectorTag(super::TypeTagVector::default()),
+                    super::type_tag::TypeTag::VectorTag(
+                        ::prost::alloc::boxed::Box::default(),
+                    ),
                 );
             }
             self.vector_tag_opt_mut().unwrap()
         }
         ///Sets `vector_tag` with the provided value.
         ///If any other oneof field in the same oneof is set, it will be cleared.
-        pub fn set_vector_tag<T: Into<super::TypeTagVector>>(&mut self, field: T) {
+        pub fn set_vector_tag<T: Into<::prost::alloc::boxed::Box<super::TypeTagVector>>>(
+            &mut self,
+            field: T,
+        ) {
             self.type_tag = Some(
                 super::type_tag::TypeTag::VectorTag(field.into().into()),
             );
         }
         ///Sets `vector_tag` with the provided value.
         ///If any other oneof field in the same oneof is set, it will be cleared.
-        pub fn with_vector_tag<T: Into<super::TypeTagVector>>(
-            mut self,
-            field: T,
-        ) -> Self {
+        pub fn with_vector_tag<
+            T: Into<::prost::alloc::boxed::Box<super::TypeTagVector>>,
+        >(mut self, field: T) -> Self {
             self.set_vector_tag(field.into());
             self
         }

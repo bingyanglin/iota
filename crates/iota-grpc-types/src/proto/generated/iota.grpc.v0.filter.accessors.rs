@@ -1,3 +1,7 @@
+// Copyright (c) Mysten Labs, Inc.
+// Modifications Copyright (c) 2025 IOTA Stiftung
+// SPDX-License-Identifier: Apache-2.0
+
 mod _accessor_impls {
     #![allow(clippy::useless_conversion)]
     impl super::AddressFilter {
@@ -272,7 +276,9 @@ mod _accessor_impls {
             }
         }
         ///If `negation` is set, returns [`Some`] with a mutable reference to the value; otherwise returns [`None`].
-        pub fn negation_opt_mut(&mut self) -> Option<&mut super::NotEventFilter> {
+        pub fn negation_opt_mut(
+            &mut self,
+        ) -> Option<&mut ::prost::alloc::boxed::Box<super::NotEventFilter>> {
             if let Some(super::event_filter::Filter::Negation(field)) = &mut self.filter
             {
                 Some(field as _)
@@ -283,11 +289,13 @@ mod _accessor_impls {
         ///Returns a mutable reference to `negation`.
         ///If the field is unset, it is first initialized with the default value.
         ///If any other oneof field in the same oneof is set, it will be cleared.
-        pub fn negation_mut(&mut self) -> &mut super::NotEventFilter {
+        pub fn negation_mut(
+            &mut self,
+        ) -> &mut ::prost::alloc::boxed::Box<super::NotEventFilter> {
             if self.negation_opt_mut().is_none() {
                 self.filter = Some(
                     super::event_filter::Filter::Negation(
-                        super::NotEventFilter::default(),
+                        ::prost::alloc::boxed::Box::default(),
                     ),
                 );
             }
@@ -295,14 +303,17 @@ mod _accessor_impls {
         }
         ///Sets `negation` with the provided value.
         ///If any other oneof field in the same oneof is set, it will be cleared.
-        pub fn set_negation<T: Into<super::NotEventFilter>>(&mut self, field: T) {
+        pub fn set_negation<T: Into<::prost::alloc::boxed::Box<super::NotEventFilter>>>(
+            &mut self,
+            field: T,
+        ) {
             self.filter = Some(
                 super::event_filter::Filter::Negation(field.into().into()),
             );
         }
         ///Sets `negation` with the provided value.
         ///If any other oneof field in the same oneof is set, it will be cleared.
-        pub fn with_negation<T: Into<super::NotEventFilter>>(
+        pub fn with_negation<T: Into<::prost::alloc::boxed::Box<super::NotEventFilter>>>(
             mut self,
             field: T,
         ) -> Self {
@@ -1128,7 +1139,9 @@ mod _accessor_impls {
             }
         }
         ///If `negation` is set, returns [`Some`] with a mutable reference to the value; otherwise returns [`None`].
-        pub fn negation_opt_mut(&mut self) -> Option<&mut super::NotTransactionFilter> {
+        pub fn negation_opt_mut(
+            &mut self,
+        ) -> Option<&mut ::prost::alloc::boxed::Box<super::NotTransactionFilter>> {
             if let Some(super::transaction_filter::Filter::Negation(field)) = &mut self
                 .filter
             {
@@ -1140,11 +1153,13 @@ mod _accessor_impls {
         ///Returns a mutable reference to `negation`.
         ///If the field is unset, it is first initialized with the default value.
         ///If any other oneof field in the same oneof is set, it will be cleared.
-        pub fn negation_mut(&mut self) -> &mut super::NotTransactionFilter {
+        pub fn negation_mut(
+            &mut self,
+        ) -> &mut ::prost::alloc::boxed::Box<super::NotTransactionFilter> {
             if self.negation_opt_mut().is_none() {
                 self.filter = Some(
                     super::transaction_filter::Filter::Negation(
-                        super::NotTransactionFilter::default(),
+                        ::prost::alloc::boxed::Box::default(),
                     ),
                 );
             }
@@ -1152,17 +1167,18 @@ mod _accessor_impls {
         }
         ///Sets `negation` with the provided value.
         ///If any other oneof field in the same oneof is set, it will be cleared.
-        pub fn set_negation<T: Into<super::NotTransactionFilter>>(&mut self, field: T) {
+        pub fn set_negation<
+            T: Into<::prost::alloc::boxed::Box<super::NotTransactionFilter>>,
+        >(&mut self, field: T) {
             self.filter = Some(
                 super::transaction_filter::Filter::Negation(field.into().into()),
             );
         }
         ///Sets `negation` with the provided value.
         ///If any other oneof field in the same oneof is set, it will be cleared.
-        pub fn with_negation<T: Into<super::NotTransactionFilter>>(
-            mut self,
-            field: T,
-        ) -> Self {
+        pub fn with_negation<
+            T: Into<::prost::alloc::boxed::Box<super::NotTransactionFilter>>,
+        >(mut self, field: T) -> Self {
             self.set_negation(field.into());
             self
         }

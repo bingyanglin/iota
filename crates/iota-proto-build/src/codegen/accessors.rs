@@ -13,8 +13,9 @@ use crate::{
     message_graph::{Field, Message, OneofField},
 };
 
-pub(crate) fn generate_accessors(context: &Context, out_dir: &Path) {
+pub(crate) fn generate_accessors(context: &Context, out_dir: &Path, boxed_types: &[String]) {
     for package in context.graph().packages.iter() {
+        let mut buf = String::new();
         let mut stream = TokenStream::new();
 
         for message in context
@@ -23,7 +24,11 @@ pub(crate) fn generate_accessors(context: &Context, out_dir: &Path) {
             .values()
             .filter(|m| &m.package == package && !context.is_extern(&m.type_name))
         {
-            stream.extend(generate_accessors_for_message(context, message));
+            stream.extend(generate_accessors_for_message(
+                context,
+                message,
+                boxed_types,
+            ));
         }
 
         // If we didn't generate anything then just skip
@@ -39,13 +44,24 @@ pub(crate) fn generate_accessors(context: &Context, out_dir: &Path) {
             let ast: syn::File = syn::parse2(code).expect("not a valid tokenstream");
             let code = prettyplease::unparse(&ast);
 
+            // Add IOTA license header
+            buf.push_str("// Copyright (c) Mysten Labs, Inc.\n");
+            buf.push_str("// Modifications Copyright (c) 2025 IOTA Stiftung\n");
+            buf.push_str("// SPDX-License-Identifier: Apache-2.0\n");
+            buf.push('\n');
+            buf.push_str(&code);
+
             let file_name = format!("{}.accessors.rs", package.trim_start_matches('.'));
-            std::fs::write(out_dir.join(file_name), &code).unwrap();
+            std::fs::write(out_dir.join(file_name), &buf).unwrap();
         }
     }
 }
 
-fn generate_accessors_for_message(context: &Context, message: &Message) -> TokenStream {
+fn generate_accessors_for_message(
+    context: &Context,
+    message: &Message,
+    boxed_types: &[String],
+) -> TokenStream {
     let package = format!("{}.__accessors", message.package);
     let message_rust_path =
         TokenStream::from_str(&context.resolve_ident(&package, &message.type_name)).unwrap();
@@ -58,7 +74,7 @@ fn generate_accessors_for_message(context: &Context, message: &Message) -> Token
         &message_rust_path,
     ));
 
-    functions.extend(generate_accessors_functions(context, message));
+    functions.extend(generate_accessors_functions(context, message, boxed_types));
 
     quote! {
         impl #message_rust_path {
@@ -68,12 +84,20 @@ fn generate_accessors_for_message(context: &Context, message: &Message) -> Token
     }
 }
 
-fn generate_accessors_functions(context: &Context, message: &Message) -> TokenStream {
+fn generate_accessors_functions(
+    context: &Context,
+    message: &Message,
+    boxed_types: &[String],
+) -> TokenStream {
     let mut accessors = TokenStream::new();
 
     for field in &message.fields {
         accessors.extend(generate_accessors_functions_for_field(
-            context, message, field, None,
+            context,
+            message,
+            field,
+            None,
+            boxed_types,
         ));
     }
 
@@ -84,6 +108,7 @@ fn generate_accessors_functions(context: &Context, message: &Message) -> TokenSt
                 message,
                 field,
                 Some(oneof_field),
+                boxed_types,
             ));
         }
     }
@@ -91,11 +116,21 @@ fn generate_accessors_functions(context: &Context, message: &Message) -> TokenSt
     accessors
 }
 
+fn is_field_boxed_from_config(message: &Message, field: &Field, boxed_types: &[String]) -> bool {
+    // Create the field path pattern and check against boxed_types config
+    let field_path = format!("{}.{}", message.type_name, field.inner.name());
+
+    boxed_types
+        .iter()
+        .any(|boxed_path| boxed_path == &field_path)
+}
+
 fn generate_accessors_functions_for_field(
     context: &Context,
     message: &Message,
     field: &Field,
     oneof: Option<&OneofField>,
+    boxed_types: &[String],
 ) -> TokenStream {
     let package = format!("{}.__accessors", message.package);
     let name = quote::format_ident!("{}", field.rust_struct_field_name());
@@ -122,8 +157,17 @@ fn generate_accessors_functions_for_field(
         "If `{name}` is set, returns [`Some`] with a mutable reference to the value; otherwise returns [`None`]."
     )];
 
-    let field_type_path =
-        TokenStream::from_str(&field.resolve_rust_type_path(context, &package)).unwrap();
+    let is_boxed = is_field_boxed_from_config(message, field, boxed_types);
+    let base_field_type_path = field.resolve_rust_type_path(context, &package);
+    let field_type_path = if is_boxed {
+        TokenStream::from_str(&format!(
+            "::prost::alloc::boxed::Box<{}>",
+            base_field_type_path
+        ))
+        .unwrap()
+    } else {
+        TokenStream::from_str(&base_field_type_path).unwrap()
+    };
 
     let default_instance = TokenStream::from_str(&type_default(field, context, &package)).unwrap();
     let ref_return_type =
@@ -242,6 +286,28 @@ fn generate_accessors_functions_for_field(
             }
         };
 
+        let name_mut_impl = if is_boxed {
+            quote! {
+                #( #[doc = #name_mut_comments] )*
+                pub fn #name_mut(&mut self) -> &mut #field_type_path {
+                    if self.#name_opt_mut().is_none() {
+                        self.#oneof_field = Some(#oneof_type_path::#variant(::prost::alloc::boxed::Box::default()));
+                    }
+                    self.#name_opt_mut().unwrap()
+                }
+            }
+        } else {
+            quote! {
+                #( #[doc = #name_mut_comments] )*
+                pub fn #name_mut(&mut self) -> &mut #field_type_path {
+                    if self.#name_opt_mut().is_none() {
+                        self.#oneof_field = Some(#oneof_type_path::#variant(#field_type_path::default()));
+                    }
+                    self.#name_opt_mut().unwrap()
+                }
+            }
+        };
+
         quote! {
             #( #[doc = #name_comments] )*
             pub fn #name(&self) -> #ref_return_type {
@@ -270,13 +336,7 @@ fn generate_accessors_functions_for_field(
                 }
             }
 
-            #( #[doc = #name_mut_comments] )*
-            pub fn #name_mut(&mut self) -> &mut #field_type_path {
-                if self.#name_opt_mut().is_none() {
-                    self.#oneof_field = Some(#oneof_type_path::#variant(#field_type_path::default()));
-                }
-                self.#name_opt_mut().unwrap()
-            }
+            #name_mut_impl
 
             #setters
         }

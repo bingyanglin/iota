@@ -1,3 +1,7 @@
+// Copyright (c) Mysten Labs, Inc.
+// Modifications Copyright (c) 2025 IOTA Stiftung
+// SPDX-License-Identifier: Apache-2.0
+
 mod _accessor_impls {
     #![allow(clippy::useless_conversion)]
     impl super::Epoch {
@@ -83,12 +87,14 @@ mod _accessor_impls {
         ///If `bcs_system_state` is set, returns [`Some`] with a mutable reference to the value; otherwise returns [`None`].
         pub fn bcs_system_state_opt_mut(
             &mut self,
-        ) -> Option<&mut super::super::bcs::BcsData> {
+        ) -> Option<&mut ::prost::alloc::boxed::Box<super::super::bcs::BcsData>> {
             self.bcs_system_state.as_mut().map(|field| field as _)
         }
         ///Returns a mutable reference to `bcs_system_state`.
         ///If the field is unset, it is first initialized with the default value.
-        pub fn bcs_system_state_mut(&mut self) -> &mut super::super::bcs::BcsData {
+        pub fn bcs_system_state_mut(
+            &mut self,
+        ) -> &mut ::prost::alloc::boxed::Box<super::super::bcs::BcsData> {
             self.bcs_system_state.get_or_insert_default()
         }
         ///If `bcs_system_state` is set, returns [`Some`] with the value; otherwise returns [`None`].
@@ -96,17 +102,15 @@ mod _accessor_impls {
             self.bcs_system_state.as_ref().map(|field| field as _)
         }
         ///Sets `bcs_system_state` with the provided value.
-        pub fn set_bcs_system_state<T: Into<super::super::bcs::BcsData>>(
-            &mut self,
-            field: T,
-        ) {
+        pub fn set_bcs_system_state<
+            T: Into<::prost::alloc::boxed::Box<super::super::bcs::BcsData>>,
+        >(&mut self, field: T) {
             self.bcs_system_state = Some(field.into().into());
         }
         ///Sets `bcs_system_state` with the provided value.
-        pub fn with_bcs_system_state<T: Into<super::super::bcs::BcsData>>(
-            mut self,
-            field: T,
-        ) -> Self {
+        pub fn with_bcs_system_state<
+            T: Into<::prost::alloc::boxed::Box<super::super::bcs::BcsData>>,
+        >(mut self, field: T) -> Self {
             self.set_bcs_system_state(field.into());
             self
         }

@@ -191,67 +191,70 @@ pub(crate) fn generate_field_info(
             ));
         }
 
-        // Sort external types by package and name
-        let mut external_types: Vec<(String, String)> = external_types.into_iter().collect();
-        external_types.sort_by(|a, b| a.1.cmp(&b.1).then(a.0.cmp(&b.0)));
+        // Only generate file if there's actual content in the stream
+        if !stream.is_empty() {
+            // Sort external types by package and name
+            let mut external_types: Vec<(String, String)> = external_types.into_iter().collect();
+            external_types.sort_by(|a, b| a.1.cmp(&b.1).then(a.0.cmp(&b.0)));
 
-        // Generate imports for external types with correct package paths
-        let mut imports = TokenStream::new();
-        let version_ident = quote::format_ident!("{}", version);
-        for (type_name, package_name) in &external_types {
-            let type_ident = quote::format_ident!("{type_name}");
-            let builder_ident = quote::format_ident!("{type_name}FieldPathBuilder");
-            let package_ident = quote::format_ident!("{package_name}");
-            imports.extend(quote! {
-                #[allow(unused_imports)]
-                use crate::#version_ident::#package_ident::#type_ident;
-                #[allow(unused_imports)]
-                use crate::#version_ident::#package_ident::#builder_ident;
-            });
-        }
-
-        // Also collect and import nested message types from the same package
-        // (but not their field builders, since those are defined in this file)
-        let mut nested_message_imports = TokenStream::new();
-        for file in &fd_set.file {
-            collect_nested_message_imports(
-                package,
-                &file.message_type,
-                &mut nested_message_imports,
-                version,
-            );
-        }
-
-        let code = quote! {
-            mod _field_impls {
-                #![allow(clippy::wrong_self_convention)]
-
-                use super::*;
-
-                use crate::field::MessageFields;
-                use crate::field::MessageField;
-
-                #imports
-                #nested_message_imports
-
-                #stream
+            // Generate imports for external types with correct package paths
+            let mut imports = TokenStream::new();
+            let version_ident = quote::format_ident!("{}", version);
+            for (type_name, package_name) in &external_types {
+                let type_ident = quote::format_ident!("{type_name}");
+                let builder_ident = quote::format_ident!("{type_name}FieldPathBuilder");
+                let package_ident = quote::format_ident!("{package_name}");
+                imports.extend(quote! {
+                    #[allow(unused_imports)]
+                    use crate::#version_ident::#package_ident::#type_ident;
+                    #[allow(unused_imports)]
+                    use crate::#version_ident::#package_ident::#builder_ident;
+                });
             }
 
-            pub use _field_impls::*;
-        };
+            // Also collect and import nested message types from the same package
+            // (but not their field builders, since those are defined in this file)
+            let mut nested_message_imports = TokenStream::new();
+            for file in &fd_set.file {
+                collect_nested_message_imports(
+                    package,
+                    &file.message_type,
+                    &mut nested_message_imports,
+                    version,
+                );
+            }
 
-        let ast: syn::File = syn::parse2(code).expect("not a valid tokenstream");
-        let code = prettyplease::unparse(&ast);
+            let code = quote! {
+                mod _field_impls {
+                    #![allow(clippy::wrong_self_convention)]
 
-        // Add IOTA license header
-        buf.push_str("// Copyright (c) Mysten Labs, Inc.\n");
-        buf.push_str("// Modifications Copyright (c) 2025 IOTA Stiftung\n");
-        buf.push_str("// SPDX-License-Identifier: Apache-2.0\n");
-        buf.push('\n');
-        buf.push_str(&code);
+                    use super::*;
 
-        let file_name = format!("{package}.field_info.rs");
-        std::fs::write(out_dir.join(file_name), &buf).unwrap();
+                    use crate::field::MessageFields;
+                    use crate::field::MessageField;
+
+                    #imports
+                    #nested_message_imports
+
+                    #stream
+                }
+
+                pub use _field_impls::*;
+            };
+
+            let ast: syn::File = syn::parse2(code).expect("not a valid tokenstream");
+            let code = prettyplease::unparse(&ast);
+
+            // Add IOTA license header
+            buf.push_str("// Copyright (c) Mysten Labs, Inc.\n");
+            buf.push_str("// Modifications Copyright (c) 2025 IOTA Stiftung\n");
+            buf.push_str("// SPDX-License-Identifier: Apache-2.0\n");
+            buf.push('\n');
+            buf.push_str(&code);
+
+            let file_name = format!("{package}.field_info.rs");
+            std::fs::write(out_dir.join(file_name), &buf).unwrap();
+        }
     }
 }
 
