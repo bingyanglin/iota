@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 mod get_epoch;
+mod get_objects;
 mod get_service_info;
 
 use std::{pin::Pin, sync::Arc};
@@ -94,12 +95,13 @@ impl grpc_ledger_service::ledger_service_server::LedgerService for LedgerGrpcSer
 
     async fn get_objects(
         &self,
-        _request: tonic::Request<grpc_ledger_service::GetObjectsRequest>,
+        request: tonic::Request<grpc_ledger_service::GetObjectsRequest>,
     ) -> std::result::Result<tonic::Response<Self::GetObjectsStream>, tonic::Status> {
-        // not implemented - return empty stream
-        let stream = futures::stream::empty();
-        let stream: Self::GetObjectsStream = Box::pin(stream);
-        Ok(Response::new(stream))
+        let responses = get_objects::get_objects((*self.reader).clone(), request.into_inner())?;
+
+        // Convert Vec of responses to stream
+        let stream = futures::stream::iter(responses.into_iter().map(Ok));
+        Ok(Response::new(Box::pin(stream)))
     }
 
     async fn get_transactions(

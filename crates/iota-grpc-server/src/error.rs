@@ -2,6 +2,7 @@
 // Modifications Copyright (c) 2025 IOTA Stiftung
 // SPDX-License-Identifier: Apache-2.0
 
+use iota_types::base_types::ObjectID;
 use tonic::{Code, Status};
 
 // TODO: We can remove them when we define the ErrorReason proto
@@ -100,6 +101,21 @@ impl RpcError {
         }
     }
 
+    // TODO: This can be removed when we defined error protos and their conversions
+    pub fn field_violation(violation: FieldViolation) -> Self {
+        let message = if let Some(desc) = &violation.description {
+            format!("invalid {}: {}", violation.field, desc)
+        } else {
+            format!("invalid {}", violation.field)
+        };
+
+        Self {
+            code: Code::InvalidArgument,
+            message: Some(message),
+            details: None,
+        }
+    }
+
     pub fn not_found() -> Self {
         Self {
             code: Code::NotFound,
@@ -131,6 +147,13 @@ impl From<RpcError> for Status {
         let message = status.message;
 
         Status::with_details(code, message, details)
+    }
+}
+
+// TODO: This can be removed when we defined error protos and their conversions
+impl From<FieldViolation> for RpcError {
+    fn from(violation: FieldViolation) -> Self {
+        RpcError::field_violation(violation)
     }
 }
 
@@ -183,5 +206,52 @@ impl ErrorDetails {
         // This should convert error_info, bad_request, and retry_info to
         // prost_types::Any
         vec![]
+    }
+}
+
+// TODO: The following errors also defined in iota-rest-api, but we want to
+// avoid depending on the iota-rest-api crate, hence we duplicate them here.
+#[derive(Debug, Clone)]
+pub struct ObjectNotFoundError {
+    object_id: ObjectID,
+    version: Option<u64>,
+}
+
+impl ObjectNotFoundError {
+    pub fn new(object_id: ObjectID) -> Self {
+        Self {
+            object_id,
+            version: None,
+        }
+    }
+
+    pub fn new_with_version(object_id: ObjectID, version: u64) -> Self {
+        Self {
+            object_id,
+            version: Some(version),
+        }
+    }
+}
+
+impl std::fmt::Display for ObjectNotFoundError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.version {
+            Some(version) => {
+                write!(
+                    f,
+                    "Object {} at version {} not found",
+                    self.object_id, version
+                )
+            }
+            None => write!(f, "Object {} not found", self.object_id),
+        }
+    }
+}
+
+impl std::error::Error for ObjectNotFoundError {}
+
+impl From<ObjectNotFoundError> for RpcError {
+    fn from(value: ObjectNotFoundError) -> Self {
+        Self::new(tonic::Code::NotFound, value.to_string())
     }
 }
