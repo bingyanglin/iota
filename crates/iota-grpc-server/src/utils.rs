@@ -44,6 +44,15 @@ macro_rules! create_batching_stream {
                         // Process the item using the provided block
                         let (result_item, item_size) = $process_block;
 
+                        // Check if a single item exceeds the message size limit
+                        if item_size > $max_message_size {
+                            Err($crate::error::RpcError::new(
+                                tonic::Code::InvalidArgument,
+                                format!("Single item size ({} bytes) exceeds max message size ({} bytes)",
+                                    item_size, $max_message_size)
+                            ))?;
+                        }
+
                         // Check if adding this item would exceed the limit
                         if current_size + item_size > $max_message_size && !current_batch.is_empty() {
                             // Current batch is full, yield it
