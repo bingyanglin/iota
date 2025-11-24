@@ -12,6 +12,7 @@ use crate::{
     v0::{bcs::BcsData, types::ObjectReference},
 };
 
+// TODO: Wrap Object into a type with a version
 impl Merge<&iota_sdk2::types::object::Object> for Object {
     fn merge(&mut self, source: &iota_sdk2::types::object::Object, mask: &FieldMaskTree) {
         if mask.contains("bcs") {
