@@ -61,9 +61,8 @@ async fn assert_get_objects_request(
     max_message_size_bytes: Option<u32>,
     expected_top_level: &[&str],
     expected_reference: &[&str],
-    expected_has_next: bool,
     scenario: &str,
-) -> GetObjectsResponse {
+) -> Vec<GetObjectsResponse> {
     let request = GetObjectsRequest {
         requests: Some(ObjectRequests { requests }),
         read_mask,
@@ -72,34 +71,53 @@ async fn assert_get_objects_request(
 
     let mut stream = client.get_objects(request).await.unwrap().into_inner();
 
-    let response = stream.next().await.unwrap().unwrap();
+    let mut responses = Vec::new();
+    let mut response_count = 0;
 
-    // Assert all returned objects have the expected fields
-    for (idx, obj_result) in response.objects.iter().enumerate() {
-        let object = obj_result.object();
-        assert_object_fields(
-            object,
-            expected_top_level,
-            expected_reference,
-            &format!("{scenario} (object {idx})"),
-        );
+    // Loop through all responses until has_next is false
+    while let Some(response) = stream.next().await {
+        let response = response.unwrap();
+        response_count += 1;
+
+        // Assert all returned objects have the expected fields
+        for (idx, obj_result) in response.objects.iter().enumerate() {
+            let object = obj_result.object();
+            assert_object_fields(
+                object,
+                expected_top_level,
+                expected_reference,
+                &format!("{scenario} (response {response_count}, object {idx})"),
+            );
+        }
+
+        let has_next = response.has_next;
+        responses.push(response);
+
+        // If has_next is false, this should be the last response
+        if !has_next {
+            break;
+        }
     }
 
-    // Verify has_next value
-    assert_eq!(
-        response.has_next, expected_has_next,
-        "{scenario}: has_next should be {expected_has_next}"
+    // Verify we got at least one response
+    assert!(
+        !responses.is_empty(),
+        "{scenario}: should receive at least one response"
     );
 
-    // If has_next is false, verify stream is exhausted
-    if !expected_has_next {
-        assert!(
-            stream.next().await.is_none(),
-            "{scenario}: stream should be exhausted when has_next is false"
-        );
-    }
+    // Verify the last response has has_next=false
+    assert!(
+        !responses.last().unwrap().has_next,
+        "{scenario}: last response should have has_next=false"
+    );
 
-    response
+    // Verify stream is exhausted
+    assert!(
+        stream.next().await.is_none(),
+        "{scenario}: stream should be exhausted after has_next=false"
+    );
+
+    responses
 }
 
 #[sim_test]
@@ -159,7 +177,7 @@ async fn get_objects_readmask_scenarios() {
     ];
 
     for (scenario, mask, expected_top, expected_ref) in test_cases {
-        let response = assert_get_objects_request(
+        let responses = assert_get_objects_request(
             &mut grpc_client,
             vec![ObjectRequest {
                 object_ref: Some(ObjectReference {
@@ -172,12 +190,12 @@ async fn get_objects_readmask_scenarios() {
             None,
             expected_top,
             expected_ref,
-            false,
             scenario,
         )
         .await;
 
-        assert_eq!(response.objects.len(), 1, "{scenario}: expected 1 object");
+        let total_objects: usize = responses.iter().map(|r| r.objects.len()).sum();
+        assert_eq!(total_objects, 1, "{scenario}: expected 1 object");
     }
 }
 
@@ -193,7 +211,7 @@ async fn get_objects_batch() {
         .unwrap();
 
     // Test batch request with multiple objects and partial readmask
-    let response = assert_get_objects_request(
+    let responses = assert_get_objects_request(
         &mut grpc_client,
         vec![
             ObjectRequest {
@@ -229,12 +247,12 @@ async fn get_objects_batch() {
         None,
         &["reference", "bcs"],
         &["object_id"],
-        false,
         "batch with 4 objects",
     )
     .await;
 
-    assert_eq!(response.objects.len(), 4);
+    let total_objects: usize = responses.iter().map(|r| r.objects.len()).sum();
+    assert_eq!(total_objects, 4);
 }
 
 #[sim_test]
@@ -251,7 +269,7 @@ async fn get_objects_with_version() {
     let object_id = ObjectID::from_hex_literal("0x5").unwrap().to_string();
 
     // Request specific version
-    assert_get_objects_request(
+    let responses = assert_get_objects_request(
         &mut grpc_client,
         vec![ObjectRequest {
             object_ref: Some(ObjectReference {
@@ -267,10 +285,15 @@ async fn get_objects_with_version() {
         None,
         &["reference"],
         &["object_id", "version"],
-        false,
         "specific version query",
     )
     .await;
+
+    let total_objects: usize = responses.iter().map(|r| r.objects.len()).sum();
+    assert_eq!(
+        total_objects, 1,
+        "specific version query: expected 1 object"
+    );
 }
 
 #[sim_test]
@@ -305,98 +328,60 @@ async fn get_objects_streaming() {
         }
     }
 
-    let request = GetObjectsRequest {
-        requests: Some(ObjectRequests { requests }),
-        read_mask: Some(FieldMask::from_paths([
+    let responses = assert_get_objects_request(
+        &mut grpc_client,
+        requests,
+        Some(FieldMask::from_paths([
             "reference.object_id",
             "reference.version",
             "reference.digest",
             "bcs",
         ])),
         // Use minimum allowed message size to maximize chance of streaming
-        max_message_size_bytes: Some(1024 * 1024_u32), // 1MB (minimum allowed)
-    };
-
-    let mut stream = grpc_client.get_objects(request).await.unwrap().into_inner();
-
-    let mut total_results = 0;
-    let mut successful_objects = 0;
-    let mut response_count = 0;
-    let mut last_has_next = false;
-    let mut has_next_values = Vec::new();
-
-    while let Some(response) = stream.next().await {
-        let response = response.unwrap();
-        response_count += 1;
-        total_results += response.objects.len();
-        last_has_next = response.has_next;
-        has_next_values.push(response.has_next);
-
-        // Each response should have at least one result
-        assert!(
-            !response.objects.is_empty(),
-            "Each stream message should contain at least one result"
-        );
-
-        // Validate that each successful object has the expected fields
-        for obj_result in &response.objects {
-            // Only validate successful objects (skip errors for non-existent objects)
-            if let Some(iota_grpc_types::v0::ledger_service::object_result::Result::Object(
-                object,
-            )) = obj_result.result.as_ref()
-            {
-                successful_objects += 1;
-                assert!(object.reference.is_some(), "object should have reference");
-                assert!(object.bcs.is_some(), "object should have bcs");
-                let reference = object.reference.as_ref().unwrap();
-                assert!(
-                    reference.object_id.is_some(),
-                    "object should have object_id"
-                );
-                assert!(reference.version.is_some(), "object should have version");
-                assert!(reference.digest.is_some(), "object should have digest");
-            }
-        }
-    }
-
-    // Validate has_next values: all intermediate messages should have has_next=true
-    if response_count > 1 {
-        for (idx, &has_next) in has_next_values[..has_next_values.len() - 1]
-            .iter()
-            .enumerate()
-        {
-            assert!(
-                has_next,
-                "Intermediate stream message #{} should have has_next=true, but got false",
-                idx + 1
-            );
-        }
-    }
-
-    // Verify we got all 100 results (even if some are errors)
-    assert_eq!(
-        total_results, 100,
-        "Should have received 100 results (objects or errors)"
-    );
-
-    // Verify we got at least some successful objects
-    assert!(
-        successful_objects > 0,
-        "Should have at least some successful objects"
-    );
+        Some(1024 * 1024_u32), // 1MB (minimum allowed)
+        &["reference", "bcs"],
+        &["object_id", "version", "digest"],
+        "streaming with 100 objects",
+    )
+    .await;
 
     // Verify multi-message streaming occurred (more than 1 stream message)
     assert!(
-        response_count > 1,
+        responses.len() > 1,
         "Expected multi-message streaming (>1 message), but got only {} message(s)",
-        response_count
+        responses.len()
     );
 
-    // Verify the last response had has_next=false
+    // Validate has_next values: all intermediate messages should have has_next=true
+    for (idx, response) in responses[..responses.len() - 1].iter().enumerate() {
+        assert!(
+            response.has_next,
+            "Intermediate stream message #{} should have has_next=true, but got false",
+            idx + 1
+        );
+    }
+
+    // Verify the last response has has_next=false
     assert!(
-        !last_has_next,
+        !responses.last().unwrap().has_next,
         "Last stream message should have has_next=false"
     );
+
+    // Verify we got all 100 results
+    let total_objects: usize = responses.iter().map(|r| r.objects.len()).sum();
+    assert_eq!(
+        total_objects, 100,
+        "Should have received 100 results (objects or errors)"
+    );
+
+    // Each response should have at least one result
+    for (idx, response) in responses.iter().enumerate() {
+        assert!(
+            !response.objects.is_empty(),
+            "Response #{} should contain at least one result",
+            idx + 1
+        );
+    }
 }
 
 #[sim_test]
@@ -411,26 +396,22 @@ async fn get_objects_empty_request() {
         .unwrap();
 
     // Test empty request list
-    let request = GetObjectsRequest {
-        requests: Some(ObjectRequests { requests: vec![] }),
-        read_mask: None,
-        max_message_size_bytes: None,
-    };
+    let responses = assert_get_objects_request(
+        &mut grpc_client,
+        vec![],
+        None,
+        None,
+        &[],
+        &[],
+        "empty request",
+    )
+    .await;
 
-    let mut stream = grpc_client.get_objects(request).await.unwrap().into_inner();
-
-    let response = stream.next().await.unwrap().unwrap();
-
-    // Should return empty response with has_next=false
-    assert_eq!(response.objects.len(), 0, "Should have 0 objects");
+    // Should return single response with 0 objects
+    assert_eq!(responses.len(), 1, "Should have 1 response");
+    assert_eq!(responses[0].objects.len(), 0, "Should have 0 objects");
     assert!(
-        !response.has_next,
+        !responses[0].has_next,
         "has_next should be false for empty request"
-    );
-
-    // Stream should be exhausted
-    assert!(
-        stream.next().await.is_none(),
-        "Stream should be exhausted after empty response"
     );
 }
