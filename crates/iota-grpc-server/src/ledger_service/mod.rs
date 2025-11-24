@@ -89,7 +89,6 @@ impl grpc_ledger_service::ledger_service_server::LedgerService for LedgerGrpcSer
         &self,
         request: tonic::Request<grpc_ledger_service::GetObjectsRequest>,
     ) -> std::result::Result<tonic::Response<Self::GetObjectsStream>, tonic::Status> {
-        // Get the lazy stream
         get_objects::get_objects((*self.reader).clone(), request.into_inner())
             .map(|stream| Response::new(Box::pin(stream) as Self::GetObjectsStream))
             .map_err(Into::into)
