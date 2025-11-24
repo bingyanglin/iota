@@ -111,7 +111,7 @@ async fn get_objects_readmask_scenarios() {
 
     let object_id = ObjectID::from_hex_literal("0x5").unwrap().to_string();
 
-    // Table-driven tests for single-object readmask scenarios
+    // Tests for single-object readmask scenarios
     type TestCase<'a> = (&'a str, Option<FieldMask>, &'a [&'a str]);
     let test_cases: Vec<TestCase> = vec![
         (
