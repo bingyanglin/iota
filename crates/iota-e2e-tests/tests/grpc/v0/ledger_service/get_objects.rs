@@ -391,3 +391,67 @@ async fn get_objects_empty_request() {
         "has_next should be false for empty request"
     );
 }
+
+#[sim_test]
+async fn get_objects_nonexistent() {
+    let test_cluster = TestClusterBuilder::new()
+        .with_fullnode_enable_grpc_api(true)
+        .build()
+        .await;
+
+    let mut grpc_client = LedgerServiceClient::connect(test_cluster.grpc_url())
+        .await
+        .unwrap();
+
+    // Request objects that don't exist
+    let responses = assert_get_objects_request(
+        &mut grpc_client,
+        vec![
+            ObjectRequest {
+                object_ref: Some(ObjectReference {
+                    object_id: Some("0xdead".to_string()),
+                    version: None,
+                    digest: None,
+                }),
+            },
+            ObjectRequest {
+                object_ref: Some(ObjectReference {
+                    object_id: Some("0xbeef".to_string()),
+                    version: None,
+                    digest: None,
+                }),
+            },
+        ],
+        None,
+        None,
+        &[], // Skip field mask validation for error responses
+        "non-existent objects",
+    )
+    .await;
+
+    // Verify all results contain errors (not objects)
+    let mut error_count = 0;
+    for response in &responses {
+        for obj_result in &response.objects {
+            assert!(
+                obj_result.error_opt().is_some(),
+                "Expected error for non-existent object"
+            );
+            assert!(
+                obj_result.object_opt().is_none(),
+                "Expected no object for non-existent object"
+            );
+
+            let error = obj_result.error_opt().unwrap();
+            // Verify error has a non-zero code (indicating an actual error)
+            assert!(
+                error.code != 0,
+                "Error should have non-zero code, got: {}",
+                error.code
+            );
+            error_count += 1;
+        }
+    }
+
+    assert_eq!(error_count, 2, "Should receive 2 errors");
+}
