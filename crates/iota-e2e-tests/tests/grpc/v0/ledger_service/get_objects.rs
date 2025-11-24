@@ -19,11 +19,11 @@ use iota_types::base_types::ObjectID;
 use prost_types::FieldMask;
 use test_cluster::TestClusterBuilder;
 
-use crate::{impl_field_presence_checker, utils::assert_field_presence};
+use crate::{impl_field_presence_checker, utils::assert_nested_field_masks};
 
 // Generate the FieldPresenceChecker implementation for Object
 impl_field_presence_checker!(Object, {
-    "reference" => reference,
+    "reference" => reference [nested],
     "bcs" => bcs,
 });
 
@@ -34,33 +34,12 @@ impl_field_presence_checker!(ObjectReference, {
     "digest" => digest,
 });
 
-/// Helper function to assert object fields based on expected fields
-fn assert_object_fields(
-    object: &Object,
-    expected_top_level: &[&str],
-    expected_reference: &[&str],
-    scenario: &str,
-) {
-    // Check top-level fields
-    assert_field_presence(object, expected_top_level, scenario);
-
-    // If reference is expected, check nested fields
-    if expected_top_level.contains(&"reference") {
-        if let Some(ref reference) = object.reference {
-            assert_field_presence(reference, expected_reference, scenario);
-        } else {
-            panic!("Expected reference field in {scenario}, but it was None");
-        }
-    }
-}
-
 async fn assert_get_objects_request(
     client: &mut LedgerServiceClient<tonic::transport::Channel>,
     requests: Vec<ObjectRequest>,
     read_mask: Option<FieldMask>,
     max_message_size_bytes: Option<u32>,
-    expected_top_level: &[&str],
-    expected_reference: &[&str],
+    expected_field_mask_paths: &[&str],
     scenario: &str,
 ) -> Vec<GetObjectsResponse> {
     let request = GetObjectsRequest {
@@ -82,10 +61,9 @@ async fn assert_get_objects_request(
         // Assert all returned objects have the expected fields
         for (idx, obj_result) in response.objects.iter().enumerate() {
             let object = obj_result.object();
-            assert_object_fields(
+            assert_nested_field_masks(
                 object,
-                expected_top_level,
-                expected_reference,
+                expected_field_mask_paths,
                 &format!("{scenario} (response {response_count}, object {idx})"),
             );
         }
@@ -134,18 +112,20 @@ async fn get_objects_readmask_scenarios() {
     let object_id = ObjectID::from_hex_literal("0x5").unwrap().to_string();
 
     // Table-driven tests for single-object readmask scenarios
-    type TestCase<'a> = (&'a str, Option<FieldMask>, &'a [&'a str], &'a [&'a str]);
+    type TestCase<'a> = (&'a str, Option<FieldMask>, &'a [&'a str]);
     let test_cases: Vec<TestCase> = vec![
         (
             "default readmask",
             None,
-            &["reference"],
-            &["object_id", "version", "digest"],
+            &[
+                "reference.object_id",
+                "reference.version",
+                "reference.digest",
+            ],
         ),
         (
             "empty readmask",
             Some(FieldMask::from_paths(&[] as &[&str])),
-            &[],
             &[],
         ),
         (
@@ -156,8 +136,12 @@ async fn get_objects_readmask_scenarios() {
                 "reference.digest",
                 "bcs",
             ])),
-            &["reference", "bcs"],
-            &["object_id", "version", "digest"],
+            &[
+                "reference.object_id",
+                "reference.version",
+                "reference.digest",
+                "bcs",
+            ],
         ),
         (
             "partial readmask (reference fields only)",
@@ -165,18 +149,16 @@ async fn get_objects_readmask_scenarios() {
                 "reference.object_id",
                 "reference.version",
             ])),
-            &["reference"],
-            &["object_id", "version"],
+            &["reference.object_id", "reference.version"],
         ),
         (
             "partial readmask (bcs only)",
             Some(FieldMask::from_paths(["bcs"])),
             &["bcs"],
-            &[],
         ),
     ];
 
-    for (scenario, mask, expected_top, expected_ref) in test_cases {
+    for (scenario, mask, expected_paths) in test_cases {
         let responses = assert_get_objects_request(
             &mut grpc_client,
             vec![ObjectRequest {
@@ -188,8 +170,7 @@ async fn get_objects_readmask_scenarios() {
             }],
             mask,
             None,
-            expected_top,
-            expected_ref,
+            expected_paths,
             scenario,
         )
         .await;
@@ -245,8 +226,7 @@ async fn get_objects_batch() {
         ],
         Some(FieldMask::from_paths(["reference.object_id", "bcs"])),
         None,
-        &["reference", "bcs"],
-        &["object_id"],
+        &["reference.object_id", "bcs"],
         "batch with 4 objects",
     )
     .await;
@@ -283,8 +263,7 @@ async fn get_objects_with_version() {
             "reference.version",
         ])),
         None,
-        &["reference"],
-        &["object_id", "version"],
+        &["reference.object_id", "reference.version"],
         "specific version query",
     )
     .await;
@@ -339,8 +318,12 @@ async fn get_objects_streaming() {
         ])),
         // Use minimum allowed message size to maximize chance of streaming
         Some(1024 * 1024_u32), // 1MB (minimum allowed)
-        &["reference", "bcs"],
-        &["object_id", "version", "digest"],
+        &[
+            "reference.object_id",
+            "reference.version",
+            "reference.digest",
+            "bcs",
+        ],
         "streaming with 100 objects",
     )
     .await;
@@ -396,16 +379,9 @@ async fn get_objects_empty_request() {
         .unwrap();
 
     // Test empty request list
-    let responses = assert_get_objects_request(
-        &mut grpc_client,
-        vec![],
-        None,
-        None,
-        &[],
-        &[],
-        "empty request",
-    )
-    .await;
+    let responses =
+        assert_get_objects_request(&mut grpc_client, vec![], None, None, &[], "empty request")
+            .await;
 
     // Should return single response with 0 objects
     assert_eq!(responses.len(), 1, "Should have 1 response");
