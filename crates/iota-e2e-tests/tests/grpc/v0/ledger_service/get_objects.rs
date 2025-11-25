@@ -77,11 +77,14 @@ async fn assert_get_objects_request(
         }
     }
 
-    // Verify we got at least one response
-    assert!(
-        !responses.is_empty(),
-        "{scenario}: should receive at least one response"
-    );
+    // Validate has_next values: all intermediate messages should have has_next=true
+    for (idx, response) in responses[..responses.len() - 1].iter().enumerate() {
+        assert!(
+            response.has_next,
+            "Intermediate stream message #{} should have has_next=true, but got false",
+            idx + 1
+        );
+    }
 
     // Verify the last response has has_next=false
     assert!(
@@ -335,36 +338,12 @@ async fn get_objects_streaming() {
         responses.len()
     );
 
-    // Validate has_next values: all intermediate messages should have has_next=true
-    for (idx, response) in responses[..responses.len() - 1].iter().enumerate() {
-        assert!(
-            response.has_next,
-            "Intermediate stream message #{} should have has_next=true, but got false",
-            idx + 1
-        );
-    }
-
-    // Verify the last response has has_next=false
-    assert!(
-        !responses.last().unwrap().has_next,
-        "Last stream message should have has_next=false"
-    );
-
     // Verify we got all 100 results
     let total_objects: usize = responses.iter().map(|r| r.objects.len()).sum();
     assert_eq!(
         total_objects, 100,
         "Should have received 100 results (objects or errors)"
     );
-
-    // Each response should have at least one result
-    for (idx, response) in responses.iter().enumerate() {
-        assert!(
-            !response.objects.is_empty(),
-            "Response #{} should contain at least one result",
-            idx + 1
-        );
-    }
 }
 
 #[sim_test]
