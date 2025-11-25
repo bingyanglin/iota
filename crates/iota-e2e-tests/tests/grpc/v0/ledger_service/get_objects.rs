@@ -22,16 +22,16 @@ use test_cluster::TestClusterBuilder;
 use crate::{impl_field_presence_checker, utils::assert_nested_field_masks};
 
 // Generate the FieldPresenceChecker implementation for Object
-impl_field_presence_checker!(Object, {
-    "reference" => reference [nested],
-    "bcs" => bcs,
+impl_field_presence_checker!(Object {
+    reference: ObjectReference,
+    bcs,
 });
 
 // Generate the FieldPresenceChecker implementation for ObjectReference
-impl_field_presence_checker!(ObjectReference, {
-    "object_id" => object_id,
-    "version" => version,
-    "digest" => digest,
+impl_field_presence_checker!(ObjectReference {
+    object_id,
+    version,
+    digest,
 });
 
 async fn assert_get_objects_request(
@@ -141,9 +141,11 @@ async fn get_objects_readmask_scenarios() {
             ])),
             &[
                 "reference.object_id",
-                "reference.version",
+                "reference.version", // comment out to check absence of nested field
                 "reference.digest",
-                "bcs",
+                "bcs", /* comment out to check absence of bcs field
+                        * "reference", // Remove comment to check existence of reference field
+                        * "reference.id", // Remove comment to check existence of nested field */
             ],
         ),
         (
