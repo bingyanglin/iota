@@ -49,3 +49,20 @@ impl Merge<&iota_sdk2::types::object::Object> for Object {
         }
     }
 }
+
+impl Merge<&[iota_sdk2::types::object::Object]> for Objects {
+    fn merge(&mut self, source: &[iota_sdk2::types::object::Object], mask: &FieldMaskTree) {
+        // Check if we need to include the objects field
+        if let Some(objects_mask) = mask.subtree("objects") {
+            // Merge each object in the source list
+            self.objects = source
+                .iter()
+                .map(|obj| {
+                    let mut proto_obj = Object::default();
+                    proto_obj.merge(obj, &objects_mask);
+                    proto_obj
+                })
+                .collect();
+        }
+    }
+}
