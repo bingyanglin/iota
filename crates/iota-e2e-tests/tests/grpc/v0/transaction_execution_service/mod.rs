@@ -13,6 +13,12 @@ use crate::impl_field_presence_checker;
 // Leaf types (containing only primitive fields) - treated as simple fields, and
 // we don't implement FieldPresenceChecker for them. Field presence is checked
 // at their parent level.
+//
+// Note: `signatures`, `input_objects`, and `output_objects` are not nested
+// types because their inner fields are repeated (Vec) rather than Option, which
+// the macro doesn't support. They are treated as leaf fields. We don't extend
+// the macro because it might not be necessary as we already have sufficient
+// coverage for our use cases.
 impl_field_presence_checker!(ExecutedTransaction {
     digest,
     transaction: Transaction,
