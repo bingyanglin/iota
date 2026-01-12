@@ -14,8 +14,8 @@ use iota_sdk_types::Digest;
 use crate::{
     Client,
     api::{
-        Error, FieldMask, FieldMaskUtil, ProtoResult, Result, TRANSACTIONS_READ_MASK,
-        TransactionResponse, TryFromProtoError, extract_execution_data,
+        Error, ProtoResult, Result, TRANSACTIONS_READ_MASK, TransactionResponse, TryFromProtoError,
+        extract_execution_data, field_mask_with_default,
     },
 };
 
@@ -80,10 +80,9 @@ impl Client {
                 .collect(),
         };
 
-        let mask = read_mask.unwrap_or(TRANSACTIONS_READ_MASK);
         let request = GetTransactionsRequest {
             requests: Some(requests),
-            read_mask: Some(FieldMask::from_str(mask)),
+            read_mask: Some(field_mask_with_default(read_mask, TRANSACTIONS_READ_MASK)),
             max_message_size_bytes: None,
         };
 

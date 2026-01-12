@@ -12,8 +12,8 @@ use iota_sdk_types::SignedTransaction;
 use crate::{
     Client,
     api::{
-        EXECUTION_READ_MASK, Error, FieldMask, FieldMaskUtil, Result, TransactionExecutionResponse,
-        TryFromProtoError, build_proto_transaction, extract_execution_data,
+        EXECUTION_READ_MASK, Error, Result, TransactionExecutionResponse, build_proto_transaction,
+        extract_execution_response, field_mask_with_default,
     },
 };
 
@@ -81,21 +81,18 @@ impl Client {
                 .collect::<Result<Vec<_>>>()?,
         };
 
-        let mask = read_mask.unwrap_or(EXECUTION_READ_MASK);
         let request = ExecuteTransactionRequest {
             transaction: Some(proto_transaction),
             signatures: Some(proto_signatures),
-            read_mask: Some(FieldMask::from_str(mask)),
+            read_mask: Some(field_mask_with_default(read_mask, EXECUTION_READ_MASK)),
         };
 
-        let mut client = self.execution_service_client();
+        let response = self
+            .execution_service_client()
+            .execute_transaction(request)
+            .await?
+            .into_inner();
 
-        let response = client.execute_transaction(request).await?.into_inner();
-
-        let executed = response
-            .transaction
-            .ok_or(TryFromProtoError::missing("transaction"))?;
-
-        extract_execution_data(&executed)
+        extract_execution_response(response.transaction)
     }
 }

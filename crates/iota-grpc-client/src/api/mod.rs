@@ -21,8 +21,8 @@ pub use common::{
     TransactionExecutionResponse,
 };
 pub(crate) use common::{
-    FieldMask, FieldMaskUtil, ProtoResult, TryFromProtoError, build_proto_transaction,
-    convert_object, extract_execution_data,
+    ProtoResult, TryFromProtoError, build_proto_transaction, convert_object,
+    extract_execution_data, extract_execution_response, field_mask_with_default,
 };
 
 /// Response for a transaction query.

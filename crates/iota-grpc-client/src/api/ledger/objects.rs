@@ -11,7 +11,7 @@ use iota_sdk_types::{Object, ObjectId, Version};
 
 use crate::{
     Client,
-    api::{FieldMask, FieldMaskUtil, OBJECTS_READ_MASK, ProtoResult, Result, convert_object},
+    api::{OBJECTS_READ_MASK, ProtoResult, Result, convert_object, field_mask_with_default},
 };
 
 impl Client {
@@ -70,10 +70,9 @@ impl Client {
                 .collect(),
         };
 
-        let mask = read_mask.unwrap_or(OBJECTS_READ_MASK);
         let request = GetObjectsRequest {
             requests: Some(requests),
-            read_mask: Some(FieldMask::from_str(mask)),
+            read_mask: Some(field_mask_with_default(read_mask, OBJECTS_READ_MASK)),
             max_message_size_bytes: None,
         };
 

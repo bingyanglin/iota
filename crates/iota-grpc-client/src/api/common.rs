@@ -231,6 +231,25 @@ pub struct TransactionExecutionResponse {
     pub output_objects: Option<Vec<Object>>,
 }
 
+/// Build a field mask with a custom value or default.
+///
+/// This is a convenience helper that handles the common pattern of using
+/// a user-provided field mask or falling back to a default.
+pub fn field_mask_with_default(custom: Option<&str>, default: &str) -> FieldMask {
+    FieldMask::from_str(custom.unwrap_or(default))
+}
+
+/// Extract execution data from an optional ExecutedTransaction response.
+///
+/// This is a convenience wrapper that handles the common pattern of extracting
+/// the transaction from a response and converting it to SDK types.
+pub fn extract_execution_response(
+    transaction: Option<ExecutedTransaction>,
+) -> Result<TransactionExecutionResponse> {
+    let executed = transaction.ok_or(TryFromProtoError::missing("transaction"))?;
+    extract_execution_data(&executed)
+}
+
 /// Extract execution data from a proto ExecutedTransaction.
 pub fn extract_execution_data(proto: &ExecutedTransaction) -> Result<TransactionExecutionResponse> {
     let effects = proto

@@ -11,8 +11,8 @@ use iota_sdk_types::Transaction;
 use crate::{
     Client,
     api::{
-        EXECUTION_READ_MASK, FieldMask, FieldMaskUtil, Result, TransactionSimulationResponse,
-        TryFromProtoError, build_proto_transaction, extract_execution_data,
+        EXECUTION_READ_MASK, Result, TransactionSimulationResponse, build_proto_transaction,
+        extract_execution_response, field_mask_with_default,
     },
 };
 
@@ -78,22 +78,19 @@ impl Client {
             vec![]
         };
 
-        let mask = read_mask.unwrap_or(EXECUTION_READ_MASK);
         let request = SimulateTransactionRequest {
             transaction: Some(proto_transaction),
             tx_checks,
             estimate_gas_budget: None,
-            read_mask: Some(FieldMask::from_str(mask)),
+            read_mask: Some(field_mask_with_default(read_mask, EXECUTION_READ_MASK)),
         };
 
-        let mut client = self.execution_service_client();
+        let response = self
+            .execution_service_client()
+            .simulate_transaction(request)
+            .await?
+            .into_inner();
 
-        let response = client.simulate_transaction(request).await?.into_inner();
-
-        let executed = response
-            .transaction
-            .ok_or(TryFromProtoError::missing("transaction"))?;
-
-        Ok(extract_execution_data(&executed)?.into())
+        Ok(extract_execution_response(response.transaction)?.into())
     }
 }
