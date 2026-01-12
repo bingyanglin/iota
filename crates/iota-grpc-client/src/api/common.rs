@@ -33,15 +33,6 @@ pub enum Error {
     #[error("signature conversion error: {0}")]
     Signature(String),
 
-    /// Resource not found.
-    #[error("{resource} not found: {id}")]
-    NotFound {
-        /// The type of resource that was not found.
-        resource: &'static str,
-        /// The identifier of the resource.
-        id: String,
-    },
-
     /// gRPC transport or protocol error.
     #[error("grpc error: {0}")]
     Grpc(#[from] tonic::Status),
@@ -56,9 +47,6 @@ impl From<Error> for tonic::Status {
             Error::Server(msg) => tonic::Status::internal(format!("server error: {msg}")),
             Error::Signature(msg) => {
                 tonic::Status::internal(format!("signature conversion error: {msg}"))
-            }
-            Error::NotFound { resource, id } => {
-                tonic::Status::not_found(format!("{resource} not found: {id}"))
             }
             Error::Grpc(status) => status,
         }
@@ -83,6 +71,7 @@ pub type Result<T> = std::result::Result<T, Error>;
 ///
 /// **Required fields for `TransactionResponse` deserialization:**
 /// - `transaction.bcs` - Transaction data (required)
+/// - `signatures.bcs` - User signatures (required)
 /// - `effects.bcs` - Transaction effects (required)
 ///
 /// **Optional fields:**
@@ -90,9 +79,10 @@ pub type Result<T> = std::result::Result<T, Error>;
 /// - `checkpoint` - Checkpoint sequence number
 /// - `timestamp` - Execution timestamp
 ///
-/// If you provide a custom mask, you must include at least `transaction.bcs`
-/// and `effects.bcs`, or deserialization will fail.
-pub const TRANSACTIONS_READ_MASK: &str = "transaction.bcs,effects.bcs,events,checkpoint,timestamp";
+/// If you provide a custom mask, you must include at least `transaction.bcs`,
+/// `signatures.bcs`, and `effects.bcs`, or deserialization will fail.
+pub const TRANSACTIONS_READ_MASK: &str =
+    "transaction.bcs,signatures.bcs,effects.bcs,events,checkpoint,timestamp";
 
 /// Default field mask for [`Client::get_objects`].
 ///
@@ -216,6 +206,30 @@ pub fn convert_object(
         .map_err(|e| TryFromProtoError::invalid(field_name, e).into())
 }
 
+/// Extract only effects and events from a proto ExecutedTransaction.
+///
+/// This is a lighter alternative to [`extract_execution_data`] for cases
+/// where input/output objects are not needed (e.g., transaction queries).
+pub fn extract_effects_and_events(
+    proto: &ExecutedTransaction,
+) -> Result<(TransactionEffects, Option<TransactionEvents>)> {
+    let effects = proto
+        .effects
+        .as_ref()
+        .map(convert_effects)
+        .transpose()?
+        .ok_or(TryFromProtoError::missing("effects"))?;
+
+    let events = proto
+        .events
+        .as_ref()
+        .map(convert_events)
+        .transpose()?
+        .flatten();
+
+    Ok((effects, events))
+}
+
 /// Response for transaction execution.
 ///
 /// Contains the effects, optional events, and optional objects.
@@ -252,19 +266,7 @@ pub fn extract_execution_response(
 
 /// Extract execution data from a proto ExecutedTransaction.
 pub fn extract_execution_data(proto: &ExecutedTransaction) -> Result<TransactionExecutionResponse> {
-    let effects = proto
-        .effects
-        .as_ref()
-        .map(convert_effects)
-        .transpose()?
-        .ok_or(TryFromProtoError::missing("effects"))?;
-
-    let events = proto
-        .events
-        .as_ref()
-        .map(convert_events)
-        .transpose()?
-        .flatten();
+    let (effects, events) = extract_effects_and_events(proto)?;
 
     let input_objects = proto
         .input_objects

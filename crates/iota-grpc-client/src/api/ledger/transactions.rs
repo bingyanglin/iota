@@ -3,19 +3,17 @@
 
 //! High-level API for transaction queries.
 
-use std::collections::HashMap;
-
 use iota_grpc_types::{
     proto::proto_to_timestamp_ms,
     v0::ledger_service::{GetTransactionsRequest, TransactionRequest, TransactionRequests},
 };
-use iota_sdk_types::Digest;
+use iota_sdk_types::{Digest, Transaction, UserSignature};
 
 use crate::{
     Client,
     api::{
         Error, ProtoResult, Result, TRANSACTIONS_READ_MASK, TransactionResponse, TryFromProtoError,
-        extract_execution_data, field_mask_with_default,
+        extract_effects_and_events, field_mask_with_default,
     },
 };
 
@@ -36,6 +34,7 @@ impl Client {
     ///
     /// **Required fields** (must be included in custom masks):
     /// - `transaction.bcs` - Transaction data
+    /// - `signatures.bcs` - User signatures
     /// - `effects.bcs` - Transaction effects
     ///
     /// **Optional fields:**
@@ -57,7 +56,10 @@ impl Client {
     ///
     /// // Custom: only required fields (smaller response)
     /// let txs = client
-    ///     .get_transactions(&[digest], Some("transaction.bcs,effects.bcs"))
+    ///     .get_transactions(
+    ///         &[digest],
+    ///         Some("transaction.bcs,signatures.bcs,effects.bcs"),
+    ///     )
     ///     .await?;
     /// # Ok(())
     /// # }
@@ -90,34 +92,17 @@ impl Client {
 
         let mut stream = client.get_transactions(request).await?.into_inner();
 
-        // Build a map from digest to index for O(1) lookups
-        let digest_to_index: HashMap<Digest, usize> =
-            digests.iter().enumerate().map(|(i, d)| (*d, i)).collect();
-
-        // Pre-allocate results vector with None values
-        let mut results: Vec<Option<TransactionResponse>> = vec![None; digests.len()];
+        // Server guarantees results are returned in request order
+        let mut results = Vec::with_capacity(digests.len());
 
         while let Some(response) = stream.message().await? {
             for result in response.transactions {
                 let proto_tx = result.into_result()?;
-                let tx_response = convert_to_response(*proto_tx)?;
-                if let Some(&index) = digest_to_index.get(&tx_response.digest) {
-                    results[index] = Some(tx_response);
-                }
+                results.push(convert_to_response(*proto_tx)?);
             }
         }
 
-        // Convert to Vec<TransactionResponse>, erroring if any are missing
-        results
-            .into_iter()
-            .enumerate()
-            .map(|(i, opt)| {
-                opt.ok_or_else(|| Error::NotFound {
-                    resource: "transaction",
-                    id: digests[i].to_string(),
-                })
-            })
-            .collect()
+        Ok(results)
     }
 }
 
@@ -126,30 +111,53 @@ fn convert_to_response(
     proto: iota_grpc_types::v0::transaction::ExecutedTransaction,
 ) -> Result<TransactionResponse> {
     // Extract and deserialize transaction BCS (required)
+    // Note: The BCS contains Transaction (not SignedTransaction).
+    // Signatures are stored separately in proto.signatures.
     let tx_bcs = proto
         .transaction
         .as_ref()
         .and_then(|t| t.bcs.as_ref())
         .ok_or(TryFromProtoError::missing("transaction.bcs"))?;
 
-    let signed_tx: iota_sdk_types::SignedTransaction = tx_bcs
+    let transaction: Transaction = tx_bcs
         .deserialize()
         .map_err(|e| TryFromProtoError::invalid("transaction.bcs", e))?;
+
+    // Extract signatures from proto.signatures
+    let signatures = extract_signatures(&proto)?;
 
     // Extract checkpoint and timestamp from proto (these are per-transaction
     // historical data, not available in response headers)
     let checkpoint = proto.checkpoint;
     let timestamp_ms = proto.timestamp.map(proto_to_timestamp_ms).transpose()?;
 
-    let data = extract_execution_data(&proto)?;
+    let (effects, events) = extract_effects_and_events(&proto)?;
 
     Ok(TransactionResponse {
-        digest: signed_tx.transaction.digest(),
-        transaction: signed_tx.transaction,
-        signatures: signed_tx.signatures,
-        effects: data.effects,
-        events: data.events,
+        digest: transaction.digest(),
+        transaction,
+        signatures,
+        effects,
+        events,
         checkpoint,
         timestamp_ms,
     })
+}
+
+/// Extract user signatures from proto ExecutedTransaction.
+fn extract_signatures(
+    proto: &iota_grpc_types::v0::transaction::ExecutedTransaction,
+) -> Result<Vec<UserSignature>> {
+    proto
+        .signatures
+        .as_ref()
+        .map(|sigs| {
+            sigs.signatures
+                .iter()
+                .map(|sig| {
+                    UserSignature::try_from(sig).map_err(|e| Error::Signature(e.to_string()))
+                })
+                .collect::<Result<Vec<_>>>()
+        })
+        .unwrap_or_else(|| Ok(vec![]))
 }

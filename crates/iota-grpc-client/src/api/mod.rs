@@ -22,7 +22,7 @@ pub use common::{
 };
 pub(crate) use common::{
     ProtoResult, TryFromProtoError, build_proto_transaction, convert_object,
-    extract_execution_data, extract_execution_response, field_mask_with_default,
+    extract_effects_and_events, extract_execution_response, field_mask_with_default,
 };
 
 /// Response for a transaction query.

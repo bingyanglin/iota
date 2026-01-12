@@ -20,6 +20,9 @@ impl Client {
     /// Each tuple contains (ObjectId, Option<Version>). If version is None,
     /// the latest version is returned.
     ///
+    /// Results are returned in the same order as the input refs.
+    /// If an object is not found, an error is returned.
+    ///
     /// # Field Mask
     ///
     /// The optional `read_mask` parameter controls which fields the server
@@ -79,13 +82,14 @@ impl Client {
         let mut client = self.ledger_service_client();
 
         let mut stream = client.get_objects(request).await?.into_inner();
+
+        // Server guarantees results are returned in request order
         let mut results = Vec::with_capacity(refs.len());
 
         while let Some(response) = stream.message().await? {
             for result in response.objects {
                 let proto_obj = result.into_result()?;
-                let obj = convert_object(&proto_obj, "object.bcs")?;
-                results.push(obj);
+                results.push(convert_object(&proto_obj, "object.bcs")?);
             }
         }
 
