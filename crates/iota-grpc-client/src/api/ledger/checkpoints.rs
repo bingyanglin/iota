@@ -18,8 +18,8 @@ impl Client {
     /// Get the latest checkpoint.
     ///
     /// Note: If you only need the latest checkpoint sequence number (not the
-    /// full checkpoint data), use [`ResponseExt::checkpoint_height()`] on any
-    /// gRPC response instead.
+    /// full checkpoint data), use [`crate::ResponseExt::checkpoint_height()`]
+    /// on any gRPC response instead.
     ///
     /// # Example
     ///

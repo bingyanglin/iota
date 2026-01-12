@@ -67,7 +67,7 @@ pub type Result<T> = std::result::Result<T, Error>;
 // If `None` is passed, these defaults are used. If a custom mask is provided,
 // it completely replaces the default (no merging).
 
-/// Default field mask for [`Client::get_transactions`].
+/// Default field mask for [`crate::Client::get_transactions`].
 ///
 /// **Required fields for `TransactionResponse` deserialization:**
 /// - `transaction.bcs` - Transaction data (required)
@@ -84,7 +84,7 @@ pub type Result<T> = std::result::Result<T, Error>;
 pub const TRANSACTIONS_READ_MASK: &str =
     "transaction.bcs,signatures.bcs,effects.bcs,events,checkpoint,timestamp";
 
-/// Default field mask for [`Client::get_objects`].
+/// Default field mask for [`crate::Client::get_objects`].
 ///
 /// **Required fields for `Object` deserialization:**
 /// - `bcs` - Object BCS data (required)
@@ -93,8 +93,8 @@ pub const TRANSACTIONS_READ_MASK: &str =
 /// will fail.
 pub const OBJECTS_READ_MASK: &str = "bcs";
 
-/// Default field mask for [`Client::execute_transaction`] and
-/// [`Client::simulate_transaction`].
+/// Default field mask for [`crate::Client::execute_transaction`] and
+/// [`crate::Client::simulate_transaction`].
 ///
 /// **Required fields for response deserialization:**
 /// - `transaction.effects` - Transaction effects (required)

@@ -17,7 +17,7 @@ use crate::{
 impl Client {
     /// Get objects by their IDs and optional versions.
     ///
-    /// Each tuple contains (ObjectId, Option<Version>). If version is None,
+    /// Each tuple contains `(ObjectId, Option<Version>)`. If version is None,
     /// the latest version is returned.
     ///
     /// Results are returned in the same order as the input refs.
