@@ -62,8 +62,6 @@ impl Client {
     /// # Ok(())
     /// # }
     /// ```
-    ///
-    /// [`TRANSACTIONS_READ_MASK`]: crate::TRANSACTIONS_READ_MASK
     pub async fn get_transactions(
         &self,
         digests: &[Digest],

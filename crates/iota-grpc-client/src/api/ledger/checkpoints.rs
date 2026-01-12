@@ -21,8 +21,6 @@ impl Client {
     /// full checkpoint data), use [`ResponseExt::checkpoint_height()`] on any
     /// gRPC response instead.
     ///
-    /// [`ResponseExt::checkpoint_height()`]: crate::ResponseExt::checkpoint_height
-    ///
     /// # Example
     ///
     /// ```no_run

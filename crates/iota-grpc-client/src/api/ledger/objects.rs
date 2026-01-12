@@ -48,8 +48,6 @@ impl Client {
     /// # Ok(())
     /// # }
     /// ```
-    ///
-    /// [`OBJECTS_READ_MASK`]: crate::OBJECTS_READ_MASK
     pub async fn get_objects(
         &self,
         refs: &[(ObjectId, Option<Version>)],

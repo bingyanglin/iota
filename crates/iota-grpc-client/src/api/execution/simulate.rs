@@ -63,8 +63,6 @@ impl Client {
     /// # Ok(())
     /// # }
     /// ```
-    ///
-    /// [`EXECUTION_READ_MASK`]: crate::EXECUTION_READ_MASK
     pub async fn simulate_transaction(
         &self,
         transaction: Transaction,

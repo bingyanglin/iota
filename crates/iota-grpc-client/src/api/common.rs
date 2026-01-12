@@ -3,8 +3,6 @@
 
 //! Common utilities shared across API modules.
 
-pub use iota_grpc_types::field::{FieldMask, FieldMaskUtil};
-pub use iota_grpc_types::proto::TryFromProtoError;
 use iota_grpc_types::v0::{
     bcs::BcsData,
     ledger_service::{ObjectResult, TransactionResult, object_result, transaction_result},
@@ -12,6 +10,10 @@ use iota_grpc_types::v0::{
         ExecutedTransaction, Transaction as ProtoTransaction,
         TransactionEvents as ProtoTransactionEvents,
     },
+};
+pub use iota_grpc_types::{
+    field::{FieldMask, FieldMaskUtil},
+    proto::TryFromProtoError,
 };
 use iota_sdk_types::{Digest, Event, Object, TransactionEffects, TransactionEvents};
 use serde::Serialize;
@@ -112,8 +114,8 @@ pub const OBJECTS_READ_MASK: &str = "bcs";
 /// - `transaction.input_objects` - Input objects used
 /// - `transaction.output_objects` - Output objects created/modified
 ///
-/// If you provide a custom mask, you must include at least `transaction.effects`,
-/// or deserialization will fail.
+/// If you provide a custom mask, you must include at least
+/// `transaction.effects`, or deserialization will fail.
 pub const EXECUTION_READ_MASK: &str =
     "transaction.effects,transaction.events,transaction.input_objects,transaction.output_objects";
 
