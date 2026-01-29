@@ -5066,9 +5066,9 @@ impl AuthorityState {
                 }
             }
 
-            // Use ChangeEpochV4 when the calculate_validator_scores feature flag is enabled
-            // as scores are provided.
-            if config.calculate_validator_scores() {
+            // Use ChangeEpochV4 when the pass_validator_scores_to_advance_epoch feature
+            // flag is enabled.
+            if config.pass_validator_scores_to_advance_epoch() {
                 txns.push(EndOfEpochTransactionKind::new_change_epoch_v4(
                     next_epoch,
                     next_epoch_protocol_version,

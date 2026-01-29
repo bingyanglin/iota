@@ -625,9 +625,9 @@ impl EndOfEpochTransactionKind {
                         "selecting committee only among validators supporting the protocol version not supported".to_string(),
                     ));
                 }
-                if config.calculate_validator_scores() {
+                if config.pass_validator_scores_to_advance_epoch() {
                     return Err(UserInputError::Unsupported(
-                        "calculation of validator scoring not supported".to_string(),
+                        "passing of validator scores not supported".to_string(),
                     ));
                 }
                 if config.adjust_rewards_by_score() {
@@ -647,9 +647,9 @@ impl EndOfEpochTransactionKind {
                         "selecting committee only among validators supporting the protocol version not supported".to_string(),
                     ));
                 }
-                if config.calculate_validator_scores() {
+                if config.pass_validator_scores_to_advance_epoch() {
                     return Err(UserInputError::Unsupported(
-                        "calculation of validator scoring not supported".to_string(),
+                        "passing of validator scores not supported".to_string(),
                     ));
                 }
                 if config.adjust_rewards_by_score() {
@@ -669,9 +669,9 @@ impl EndOfEpochTransactionKind {
                         "selecting committee only among validators supporting the protocol version required".to_string(),
                     ));
                 }
-                if config.calculate_validator_scores() {
+                if config.pass_validator_scores_to_advance_epoch() {
                     return Err(UserInputError::Unsupported(
-                        "calculation of validator scoring not supported".to_string(),
+                        "passing of validator scores not supported".to_string(),
                     ));
                 }
                 if config.adjust_rewards_by_score() {
@@ -691,9 +691,9 @@ impl EndOfEpochTransactionKind {
                         "selecting committee only among validators supporting the protocol version required".to_string(),
                     ));
                 }
-                if !config.calculate_validator_scores() {
+                if !config.pass_validator_scores_to_advance_epoch() {
                     return Err(UserInputError::Unsupported(
-                        "calculation of validator scores required".to_string(),
+                        "passing of validator scores required".to_string(),
                     ));
                 }
             }

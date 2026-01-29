@@ -12,7 +12,7 @@ use iota_types::{
     scoring_metrics::VersionedScoringMetrics,
 };
 
-const MAX_SCORE: u64 = u16::MAX as u64 + 1; // Note: must be consistent with MAX_SCORE in validator_set.move in iota-framework.
+pub(crate) const MAX_SCORE: u64 = u16::MAX as u64 + 1; // Note: must be consistent with MAX_SCORE in validator_set.move in iota-framework.
 const SCALE_FACTOR: u64 = 2_u64.pow(16);
 
 /// Holds all information related to scoring of authorities in the committee.

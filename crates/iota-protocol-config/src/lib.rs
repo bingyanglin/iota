@@ -105,7 +105,8 @@ pub const MAX_PROTOCOL_VERSION: u64 = 19;
 //             Increase the base cost for transfer receive object in devnet.
 //             Switch consensus protocol to Starfish in testnet.
 //             Enable passkey authentication support in mainnet.
-//             Enable validator scoring on all networks and enable adjustment of
+//             Change epoch transaction will contain validator scores.
+//             Enable validator scoring on testnet and enable adjustment of
 //             validator rewards based on scores on Devnet.
 #[derive(Copy, Clone, Debug, Hash, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 pub struct ProtocolVersion(u64);
@@ -408,6 +409,10 @@ struct FeatureFlags {
     // If true, enables the authentication of account using Move code.
     #[serde(skip_serializing_if = "is_false")]
     enable_move_authentication: bool,
+
+    // If true, the change epoch transaction will contain validator scores.
+    #[serde(skip_serializing_if = "is_false")]
+    pass_validator_scores_to_advance_epoch: bool,
 
     // If true, enables calculation of validator scores.
     #[serde(skip_serializing_if = "is_false")]
@@ -1528,6 +1533,10 @@ impl ProtocolConfig {
         self.feature_flags.enable_move_authentication
     }
 
+    pub fn pass_validator_scores_to_advance_epoch(&self) -> bool {
+        self.feature_flags.pass_validator_scores_to_advance_epoch
+    }
+
     pub fn calculate_validator_scores(&self) -> bool {
         let calculate_validator_scores = self.feature_flags.calculate_validator_scores;
         assert!(
@@ -2430,10 +2439,6 @@ impl ProtocolConfig {
                     }
                 }
                 19 => {
-                    // Enable validator score calculation on all networks.
-                    cfg.feature_flags.calculate_validator_scores = true;
-                    cfg.scorer_version = Some(1);
-
                     if chain != Chain::Testnet && chain != Chain::Mainnet {
                         // Enable congestion limit overshoot in the gas price feedback
                         // mechanism on devnet.
@@ -2461,7 +2466,14 @@ impl ProtocolConfig {
                     if chain != Chain::Mainnet {
                         // Switch consensus protocol to Starfish in testnet.
                         cfg.feature_flags.consensus_choice = ConsensusChoice::Starfish;
+
+                        // Enable validator score calculation on testnet
+                        cfg.feature_flags.calculate_validator_scores = true;
+                        cfg.scorer_version = Some(1);
                     }
+
+                    // Change epoch transaction will contain validator scores
+                    cfg.feature_flags.pass_validator_scores_to_advance_epoch = true;
 
                     // Enable passkey authentication support in mainnet
                     cfg.feature_flags.passkey_auth = true;
