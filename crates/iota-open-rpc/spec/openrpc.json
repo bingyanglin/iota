@@ -1336,6 +1336,7 @@
                 "native_charging_v2": true,
                 "no_extraneous_module_bytes": true,
                 "normalize_ptb_arguments": false,
+                "pass_validator_scores_to_advance_epoch": false,
                 "passkey_auth": true,
                 "protocol_defined_base_fee": true,
                 "publish_package_metadata": false,
