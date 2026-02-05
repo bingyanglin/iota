@@ -1283,6 +1283,9 @@ importers:
       '@iota/iota-sdk':
         specifier: workspace:*
         version: link:../../sdk/typescript
+      '@markdoc/markdoc':
+        specifier: ^0.4.0
+        version: 0.4.0(@types/react@18.3.9)(react@18.3.1)
       '@noble/hashes':
         specifier: ^1.4.0
         version: 1.8.0
@@ -1307,6 +1310,9 @@ importers:
       '@tanstack/react-query':
         specifier: ^5.50.1
         version: 5.56.2(react@18.3.1)
+      add:
+        specifier: ^2.0.6
+        version: 2.0.6
       blake2b:
         specifier: link:@noble/hashes/blake2b
         version: link:@noble/hashes/blake2b
@@ -1337,6 +1343,9 @@ importers:
       react-router-dom:
         specifier: ^6.30.3
         version: 6.30.3(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
+      react-scrollspy-navigation:
+        specifier: ^2.0.6
+        version: 2.0.7
       tailwind-merge:
         specifier: ^2.4.0
         version: 2.5.2
@@ -1346,7 +1355,7 @@ importers:
     devDependencies:
       '@tailwindcss/forms':
         specifier: ^0.5.7
-        version: 0.5.9(tailwindcss@3.4.13(ts-node@10.9.2(@types/node@20.16.9)(typescript@5.6.2)))
+        version: 0.5.9(tailwindcss@3.4.17(ts-node@10.9.2(@types/node@20.16.9)(typescript@5.6.2)))
       '@tsconfig/docusaurus':
         specifier: ^2.0.3
         version: 2.0.3
@@ -1370,10 +1379,10 @@ importers:
         version: 8.4.47
       tailwindcss:
         specifier: ^3.3.3
-        version: 3.4.13(ts-node@10.9.2(typescript@5.6.2))
+        version: 3.4.17(ts-node@10.9.2(@types/node@20.16.9)(typescript@5.6.2))
       tailwindcss-animate:
         specifier: ^1.0.7
-        version: 1.0.7(tailwindcss@3.4.13(ts-node@10.9.2(@types/node@20.16.9)(typescript@5.6.2)))
+        version: 1.0.7(tailwindcss@3.4.17(ts-node@10.9.2(@types/node@20.16.9)(typescript@5.6.2)))
       typescript:
         specifier: ^5.5.3
         version: 5.6.2
@@ -6124,6 +6133,18 @@ packages:
     resolution: {integrity: sha512-3lBouSuF7CqlseLB+FKES0K4FQ02JrbEoRtJhxnsyB1s5v4AP03gsoohN8jp7DcOImhaR9scYdztq3/sLfk/qQ==}
     engines: {node: '>=14.18.0'}
 
+  '@markdoc/markdoc@0.4.0':
+    resolution: {integrity: sha512-fSh4P3Y4E7oaKYc2oNzSIJVPDto7SMzAuQN1Iyx53UxzleA6QzRdNWRxmiPqtVDaDi5dELd2yICoG91csrGrAw==}
+    engines: {node: '>=14.7.0'}
+    peerDependencies:
+      '@types/react': '*'
+      react: '*'
+    peerDependenciesMeta:
+      '@types/react':
+        optional: true
+      react:
+        optional: true
+
   '@mdn/browser-compat-data@5.6.0':
     resolution: {integrity: sha512-xArvLyzuk0r2m6hFVjTMYoLvhWwys3h7W8pO15tjSAea+U39cErWDNfoUs4g2C08HVg6bDHyDMBc0LC6FKRpVw==}
 
@@ -9146,6 +9167,9 @@ packages:
   '@types/katex@0.16.7':
     resolution: {integrity: sha512-HMwFiRujE5PjrgwHQ25+bsLJgowjGjm5Z8FVSf0N6PwgJrwxH0QxzHYDcKsTfV3wva0vzrpqMTJS2jXPr5BMEQ==}
 
+  '@types/linkify-it@5.0.0':
+    resolution: {integrity: sha512-sVDA58zAw4eWAffKOaQH5/5j3XeayukzDk+ewSsnv3p4yJEZHCCzMDiZM8e0OUrRvmpGZ85jf4yDHkHsgBNr9Q==}
+
   '@types/lodash.merge@4.6.9':
     resolution: {integrity: sha512-23sHDPmzd59kUgWyKGiOMO2Qb9YtqRO/x4IhkgNUiPQ1+5MUVqi6bCZeq9nBJ17msjIMbEIO5u+XW4Kz6aGUhQ==}
 
@@ -9158,11 +9182,17 @@ packages:
   '@types/luxon@3.7.1':
     resolution: {integrity: sha512-H3iskjFIAn5SlJU7OuxUmTEpebK6TKB8rxZShDslBMZJ5u9S//KM1sbdAisiSrqwLQncVjnpi2OK2J51h+4lsg==}
 
+  '@types/markdown-it@12.2.3':
+    resolution: {integrity: sha512-GKMHFfv3458yYy+v/N8gjufHO6MSZKCOXpZc5GXIWWy8uldwfmPn98vp81gZ5f9SVw8YYBctgfJ22a2d7AOMeQ==}
+
   '@types/mdast@3.0.15':
     resolution: {integrity: sha512-LnwD+mUEfxWMa1QpDraczIn6k0Ee3SMicuYSSzS6ZYl2gKS09EClnJYGd8Du6rfc5r/GZEk5o1mRb8TaTj03sQ==}
 
   '@types/mdast@4.0.4':
     resolution: {integrity: sha512-kGaNbPh1k7AFzgpud/gMdvIm5xuECykRR+JnWKQno9TAXVa6WIVCGTPvYGekIDL4uwCZQSYbUxNBSb1aUo79oA==}
+
+  '@types/mdurl@2.0.0':
+    resolution: {integrity: sha512-RGdgjQUZba5p6QEFAVx2OGb8rQDL/cPRG7GiedRzMcJ1tYnUANBncjbSB1NRGwbvjcPeikRABz2nshyPk1bhWg==}
 
   '@types/mdx@2.0.13':
     resolution: {integrity: sha512-+OWZQfAYyio6YkJb3HLxDrvnx6SWWDbC0zVPfBRzUk0/nqoDyf6dNxQi3eArPe8rJ473nobTMQ/8Zk+LxJ+Yuw==}
@@ -10084,6 +10114,9 @@ packages:
     resolution: {integrity: sha512-NZyJarBfL7nWwIq+FDL6Zp/yHEhePMNnnJ0y3qfieCrmNvYct8uvtiV41UvlSe6apAfk0fY1FbWx+NwfmpvtTg==}
     engines: {node: '>=0.4.0'}
     hasBin: true
+
+  add@2.0.6:
+    resolution: {integrity: sha512-j5QzrmsokwWWp6kUcJQySpbG+xfOBqqKnup3OIk1pz+kB/80SLorZ9V8zHFLO92Lcd+hbvq8bT+zOGoPkmBV0Q==}
 
   addons-linter@7.1.0:
     resolution: {integrity: sha512-UmkUB3dZSpf8bqhlulGDbpoxBwcfOk8JvaJTRvJ+AAXKHvTjqeNlFC+GRMqa0EjJJh/0yqpBaJzyaUIx+fjl+A==}
@@ -17722,6 +17755,9 @@ packages:
     engines: {node: '>=14.0.0'}
     peerDependencies:
       react: '>=16.8'
+
+  react-scrollspy-navigation@2.0.7:
+    resolution: {integrity: sha512-4OJtVV9EebdNeeJlhgabeG83JFJLxjClWANioZe3vGbEPJl2B68pLP7vVZFBRO0ckaw9QtOonkvvPNjkZxazgQ==}
 
   react-style-singleton@2.2.1:
     resolution: {integrity: sha512-ZWj0fHEMyWkHzKYUr2Bs/4zU6XLmq9HsgBURm7g5pAVfyn49DgUiNgY2d4lXRlYSiCif9YBGpQleewkcqddc7g==}
@@ -27021,6 +27057,12 @@ snapshots:
       jju: 1.4.0
       js-yaml: 4.1.0
 
+  '@markdoc/markdoc@0.4.0(@types/react@18.3.9)(react@18.3.1)':
+    optionalDependencies:
+      '@types/markdown-it': 12.2.3
+      '@types/react': 18.3.9
+      react: 18.3.1
+
   '@mdn/browser-compat-data@5.6.0': {}
 
   '@mdx-js/mdx@3.0.1':
@@ -30968,15 +31010,15 @@ snapshots:
     dependencies:
       tailwindcss: 3.4.13(ts-node@10.9.2(@types/node@22.15.31)(typescript@5.6.2))
 
-  '@tailwindcss/forms@0.5.9(tailwindcss@3.4.13(ts-node@10.9.2(@types/node@20.16.9)(typescript@5.6.2)))':
-    dependencies:
-      mini-svg-data-uri: 1.4.4
-      tailwindcss: 3.4.13(ts-node@10.9.2(typescript@5.6.2))
-
   '@tailwindcss/forms@0.5.9(tailwindcss@3.4.13(ts-node@10.9.2(@types/node@22.15.31)(typescript@5.6.2)))':
     dependencies:
       mini-svg-data-uri: 1.4.4
       tailwindcss: 3.4.13(ts-node@10.9.2(@types/node@22.15.31)(typescript@5.6.2))
+
+  '@tailwindcss/forms@0.5.9(tailwindcss@3.4.17(ts-node@10.9.2(@types/node@20.16.9)(typescript@5.6.2)))':
+    dependencies:
+      mini-svg-data-uri: 1.4.4
+      tailwindcss: 3.4.17(ts-node@10.9.2(@types/node@20.16.9)(typescript@5.6.2))
 
   '@tanstack/eslint-plugin-query@5.58.1(eslint@8.57.1)(typescript@5.6.2)':
     dependencies:
@@ -31326,6 +31368,9 @@ snapshots:
 
   '@types/katex@0.16.7': {}
 
+  '@types/linkify-it@5.0.0':
+    optional: true
+
   '@types/lodash.merge@4.6.9':
     dependencies:
       '@types/lodash': 4.17.9
@@ -31336,6 +31381,12 @@ snapshots:
 
   '@types/luxon@3.7.1': {}
 
+  '@types/markdown-it@12.2.3':
+    dependencies:
+      '@types/linkify-it': 5.0.0
+      '@types/mdurl': 2.0.0
+    optional: true
+
   '@types/mdast@3.0.15':
     dependencies:
       '@types/unist': 2.0.11
@@ -31343,6 +31394,9 @@ snapshots:
   '@types/mdast@4.0.4':
     dependencies:
       '@types/unist': 3.0.3
+
+  '@types/mdurl@2.0.0':
+    optional: true
 
   '@types/mdx@2.0.13': {}
 
@@ -33107,6 +33161,8 @@ snapshots:
   acorn@8.14.0: {}
 
   acorn@8.15.0: {}
+
+  add@2.0.6: {}
 
   addons-linter@7.1.0:
     dependencies:
@@ -42821,6 +42877,8 @@ snapshots:
       '@remix-run/router': 1.23.2
       react: 18.3.1
 
+  react-scrollspy-navigation@2.0.7: {}
+
   react-style-singleton@2.2.1(@types/react@18.3.9)(react@18.3.1):
     dependencies:
       get-nonce: 1.0.1
@@ -44429,9 +44487,9 @@ snapshots:
 
   tailwind-merge@2.5.2: {}
 
-  tailwindcss-animate@1.0.7(tailwindcss@3.4.13(ts-node@10.9.2(@types/node@20.16.9)(typescript@5.6.2))):
+  tailwindcss-animate@1.0.7(tailwindcss@3.4.17(ts-node@10.9.2(@types/node@20.16.9)(typescript@5.6.2))):
     dependencies:
-      tailwindcss: 3.4.13(ts-node@10.9.2(typescript@5.6.2))
+      tailwindcss: 3.4.17(ts-node@10.9.2(@types/node@20.16.9)(typescript@5.6.2))
 
   tailwindcss@3.4.13(ts-node@10.9.2(@types/node@22.15.31)(typescript@5.6.2)):
     dependencies:
@@ -44476,6 +44534,33 @@ snapshots:
       normalize-path: 3.0.0
       object-hash: 3.0.0
       picocolors: 1.1.0
+      postcss: 8.4.47
+      postcss-import: 15.1.0(postcss@8.4.47)
+      postcss-js: 4.0.1(postcss@8.4.47)
+      postcss-load-config: 4.0.2(postcss@8.4.47)(ts-node@10.9.2(typescript@5.6.2))
+      postcss-nested: 6.2.0(postcss@8.4.47)
+      postcss-selector-parser: 6.1.2
+      resolve: 1.22.8
+      sucrase: 3.35.0
+    transitivePeerDependencies:
+      - ts-node
+
+  tailwindcss@3.4.17(ts-node@10.9.2(@types/node@20.16.9)(typescript@5.6.2)):
+    dependencies:
+      '@alloc/quick-lru': 5.2.0
+      arg: 5.0.2
+      chokidar: 3.6.0
+      didyoumean: 1.2.2
+      dlv: 1.1.3
+      fast-glob: 3.3.2
+      glob-parent: 6.0.2
+      is-glob: 4.0.3
+      jiti: 1.21.6
+      lilconfig: 3.1.3
+      micromatch: 4.0.8
+      normalize-path: 3.0.0
+      object-hash: 3.0.0
+      picocolors: 1.1.1
       postcss: 8.4.47
       postcss-import: 15.1.0(postcss@8.4.47)
       postcss-js: 4.0.1(postcss@8.4.47)
