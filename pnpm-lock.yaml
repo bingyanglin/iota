@@ -2024,9 +2024,6 @@ importers:
       graphql:
         specifier: ^16.9.0
         version: 16.9.0
-      tweetnacl:
-        specifier: ^1.0.3
-        version: 1.0.3
       valibot:
         specifier: ^1.2.0
         version: 1.2.0(typescript@5.6.2)
@@ -19432,9 +19429,6 @@ packages:
 
   tween-functions@1.2.0:
     resolution: {integrity: sha512-PZBtLYcCLtEcjL14Fzb1gSxPBeL7nWvGhO5ZFPGqziCcr8uvHp0NDmdjBchp6KHL+tExcg0m3NISmKxhU394dA==}
-
-  tweetnacl@1.0.3:
-    resolution: {integrity: sha512-6rt+RN7aOi1nGMyC4Xa5DdYiukl2UWCbcJft7YhxReBGQD7OAM8Pbxw6YMo4r2diNEA8FEmu32YOn9rhaiE5yw==}
 
   type-check@0.4.0:
     resolution: {integrity: sha512-XleUoc9uwGXqjWwXaUTZAmzMcFZ5858QA2vvx1Ur5xIcixXIP+8LnFDgRplU30us6teqdlskFfu+ae4K79Ooew==}
@@ -45080,8 +45074,6 @@ snapshots:
       turbo-windows-arm64: 2.8.0
 
   tween-functions@1.2.0: {}
-
-  tweetnacl@1.0.3: {}
 
   type-check@0.4.0:
     dependencies:
