@@ -112,6 +112,7 @@ pub const MAX_PROTOCOL_VERSION: u64 = 20;
 //             a default score value to the advance_epoch call. Enables this
 //             decoupling on Testnet; Devnet and Mainnet behavior remain the
 //             same.
+//             Introduce Dynamic Minimum Commission (IIP-8) on all networks.
 #[derive(Copy, Clone, Debug, Hash, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 pub struct ProtocolVersion(u64);
 
