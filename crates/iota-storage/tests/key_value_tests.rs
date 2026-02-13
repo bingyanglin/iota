@@ -2,7 +2,7 @@
 // Modifications Copyright (c) 2024 IOTA Stiftung
 // SPDX-License-Identifier: Apache-2.0
 
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::HashMap, str::FromStr, sync::Arc};
 
 use async_trait::async_trait;
 use futures::FutureExt;
@@ -352,6 +352,28 @@ async fn test_get_tx_from_fallback() {
             vec![Some(fx), Some(fallback_fx)],
         )
     );
+}
+
+#[tokio::test]
+async fn super_duper_test() {
+    use iota_storage::http_key_value_store::HttpKVStore;
+
+    let client = HttpKVStore::new(
+        "https://transactions.testnet.iota.cafe",
+        10,
+        KeyValueStoreMetrics::new_for_tests(),
+    )
+    .unwrap();
+
+    let a = client
+        .multi_get_events_by_tx_digests(&[TransactionDigest::from_str(
+            "63X49x2QuuYNduExZWoJjfXut3s3WDWZ7Tr7nXJu32ZT",
+        )
+        .unwrap()])
+        .await
+        .unwrap();
+
+    assert!(a.iter().all(|o| o.is_some()), "Events deserialization failed! Got: {:?}", a);
 }
 
 #[cfg(msim)]
