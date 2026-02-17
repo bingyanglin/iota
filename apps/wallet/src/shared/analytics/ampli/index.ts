@@ -92,6 +92,14 @@ export interface AccountsAddedProperties {
     numberOfAccounts?: number;
 }
 
+export interface AccountKeysExportedProperties {
+    /**
+     * | Rule | Value |
+     * |---|---|
+     * | Regex |  |
+     */
+    accountType?: string;
+}
 export interface AddedAccountsProperties {
     /**
      * | Rule | Value |
@@ -595,6 +603,13 @@ export class AccountDeleted implements BaseEvent {
     }
 }
 
+export class AccountKeysExported implements BaseEvent {
+    event_type = 'account keys exported';
+
+    constructor(public event_properties?: AccountKeysExportedProperties) {
+        this.event_properties = event_properties;
+    }
+}
 export class AccountsAdded implements BaseEvent {
     event_type = 'accounts added';
 
@@ -1078,6 +1093,23 @@ export class Ampli {
     options?: EventOptions,
   ) {
     return this.track(new AccountDeleted(properties), options);
+  }
+
+  /**
+   * account keys exported
+   *
+   * [View in Tracking Plan](https://data.eu.amplitude.com/iota-foundation/IOTA%20Wallet/events/main/latest/account%20keys%20exported)
+   *
+   * Event has no description in tracking plan.
+   *
+   * @param properties The event's properties (e.g. accountType)
+   * @param options Amplitude event options.
+   */
+  accountKeysExported(
+    properties?: AccountKeysExportedProperties,
+    options?: EventOptions,
+  ) {
+    return this.track(new AccountKeysExported(properties), options);
   }
 
   /**
