@@ -390,7 +390,7 @@ export interface DisconnectedApplicationProperties {
     sourceFlow?: string;
 }
 
-export interface ExternalLinkOpenedProperties {
+export interface ElementCopiedProperties {
     type: string;
     value?: string;
     /**
@@ -401,6 +401,16 @@ export interface ExternalLinkOpenedProperties {
     visibility?: 'private' | 'public';
 }
 
+export interface ExternalLinkOpenedProperties {
+    type: string;
+    value?: string;
+    /**
+     * | Rule | Value |
+     * |---|---|
+     * | Enum Values | private, public |
+     */
+    visibility?: 'private' | 'public';
+}
 export interface IotaStakedProperties {
     /**
      * | Rule | Value |
@@ -900,6 +910,14 @@ export class DisconnectedApplication implements BaseEvent {
     event_type = 'disconnected application';
 
     constructor(public event_properties?: DisconnectedApplicationProperties) {
+        this.event_properties = event_properties;
+    }
+}
+
+export class ElementCopied implements BaseEvent {
+    event_type = 'element copied';
+
+    constructor(public event_properties: ElementCopiedProperties) {
         this.event_properties = event_properties;
     }
 }
@@ -1729,6 +1747,24 @@ export class Ampli {
     return this.track(new DisconnectedApplication(properties), options);
   }
 
+  /**
+   * element copied
+   *
+   * [View in Tracking Plan](https://data.eu.amplitude.com/iota-foundation/IOTA%20Wallet/events/main/latest/element%20copied)
+   *
+   * Event has no description in tracking plan.
+   *
+   * @param properties The event's properties (e.g. type)
+   * @param options Amplitude event options.
+   */
+  elementCopied(
+    properties: ElementCopiedProperties,
+    options?: EventOptions,
+  ) {
+    return this.track(new ElementCopied(properties), options);
+  }
+
+  /*
   /**
    * external link opened
    *
