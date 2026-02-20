@@ -486,7 +486,7 @@ impl ServerBuilder {
 
         let graphql_streams =
             GraphQLStream::new(&config.connection.db_url, reader.clone(), &registry).await?;
-        let write_api = build_write_api(fullnode_url, reader, indexer_metrics)?;
+        let write_api = build_write_api(fullnode_url, reader, indexer_metrics).await?;
 
         builder = builder
             .context_data(config.service.clone())
@@ -594,7 +594,7 @@ pub(crate) fn get_write_api<'ctx>(
         .ok_or_else(|| Error::Internal("Unable to get node execution interface".to_string()))
 }
 
-fn build_write_api(
+async fn build_write_api(
     fullnode_url: &str,
     reader: IndexerReader,
     metrics: IndexerMetrics,
@@ -602,7 +602,8 @@ fn build_write_api(
     let json_rpc_client = build_json_rpc_client(fullnode_url)?;
     let indexer_store = PgIndexerStore::new(reader.get_pool(), metrics.clone());
     let optimistic_tx_executor =
-        OptimisticTransactionExecutor::new(fullnode_url, reader.clone(), indexer_store, metrics);
+        OptimisticTransactionExecutor::new(fullnode_url, reader.clone(), indexer_store, metrics)
+            .await?;
     Ok(OptimisticWriteApi::new(
         WriteApi::new(json_rpc_client, reader),
         optimistic_tx_executor,
@@ -937,7 +938,9 @@ pub mod tests {
                 indexer_reader.clone(),
                 store.clone(),
                 indexer_metrics,
-            );
+            )
+            .await
+            .unwrap();
         let write_api = OptimisticWriteApi::new(
             WriteApi::new(json_rpc_client, indexer_reader),
             optimistic_tx_executor,
