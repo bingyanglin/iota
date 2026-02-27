@@ -119,6 +119,8 @@ pub const MAX_PROTOCOL_VERSION: u64 = 21;
 //             Enable a separate gas price feedback mechanism for transactions
 //             using randomness on testnet.
 //             Enable fast commit syncer for faster recovery in devnet.
+//             Add auth_context_tx native functions costs.
+//             Reduce max_auth_gas in Devnet.
 #[derive(Copy, Clone, Debug, Hash, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 pub struct ProtocolVersion(u64);
 
@@ -2580,6 +2582,11 @@ impl ProtocolConfig {
                     cfg.auth_context_tx_inputs_cost_per_byte = Some(2);
                     cfg.auth_context_replace_cost_base = Some(30);
                     cfg.auth_context_replace_cost_per_byte = Some(2);
+
+                    if chain != Chain::Testnet && chain != Chain::Mainnet {
+                        // Decrease max_auth_gas to 0.00025 IOTA
+                        cfg.max_auth_gas = Some(250_000);
+                    }
                 }
 
                 // Use this template when making changes:
