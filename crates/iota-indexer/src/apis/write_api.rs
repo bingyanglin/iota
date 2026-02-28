@@ -6,15 +6,17 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use fastcrypto::encoding::Base64;
+use iota_grpc_client::Client as GrpcClient;
 use iota_json::IotaJsonValue;
 use iota_json_rpc::IotaRpcModule;
-use iota_json_rpc_api::{WriteApiClient, WriteApiServer, error_object_from_rpc};
+use iota_json_rpc_api::WriteApiServer;
 use iota_json_rpc_types::{
     DevInspectArgs, DevInspectResults, DryRunTransactionBlockResponse, IotaMoveViewCallResults,
     IotaTransactionBlockResponse, IotaTransactionBlockResponseOptions, IotaTypeTag,
     MoveFunctionName,
 };
 use iota_open_rpc::Module;
+use iota_package_resolver::Resolver;
 use iota_protocol_config::Chain;
 use iota_transaction_builder::TransactionBuilder;
 use iota_types::{
@@ -23,7 +25,7 @@ use iota_types::{
 use jsonrpsee::{RpcModule, core::RpcResult, http_client::HttpClient};
 
 use crate::{
-    FullnodeRpc, apis::error::Error as ApiError, errors::IndexerError,
+    apis::error::Error as ApiError, errors::IndexerError,
     optimistic_indexing::OptimisticTransactionExecutor, read::IndexerReader,
     store::package_resolver::IndexerStorePackageResolver,
     types::IotaTransactionBlockResponseWithOptions,
@@ -31,9 +33,10 @@ use crate::{
 
 #[derive(Clone)]
 pub struct WriteApi {
-    fullnode: FullnodeRpc,
+    #[allow(dead_code)]
+    fullnode_grpc_client: GrpcClient,
     transaction_builder: TransactionBuilder,
-    package_resolver: IndexerStorePackageResolver,
+    package_resolver: Arc<Resolver<IndexerStorePackageResolver>>,
 }
 
 #[derive(Clone)]
@@ -43,25 +46,13 @@ pub struct OptimisticWriteApi {
 }
 
 impl WriteApi {
-    pub fn new(fullnode_client: HttpClient, reader: IndexerReader) -> Self {
+    pub fn new(fullnode_grpc_client: GrpcClient, reader: IndexerReader) -> Self {
         let package_resolver = IndexerStorePackageResolver::new(reader.get_pool());
         let data_reader = Arc::new(reader);
         Self {
-            fullnode: FullnodeRpc::JsonRpc(Box::new(fullnode_client)),
+            fullnode_grpc_client,
             transaction_builder: TransactionBuilder::new(data_reader),
-            package_resolver,
-        }
-    }
-
-    /// Creates a new instance of WriteApi with a fullnode RPC client which can
-    /// be either JSON-RPC or gRPC.
-    pub fn new_with_fullnode_rpc(fullnode_rpc_client: FullnodeRpc, reader: IndexerReader) -> Self {
-        let package_resolver = IndexerStorePackageResolver::new(reader.get_pool());
-        let data_reader = Arc::new(reader);
-        Self {
-            fullnode: fullnode_rpc_client,
-            transaction_builder: TransactionBuilder::new(data_reader),
-            package_resolver,
+            package_resolver: Arc::new(Resolver::new(package_resolver)),
         }
     }
 }
@@ -92,72 +83,37 @@ impl OptimisticWriteApi {
 
 #[async_trait]
 impl WriteApiServer for WriteApi {
+    /// This method will always return an error. The user shall use the
+    /// [`OptimisticWriteApi`] to execute transactions.
     async fn execute_transaction_block(
         &self,
-        tx_bytes: Base64,
-        signatures: Vec<Base64>,
-        options: Option<IotaTransactionBlockResponseOptions>,
-        request_type: Option<ExecuteTransactionRequestType>,
+        _tx_bytes: Base64,
+        _signatures: Vec<Base64>,
+        _options: Option<IotaTransactionBlockResponseOptions>,
+        _request_type: Option<ExecuteTransactionRequestType>,
     ) -> RpcResult<IotaTransactionBlockResponse> {
-        // essentially this is dead code, is never executed in the indexer, all the
-        // execute_transaction_block invocations are done through the
-        // OptimisticWriteApi.
-        match self.fullnode {
-            FullnodeRpc::JsonRpc(ref client) => {
-                let iota_transaction_response = client
-                    .execute_transaction_block(tx_bytes, signatures, options.clone(), request_type)
-                    .await
-                    .map_err(error_object_from_rpc)?;
-                Ok(IotaTransactionBlockResponseWithOptions {
-                    response: iota_transaction_response,
-                    options: options.unwrap_or_default(),
-                }
-                .into())
-            }
-            FullnodeRpc::Grpc(_) => {
-                panic!("execute_transaction_block should be called from OptimisticWriteApi")
-            }
-        }
+        Err(IndexerError::Generic(
+            "execute_transaction_block should be called from OptimisticWriteApi".into(),
+        )
+        .into())
     }
 
     async fn dev_inspect_transaction_block(
         &self,
-        sender_address: IotaAddress,
-        tx_bytes: Base64,
-        gas_price: Option<BigInt<u64>>,
-        epoch: Option<BigInt<u64>>,
-        additional_args: Option<DevInspectArgs>,
+        _sender_address: IotaAddress,
+        _tx_bytes: Base64,
+        _gas_price: Option<BigInt<u64>>,
+        _epoch: Option<BigInt<u64>>,
+        _additional_args: Option<DevInspectArgs>,
     ) -> RpcResult<DevInspectResults> {
-        match self.fullnode {
-            FullnodeRpc::JsonRpc(ref client) => client
-                .dev_inspect_transaction_block(
-                    sender_address,
-                    tx_bytes,
-                    gas_price,
-                    epoch,
-                    additional_args,
-                )
-                .await
-                .map_err(error_object_from_rpc),
-            FullnodeRpc::Grpc(_) => {
-                todo!("waiting issue: #10390 and #10391 to be resolved");
-            }
-        }
+        todo!("waiting issue: #10390 and #10391 to be resolved");
     }
 
     async fn dry_run_transaction_block(
         &self,
-        tx_bytes: Base64,
+        _tx_bytes: Base64,
     ) -> RpcResult<DryRunTransactionBlockResponse> {
-        match self.fullnode {
-            FullnodeRpc::JsonRpc(ref client) => client
-                .dry_run_transaction_block(tx_bytes)
-                .await
-                .map_err(error_object_from_rpc),
-            FullnodeRpc::Grpc(_) => {
-                todo!("waiting issue: #10390 and #10391 to be resolved");
-            }
-        }
+        todo!("waiting issue: #10390 and #10391 to be resolved");
     }
 
     async fn view_function_call(
@@ -188,7 +144,7 @@ impl WriteApiServer for WriteApi {
             .dev_inspect_transaction_block(sender, tx_bytes, None, None, None)
             .await?;
         Ok(IotaMoveViewCallResults::from_dev_inspect_results(
-            self.package_resolver.clone(),
+            self.package_resolver.package_store().clone(),
             dev_inspect_results,
         )
         .await

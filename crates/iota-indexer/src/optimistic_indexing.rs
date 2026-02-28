@@ -8,23 +8,19 @@ use std::{
 use diesel::{PgConnection, RunQueryDsl, result::DatabaseErrorKind, sql_query, sql_types};
 use downcast::Any;
 use fastcrypto::{encoding::Base64, error::FastCryptoError, traits::ToFromBytes};
-use futures::TryFutureExt;
 use iota_grpc_client::Client as GrpcClient;
 use iota_grpc_types::{
     field::{FieldMask, FieldMaskUtil},
-    v0::{object::Objects as GrpcObjects, transaction::ExecutedTransaction},
+    v0::transaction::ExecutedTransaction,
 };
 use iota_json_rpc_types::{IotaTransactionBlockResponse, IotaTransactionBlockResponseOptions};
-use iota_rest_api::{ExecuteTransactionQueryParameters, client::TransactionExecutionResponse};
 use iota_types::{
     base_types::TransactionDigest,
     effects::{TransactionEffects, TransactionEffectsAPI, TransactionEvents},
     full_checkpoint_content::CheckpointTransaction,
-    object::Object,
     signature::GenericSignature,
     transaction::{Transaction, TransactionData},
 };
-use tracing::{debug, info};
 
 use crate::{
     errors::IndexerError,
@@ -44,7 +40,8 @@ use crate::{
     store::{IndexerStore, PgIndexerStore},
     transactional_blocking_with_retry_with_conditional_abort,
     types::{
-        IndexedDeletedObject, IndexedObject, IndexerResult, IotaTransactionBlockResponseWithOptions,
+        IndexedDeletedObject, IndexedObject, IndexerResult,
+        IotaTransactionBlockResponseWithOptions, grpc_conversion,
     },
 };
 
@@ -64,145 +61,9 @@ type TransactionDataToCommit = (
     TransactionObjectChangesToCommit,
 );
 
-type InputObjects = Vec<Object>;
-type OutputObjects = Vec<Object>;
-
-type ExtractedFromTransaction = (
-    TransactionEffects,
-    Option<TransactionEvents>,
-    Option<InputObjects>,
-    Option<OutputObjects>,
-);
-
-/// Abstracts the fullnode RPC API.
-///
-/// The gRPC API is still in alpha but will be the default in the future.
-/// On the otherhand, the REST API is scheduled to be deprecated in the
-/// future.
-/// We need to maintain backward compatibility with the REST API for now
-/// until the gRPC API is fully compatible.
-#[derive(Clone)]
-enum FullnodeRpc {
-    Grpc(Box<iota_grpc_client::Client>),
-    RestApi(iota_rest_api::Client),
-}
-
-impl FullnodeRpc {
-    /// Creates a new instance of `FullnodeRpc`.
-    ///
-    /// Under the hood it first tries to establish a gRPC connection to the
-    /// fullnode. If successful, it returns a [`FullnodeRpc::Grpc`] variant.
-    /// If not, it falls back to REST API and returns a [`FullnodeRpc::RestApi`]
-    /// variant.
-    async fn new(fullnode_rpc_url: &str) -> IndexerResult<Self> {
-        let client = match GrpcClient::connect(fullnode_rpc_url)
-            .and_then(|grpc_client| async {
-                // check if we can make gRPC request to client
-                grpc_client.get_service_info(None).await?;
-                Ok(grpc_client)
-            })
-            .await
-        {
-            Ok(grpc_client) => {
-                info!("using fullnode gRPC API");
-                Self::Grpc(Box::new(grpc_client))
-            }
-            // fallback to JSON RPC if gRPC fails
-            Err(e) => {
-                debug!("unable to establish a gRPC connection to fullnode: {e}");
-                info!("using fullnode REST API");
-                Self::RestApi(iota_rest_api::Client::new(fullnode_rpc_url))
-            }
-        };
-        Ok(client)
-    }
-
-    /// Executes a transaction on the fullnode through either gRPC or JSON RPC.
-    async fn execute_transaction(&self, transaction: &Transaction) -> IndexerResult<Response> {
-        match self {
-            FullnodeRpc::Grpc(ref client) => {
-                let readmask = FieldMask::from_paths(EXECUTE_TRANSACTION_READ_MASK)
-                    .display()
-                    .to_string();
-
-                client
-                    .execute_transaction(transaction.clone().try_into()?, Some(readmask.as_str()))
-                    .await
-                    .map(|response| Response::Grpc(Box::new(response)))
-                    .map_err(IndexerError::from)
-            }
-            FullnodeRpc::RestApi(ref client) => client
-                .execute_transaction(
-                    &ExecuteTransactionQueryParameters {
-                        events: true,
-                        balance_changes: false,
-                        input_objects: true,
-                        output_objects: true,
-                    },
-                    transaction,
-                )
-                .await
-                .map(|response| Response::RestApi(Box::new(response)))
-                .map_err(|e| IndexerError::Generic(e.to_string())),
-        }
-    }
-}
-
-#[derive(Debug)]
-pub(crate) enum Response {
-    Grpc(Box<ExecutedTransaction>),
-    RestApi(Box<TransactionExecutionResponse>),
-}
-
-impl Response {
-    /// Returns the transaction digest from either gRPC or JSON RPC response.
-    fn tx_digest(&self) -> IndexerResult<TransactionDigest> {
-        let digest = match self {
-            Response::Grpc(ref t) => {
-                *TransactionEffects::try_from(t.effects()?.effects()?)?.transaction_digest()
-            }
-            Response::RestApi(ref t) => *t.effects.transaction_digest(),
-        };
-        Ok(digest)
-    }
-
-    /// Extracts the necessary data from either gRPC or JSON RPC execute
-    /// transaction response.
-    fn extract(self) -> IndexerResult<ExtractedFromTransaction> {
-        let values = match self {
-            Self::Grpc(execution_response) => {
-                // The methods check for fields being Some. Based on the provided read mask,
-                // all fields should be Some, the only exception should be `checkpoint` &
-                // `timestamp` fields which are always None.
-                let effects = execution_response.effects()?.effects()?.try_into()?;
-                let events = TransactionEvents::try_from(execution_response.events()?.events()?)?;
-                let input_objects = convert_objects(execution_response.input_objects()?)?;
-                let output_objects = convert_objects(execution_response.output_objects()?)?;
-                (
-                    effects,
-                    Some(events),
-                    Some(input_objects),
-                    Some(output_objects),
-                )
-            }
-            Self::RestApi(tx_execution_response) => {
-                let TransactionExecutionResponse {
-                    effects,
-                    events,
-                    input_objects,
-                    output_objects,
-                    ..
-                } = *tx_execution_response;
-                (effects, events, input_objects, output_objects)
-            }
-        };
-        Ok(values)
-    }
-}
-
 #[derive(Clone)]
 pub struct OptimisticTransactionExecutor {
-    rpc_client: FullnodeRpc,
+    rpc_client: GrpcClient,
     pub(crate) read: IndexerReader,
     store: PgIndexerStore,
     metrics: IndexerMetrics,
@@ -210,14 +71,13 @@ pub struct OptimisticTransactionExecutor {
 
 impl OptimisticTransactionExecutor {
     pub async fn new(
-        rpc_client_url: &str,
+        fullnode_grpc_client: GrpcClient,
         read: IndexerReader,
         store: PgIndexerStore,
         metrics: IndexerMetrics,
     ) -> IndexerResult<Self> {
-        let rpc_client = FullnodeRpc::new(rpc_client_url).await?;
         Ok(Self {
-            rpc_client,
+            rpc_client: fullnode_grpc_client,
             read,
             store,
             metrics,
@@ -273,18 +133,17 @@ impl OptimisticTransactionExecutor {
     pub(crate) async fn maybe_index_executed_transaction(
         &self,
         transaction: Transaction,
-        response: Response,
+        executed_transaction: ExecutedTransaction,
     ) -> Result<(), IndexerError> {
-        let (effects, events, input_objects, output_objects) = response.extract()?;
+        // The methods check for fields being Some. Based on the provided read mask,
+        // all fields should be Some, the only exception should be `checkpoint` &
+        // `timestamp` fields which are always None.
+        let effects = executed_transaction.effects()?.effects()?.try_into()?;
+        let events = TransactionEvents::try_from(executed_transaction.events()?.events()?)?;
+        let input_objects = grpc_conversion::objects(executed_transaction.input_objects()?)?;
+        let output_objects = grpc_conversion::objects(executed_transaction.output_objects()?)?;
 
         let tx_digest = transaction.digest();
-        let (Some(input_objects), Some(output_objects)) = (input_objects, output_objects) else {
-            tracing::warn!(
-                "cannot optimistically index because of missing in/out objs for tx: {tx_digest}"
-            );
-            self.metrics.optimistic_tx_with_missing_objects_counts.inc();
-            return Ok(());
-        };
 
         if input_objects.is_empty() || output_objects.is_empty() {
             tracing::warn!(
@@ -316,7 +175,7 @@ impl OptimisticTransactionExecutor {
         let full_tx_data = CheckpointTransaction {
             transaction,
             effects,
-            events,
+            events: Some(events),
             input_objects,
             output_objects,
         };
@@ -364,9 +223,16 @@ impl OptimisticTransactionExecutor {
             .optimistic_tx_node_response_wait_time
             .start_timer();
 
-        let response = self.rpc_client.execute_transaction(&transaction).await;
+        let readmask = FieldMask::from_paths(EXECUTE_TRANSACTION_READ_MASK)
+            .display()
+            .to_string();
 
-        let response = match response {
+        let response = self
+            .rpc_client
+            .execute_transaction(transaction.clone().try_into()?, Some(readmask.as_str()))
+            .await;
+
+        let executed_transaction = match response {
             Ok(response) => {
                 node_timer.stop_and_record();
                 response
@@ -374,13 +240,14 @@ impl OptimisticTransactionExecutor {
             Err(e) => {
                 node_timer.stop_and_discard();
                 self.metrics.optimistic_tx_failed_node_requests_count.inc();
-                return Err(e);
+                return Err(IndexerError::from(e));
             }
         };
 
-        let tx_digest = response.tx_digest()?;
+        let tx_digest = *TransactionEffects::try_from(executed_transaction.effects()?.effects()?)?
+            .transaction_digest();
 
-        self.maybe_index_executed_transaction(transaction, response)
+        self.maybe_index_executed_transaction(transaction, executed_transaction)
             .await?;
 
         let db_read_timer = self
@@ -630,13 +497,4 @@ impl<'a> TransactionExtractor<'a> {
 
         Ok((optimistic_tx, indexed_displays, object_changes))
     }
-}
-
-/// Converts [`GrpcObjects`] into [`Vec<Object>`]
-fn convert_objects(objects: &GrpcObjects) -> IndexerResult<Vec<Object>> {
-    objects
-        .objects
-        .iter()
-        .map(|o| -> IndexerResult<_> { Ok(Object::try_from(o.object()?)?) })
-        .collect()
 }

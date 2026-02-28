@@ -39,7 +39,6 @@ use iota_types::{
 use itertools::Itertools;
 use jsonrpsee::http_client::HttpClient;
 use move_core_types::{identifier::IdentStr, language_storage::StructTag};
-use test_cluster::TestCluster;
 
 use crate::{
     coin_api::execute_move_call,
@@ -72,78 +71,6 @@ async fn prepare_and_sign_object_transfer_tx(
     signed_transaction.to_tx_bytes_and_signatures()
 }
 
-async fn execute_transansaction(cluster: &TestCluster, client: &HttpClient) {
-    let (sender, key_pair): (_, AccountKeyPair) = get_key_pair();
-    let (receiver, _): (_, AccountKeyPair) = get_key_pair();
-
-    let gas_ref = cluster
-        .fund_address_and_return_gas(
-            cluster.get_reference_gas_price().await,
-            Some(NANOS_PER_IOTA),
-            sender,
-        )
-        .await;
-    indexer_wait_for_object(client, gas_ref.0, gas_ref.1).await;
-
-    let object_to_transfer = cluster
-        .fund_address_and_return_gas(
-            cluster.get_reference_gas_price().await,
-            Some(NANOS_PER_IOTA),
-            sender,
-        )
-        .await;
-    indexer_wait_for_object(client, object_to_transfer.0, object_to_transfer.1).await;
-
-    let object_to_transfer_id = object_to_transfer.0;
-
-    let (tx_bytes, signatures) = prepare_and_sign_object_transfer_tx(
-        sender,
-        key_pair,
-        receiver,
-        object_to_transfer,
-        gas_ref,
-    )
-    .await;
-
-    let indexer_tx_response = client
-        .execute_transaction_block(
-            tx_bytes,
-            signatures,
-            Some(IotaTransactionBlockResponseOptions::new().with_effects()),
-            Some(ExecuteTransactionRequestType::WaitForLocalExecution),
-        )
-        .await
-        .unwrap();
-    assert_eq!(indexer_tx_response.status_ok(), Some(true));
-
-    let (seq_num, owner) = indexer_tx_response
-        .effects
-        .unwrap()
-        .mutated()
-        .iter()
-        .find_map(|obj| {
-            (obj.reference.object_id == object_to_transfer_id)
-                .then_some((obj.reference.version, obj.owner))
-        })
-        .unwrap();
-
-    assert_eq!(owner, Owner::AddressOwner(receiver));
-
-    let actual_object_info = client
-        .get_object(
-            object_to_transfer_id,
-            Some(IotaObjectDataOptions::new().with_owner()),
-        )
-        .await
-        .unwrap();
-
-    assert_eq!(actual_object_info.data.as_ref().unwrap().version, seq_num);
-    assert_eq!(
-        actual_object_info.data.unwrap().owner.unwrap(),
-        Owner::AddressOwner(receiver)
-    );
-}
-
 #[test]
 fn dry_run_transaction_block() {
     let ApiTestSetup {
@@ -155,7 +82,6 @@ fn dry_run_transaction_block() {
 
     runtime.block_on(async {
         indexer_wait_for_checkpoint(store, 1).await;
-
         let (sender, key_pair): (_, AccountKeyPair) = get_key_pair();
         let (receiver, _): (_, AccountKeyPair) = get_key_pair();
 
@@ -198,7 +124,10 @@ fn dry_run_transaction_block() {
                 Some(
                     IotaTransactionBlockResponseOptions::new()
                         .with_effects()
-                        .with_object_changes(),
+                        .with_object_changes()
+                        .with_balance_changes()
+                        .with_events()
+                        .with_input(),
                 ),
                 Some(ExecuteTransactionRequestType::WaitForLocalExecution),
             )
@@ -209,18 +138,32 @@ fn dry_run_transaction_block() {
             *indexer_tx_response.effects.as_ref().unwrap().status(),
             IotaExecutionStatus::Success
         );
-
-        assert_eq!(
-            indexer_tx_response.object_changes.unwrap(),
-            dry_run_tx_block_resp.object_changes
-        );
-
         assert!(
             dry_run_tx_block_resp
                 .effects
                 .mutated()
                 .iter()
                 .any(|obj| obj.reference.object_id == object_to_transfer.0)
+        );
+
+        assert_eq!(
+            indexer_tx_response.object_changes.unwrap(),
+            dry_run_tx_block_resp.object_changes
+        );
+
+        assert_eq!(
+            indexer_tx_response.balance_changes.unwrap(),
+            dry_run_tx_block_resp.balance_changes
+        );
+
+        assert_eq!(
+            indexer_tx_response.events.unwrap(),
+            dry_run_tx_block_resp.events
+        );
+
+        assert_eq!(
+            indexer_tx_response.transaction.unwrap().data,
+            dry_run_tx_block_resp.input
         );
     });
 }
@@ -330,7 +273,75 @@ fn execute_transaction_block() {
 
     runtime.block_on(async {
         indexer_wait_for_checkpoint(store, 1).await;
-        execute_transansaction(cluster, client).await
+        let (sender, key_pair): (_, AccountKeyPair) = get_key_pair();
+        let (receiver, _): (_, AccountKeyPair) = get_key_pair();
+
+        let gas_ref = cluster
+            .fund_address_and_return_gas(
+                cluster.get_reference_gas_price().await,
+                Some(NANOS_PER_IOTA),
+                sender,
+            )
+            .await;
+        indexer_wait_for_object(client, gas_ref.0, gas_ref.1).await;
+
+        let object_to_transfer = cluster
+            .fund_address_and_return_gas(
+                cluster.get_reference_gas_price().await,
+                Some(NANOS_PER_IOTA),
+                sender,
+            )
+            .await;
+        indexer_wait_for_object(client, object_to_transfer.0, object_to_transfer.1).await;
+
+        let object_to_transfer_id = object_to_transfer.0;
+
+        let (tx_bytes, signatures) = prepare_and_sign_object_transfer_tx(
+            sender,
+            key_pair,
+            receiver,
+            object_to_transfer,
+            gas_ref,
+        )
+        .await;
+
+        let indexer_tx_response = client
+            .execute_transaction_block(
+                tx_bytes,
+                signatures,
+                Some(IotaTransactionBlockResponseOptions::new().with_effects()),
+                Some(ExecuteTransactionRequestType::WaitForLocalExecution),
+            )
+            .await
+            .unwrap();
+        assert_eq!(indexer_tx_response.status_ok(), Some(true));
+
+        let (seq_num, owner) = indexer_tx_response
+            .effects
+            .unwrap()
+            .mutated()
+            .iter()
+            .find_map(|obj| {
+                (obj.reference.object_id == object_to_transfer_id)
+                    .then_some((obj.reference.version, obj.owner))
+            })
+            .unwrap();
+
+        assert_eq!(owner, Owner::AddressOwner(receiver));
+
+        let actual_object_info = client
+            .get_object(
+                object_to_transfer_id,
+                Some(IotaObjectDataOptions::new().with_owner()),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(actual_object_info.data.as_ref().unwrap().version, seq_num);
+        assert_eq!(
+            actual_object_info.data.unwrap().owner.unwrap(),
+            Owner::AddressOwner(receiver)
+        );
     });
 }
 
@@ -1415,23 +1426,5 @@ fn clever_errors() {
             panic!("transaction should have failed");
         };
         assert_eq!(error, &expected_error);
-    });
-}
-
-#[test]
-fn execute_transaction_block_grpc_api() {
-    let ApiTestSetup { runtime, .. } = ApiTestSetup::get_or_init();
-    runtime.block_on(async move {
-        let (cluster, store, client) = &start_test_cluster_with_read_write_indexer(
-            "indexer_grpc_execute_transaction",
-            Some(Box::new(move |builder| {
-                builder.with_fullnode_enable_grpc_api(true)
-            })),
-            None,
-        )
-        .await;
-
-        indexer_wait_for_checkpoint(store, 1).await;
-        execute_transansaction(cluster, client).await
     });
 }

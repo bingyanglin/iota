@@ -746,3 +746,20 @@ impl From<IotaTransactionBlockResponseWithOptions> for IotaTransactionBlockRespo
         }
     }
 }
+
+/// Provides conversion methods from gRPC types to iota core types.
+pub(crate) mod grpc_conversion {
+    use iota_grpc_types::v0::object::Objects as GrpcObjects;
+    use iota_types::object::Object;
+
+    use crate::types::IndexerResult;
+
+    /// Converts [`GrpcObjects`] into [`Vec<Object>`]
+    pub(crate) fn objects(objects: &GrpcObjects) -> IndexerResult<Vec<Object>> {
+        objects
+            .objects
+            .iter()
+            .map(|o| -> IndexerResult<_> { Ok(Object::try_from(o.object()?)?) })
+            .collect()
+    }
+}

@@ -2524,20 +2524,16 @@ fn find_transaction_for_create_and_wrap_same_ptb() -> Result<(), anyhow::Error> 
 
 #[test]
 fn is_transaction_not_present() {
-    let ApiTestSetup { runtime, .. } = ApiTestSetup::get_or_init();
+    let ApiTestSetup {
+        runtime,
+        store,
+        client,
+        ..
+    } = ApiTestSetup::get_or_init();
 
     runtime.block_on(async {
         let rng = StdRng::from_seed([1; 32]);
         let digest = TransactionDigest::generate(rng);
-
-        let (_, store, client) = &start_test_cluster_with_read_write_indexer(
-            "indexer_grpc_is_transaction_not_present",
-            Some(Box::new(move |builder| {
-                builder.with_fullnode_enable_grpc_api(true)
-            })),
-            None,
-        )
-        .await;
 
         indexer_wait_for_checkpoint(store, 1).await;
 
@@ -2547,18 +2543,14 @@ fn is_transaction_not_present() {
 
 #[test]
 fn is_transaction_present() {
-    let ApiTestSetup { runtime, .. } = ApiTestSetup::get_or_init();
+    let ApiTestSetup {
+        runtime,
+        cluster,
+        store,
+        client,
+    } = ApiTestSetup::get_or_init();
 
     runtime.block_on(async {
-        let (cluster, store, client) = &start_test_cluster_with_read_write_indexer(
-            "indexer_grpc_is_transaction_present",
-            Some(Box::new(move |builder| {
-                builder.with_fullnode_enable_grpc_api(true)
-            })),
-            None,
-        )
-        .await;
-
         indexer_wait_for_checkpoint(store, 1).await;
 
         let address = cluster.get_address_2();
