@@ -298,19 +298,22 @@ pub async fn sync_and_verify_checkpoints(config: &Config) -> anyhow::Result<()> 
         } else {
             info!("Downloading missing summaries from full node.");
 
-            // Download summaries from the full node
-            let client = iota_rest_api::Client::new(&config.rpc_url);
+            // Download summaries from the full node via gRPC
+            let client = iota_grpc_client::Client::connect(config.grpc_url().as_str())
+                .await
+                .context("Failed to connect to gRPC server")?;
 
             // Download all missing checkpoints
             for seq in missing {
                 info!("Downloading summary: {seq}");
 
-                let summary = client
-                    .get_checkpoint_summary(seq)
+                let response = client
+                    .get_checkpoint_by_sequence_number(seq, Some("checkpoint"), None, None)
                     .await
                     .context(format!("Failed to download checkpoint summary '{seq}'"))?;
-
-                write_checkpoint_summary(config, &summary)?;
+                let checkpoint_data: iota_types::full_checkpoint_content::CheckpointData =
+                    response.checkpoint_data()?.try_into()?;
+                write_checkpoint_summary(config, &checkpoint_data.checkpoint_summary)?;
             }
         }
     }
@@ -551,6 +554,7 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let config = Config {
             rpc_url: "http://localhost:9000".parse().unwrap(),
+            grpc_url: None,
             graphql_url: None,
             checkpoints_dir: temp_dir.path().to_path_buf(),
             sync_before_check: false,

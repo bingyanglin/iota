@@ -34,7 +34,6 @@ use iota_types::{
     effects::{TransactionEffects, TransactionEffectsAPI},
     executable_transaction::VerifiedExecutableTransaction,
     full_checkpoint_content::CheckpointData,
-    inner_temporary_store::PackageStoreWithFallback,
     message_envelope::Message,
     messages_checkpoint::{CheckpointContents, CheckpointSequenceNumber, VerifiedCheckpoint},
     transaction::{TransactionDataAPI, TransactionKind, VerifiedTransaction},
@@ -447,7 +446,7 @@ impl CheckpointExecutor {
     }
 
     fn checkpoint_data_enabled(&self) -> bool {
-        self.state.rest_index.is_some() || self.config.data_ingestion_dir.is_some()
+        self.state.node_index.is_some() || self.config.data_ingestion_dir.is_some()
     }
 
     fn process_checkpoint_data(
@@ -465,25 +464,16 @@ impl CheckpointExecutor {
         )
         .expect("failed to load checkpoint data");
 
-        if self.state.rest_index.is_some() || self.config.data_ingestion_dir.is_some() {
-            // Index the checkpoint. this is done out of order and is not written and
-            // committed to the DB until later (committing must be done
-            // in-order)
-            if let Some(rest_index) = &self.state.rest_index {
-                let mut layout_resolver = self.epoch_store.executor().type_layout_resolver(
-                    Box::new(PackageStoreWithFallback::new(
-                        self.state.get_backing_package_store(),
-                        &checkpoint_data,
-                    )),
-                );
+        // Index the checkpoint. this is done out of order and is not written and
+        // committed to the DB until later (committing must be done
+        // in-order)
+        if let Some(node_index) = &self.state.node_index {
+            node_index.index_checkpoint(&checkpoint_data);
+        }
 
-                rest_index.index_checkpoint(&checkpoint_data, layout_resolver.as_mut());
-            }
-
-            if let Some(path) = &self.config.data_ingestion_dir {
-                store_checkpoint_locally(path, &checkpoint_data)
-                    .expect("failed to store checkpoint locally");
-            }
+        if let Some(path) = &self.config.data_ingestion_dir {
+            store_checkpoint_locally(path, &checkpoint_data)
+                .expect("failed to store checkpoint locally");
         }
 
         Some(checkpoint_data)
@@ -798,10 +788,10 @@ impl CheckpointExecutor {
     /// If configured, commit the pending index updates for the provided
     /// checkpoint
     fn commit_index_updates(&self, checkpoint: CheckpointData) {
-        if let Some(rest_index) = &self.state.rest_index {
-            rest_index
+        if let Some(node_index) = &self.state.node_index {
+            node_index
                 .commit_update_for_checkpoint(checkpoint.checkpoint_summary.sequence_number)
-                .expect("failed to update rest_indexes");
+                .expect("failed to update node indexes");
         }
     }
 

@@ -171,8 +171,8 @@ use crate::{
     jsonrpc_index::{CoinInfo, IndexStore, ObjectIndexChanges},
     metrics::{LatencyObserver, RateTracker},
     module_cache_metrics::ResolverMetrics,
+    node_index::NodeIndexStore,
     overload_monitor::{AuthorityOverloadInfo, overload_monitor_accept_tx},
-    rest_index::RestIndexStore,
     stake_aggregator::StakeAggregator,
     state_accumulator::{AccumulatorStore, StateAccumulator},
     subscription_handler::SubscriptionHandler,
@@ -796,7 +796,7 @@ pub struct AuthorityState {
     execution_lock: RwLock<EpochId>,
 
     pub indexes: Option<Arc<IndexStore>>,
-    pub rest_index: Option<Arc<RestIndexStore>>,
+    pub node_index: Option<Arc<NodeIndexStore>>,
 
     pub subscription_handler: Arc<SubscriptionHandler>,
     pub checkpoint_store: Arc<CheckpointStore>,
@@ -2980,7 +2980,7 @@ impl AuthorityState {
         epoch_store: Arc<AuthorityPerEpochStore>,
         committee_store: Arc<CommitteeStore>,
         indexes: Option<Arc<IndexStore>>,
-        rest_index: Option<Arc<RestIndexStore>>,
+        node_index: Option<Arc<NodeIndexStore>>,
         checkpoint_store: Arc<CheckpointStore>,
         prometheus_registry: &Registry,
         genesis_objects: &[Object],
@@ -3013,7 +3013,7 @@ impl AuthorityState {
         let _pruner = AuthorityStorePruner::new(
             store.perpetual_tables.clone(),
             checkpoint_store.clone(),
-            rest_index.clone(),
+            node_index.clone(),
             indexes.clone(),
             config.authority_store_pruning_config.clone(),
             epoch_store.committee().authority_exists(&name),
@@ -3034,7 +3034,7 @@ impl AuthorityState {
             input_loader,
             execution_cache_trait_pointers,
             indexes,
-            rest_index,
+            node_index,
             subscription_handler: Arc::new(SubscriptionHandler::new(prometheus_registry)),
             checkpoint_store,
             committee_store,
@@ -3128,7 +3128,7 @@ impl AuthorityState {
         AuthorityStorePruner::prune_checkpoints_for_eligible_epochs(
             &self.database_for_testing().perpetual_tables,
             &self.checkpoint_store,
-            self.rest_index.as_deref(),
+            self.node_index.as_deref(),
             None,
             config.authority_store_pruning_config,
             metrics,
@@ -3543,8 +3543,13 @@ impl AuthorityState {
             if let Some(indexes) = self.indexes.as_ref() {
                 indexes.checkpoint_db(&checkpoint_path_tmp.join("indexes"))?;
             }
-            if let Some(rest_index) = self.rest_index.as_ref() {
-                rest_index.checkpoint_db(&checkpoint_path_tmp.join("grpc_indexes"))?;
+            if let Some(node_index) = self.node_index.as_ref() {
+                // Snapshot directory name "grpc_indexes" is a legacy name that
+                // is already deployed in production snapshots and cannot be
+                // changed without a snapshot format migration. On disk the DB
+                // lives under NODE_INDEX_DIR ("rest_index"); see iota-tool for
+                // the rename step that runs after snapshot download.
+                node_index.checkpoint_db(&checkpoint_path_tmp.join("grpc_indexes"))?;
             }
         }
 

@@ -93,6 +93,10 @@ pub async fn get_verified_object(config: &Config, object_id: ObjectID) -> Result
     Ok(object)
 }
 
+// TODO: Consider accepting pre-built clients (IotaClient /
+// iota_grpc_client::Client) as parameters instead of constructing new ones on
+// every call, to avoid redundant TCP connections when callers invoke this
+// function repeatedly (e.g. from `get_verified_object`).
 pub async fn get_verified_effects_and_events(
     config: &Config,
     transaction_digest: TransactionDigest,
@@ -122,9 +126,16 @@ pub async fn get_verified_effects_and_events(
             .await
             .context("Cannot get full checkpoint")?
     } else {
-        // try REST API (for custom networks)
-        let client = iota_rest_api::Client::new(&config.rpc_url);
-        client.get_full_checkpoint(seq).await?
+        // use gRPC API (for custom networks)
+        let client = iota_grpc_client::Client::connect(config.grpc_url().as_str()).await?;
+        client
+            .get_checkpoint_by_sequence_number(seq, Some("checkpoint,transactions"), None, None)
+            .await
+            .context(format!("gRPC call failed for checkpoint {seq}"))?
+            .checkpoint_data()
+            .context(format!("Failed to parse checkpoint data for {seq}"))?
+            .try_into()
+            .context(format!("Failed to convert checkpoint types for {seq}"))?
     };
 
     // Load the list of stored checkpoints

@@ -113,7 +113,7 @@ impl SimulacrumTestSetup {
 
             let db_name = format!("simulacrum_env_db_{unique_env_name}");
             let (_, store, _, client) =
-                runtime.block_on(start_simulacrum_rest_api_with_read_write_indexer(
+                runtime.block_on(start_simulacrum_grpc_with_read_write_indexer(
                     sim.clone(),
                     data_ingestion_path,
                     Some(&db_name),
@@ -418,9 +418,9 @@ pub fn rpc_call_error_msg_matches<T>(
     })
 }
 
-/// Set up a test indexer fetching from a REST endpoint served by the given
+/// Set up a test indexer fetching from a gRPC endpoint served by the given
 /// Simulacrum.
-pub async fn start_simulacrum_rest_api_with_write_indexer(
+pub async fn start_simulacrum_grpc_with_write_indexer(
     sim: Arc<Simulacrum>,
     data_ingestion_path: PathBuf,
     server_url: Option<SocketAddr>,
@@ -433,9 +433,20 @@ pub async fn start_simulacrum_rest_api_with_write_indexer(
 ) {
     let server_url = server_url.unwrap_or_else(new_local_tcp_socket_for_testing);
     let server_handle = tokio::spawn(async move {
-        iota_rest_api::RestService::new_without_version(sim)
-            .start_service(server_url)
-            .await;
+        let grpc_config = iota_config::node::GrpcApiConfig {
+            address: server_url,
+            ..Default::default()
+        };
+        simulacrum::grpc::start_simulacrum_grpc_server(
+            sim,
+            grpc_config,
+            tokio_util::sync::CancellationToken::new(),
+        )
+        .await
+        .expect("gRPC server failed to start")
+        .server_handle
+        .await
+        .ok();
     });
     // Starts indexer
     let (pg_store, pg_handle, _) = start_test_indexer(
@@ -456,7 +467,7 @@ pub async fn start_simulacrum_rest_api_with_write_indexer(
     (server_handle, pg_store, pg_handle)
 }
 
-pub async fn start_simulacrum_rest_api_with_read_write_indexer(
+pub async fn start_simulacrum_grpc_with_read_write_indexer(
     sim: Arc<Simulacrum>,
     data_ingestion_path: PathBuf,
     database_name: Option<&str>,
@@ -467,7 +478,7 @@ pub async fn start_simulacrum_rest_api_with_read_write_indexer(
     HttpClient,
 ) {
     let simulacrum_server_url = new_local_tcp_socket_for_testing();
-    let (server_handle, pg_store, pg_handle) = start_simulacrum_rest_api_with_write_indexer(
+    let (server_handle, pg_store, pg_handle) = start_simulacrum_grpc_with_write_indexer(
         sim,
         data_ingestion_path.clone(),
         Some(simulacrum_server_url),

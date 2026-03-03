@@ -22,6 +22,4 @@ pub use ledger_service::LedgerGrpcService;
 pub use response::append_info_headers;
 pub use server::{GrpcServerHandle, start_grpc_server};
 pub use transaction_execution_service::TransactionExecutionGrpcService;
-pub use types::{
-    GrpcCheckpointDataBroadcaster, GrpcReader, GrpcStateReader, RestStateReaderAdapter,
-};
+pub use types::{GrpcCheckpointDataBroadcaster, GrpcReader};

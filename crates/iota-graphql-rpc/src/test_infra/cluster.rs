@@ -12,11 +12,9 @@ use iota_indexer::{
     store::{PgIndexerStore, indexer_store::IndexerStore},
     test_utils::{IndexerTypeConfig, force_delete_database, start_test_indexer_impl},
 };
+use iota_node_storage::NodeStateReader;
 use iota_swarm_config::genesis_config::{AccountConfig, DEFAULT_GAS_AMOUNT};
-use iota_types::{
-    storage::RestStateReader,
-    transaction::{Transaction, TransactionData},
-};
+use iota_types::transaction::{Transaction, TransactionData};
 use test_cluster::{TestCluster, TestClusterBuilder};
 use tokio::{join, task::JoinHandle};
 use tokio_util::sync::CancellationToken;
@@ -120,7 +118,7 @@ pub async fn start_cluster(
 pub async fn serve_executor(
     graphql_connection_config: ConnectionConfig,
     internal_data_source_rpc_port: u16,
-    executor: Arc<dyn RestStateReader + Send + Sync>,
+    executor: Arc<dyn NodeStateReader + Send + Sync>,
     snapshot_config: Option<SnapshotLagConfig>,
     epochs_to_keep: Option<u64>,
     data_ingestion_path: PathBuf,
@@ -136,10 +134,30 @@ pub async fn serve_executor(
 
     info!("Starting executor server on {}", executor_server_url);
 
+    let chain_id = executor
+        .get_chain_identifier()
+        .expect("chain identifier should be set");
+    let grpc_reader = Arc::new(iota_grpc_server::GrpcReader::new(executor, None));
+    let grpc_cancellation_token = cancellation_token.child_token();
     let executor_server_handle = tokio::spawn(async move {
-        iota_rest_api::RestService::new_without_version(executor)
-            .start_service(executor_server_url)
-            .await;
+        let grpc_config = iota_config::node::GrpcApiConfig {
+            address: executor_server_url,
+            ..Default::default()
+        };
+        match iota_grpc_server::start_grpc_server(
+            grpc_reader,
+            None,
+            grpc_config,
+            grpc_cancellation_token,
+            chain_id,
+        )
+        .await
+        {
+            Ok(handle) => {
+                handle.server_handle.await.ok();
+            }
+            Err(e) => panic!("failed to start gRPC server: {e}"),
+        }
     });
 
     info!("spawned executor server");

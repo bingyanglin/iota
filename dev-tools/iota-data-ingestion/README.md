@@ -28,8 +28,8 @@ An example of `config.yaml` for the Blob worker:
 # IndexerExecutor config
 #
 path: "./test-checkpoints"
-# IOTA Node Rest API URL
-remote-store-url: "http://localhost:9000/api/v1"
+# Remote object store URL (or gRPC URL for hybrid mode, see v2 reader)
+remote-store-url: "https://checkpoints.example.com"
 
 # Path to the progress store JSON file.
 #
@@ -82,7 +82,7 @@ tasks:
       # Minimum allowed chunk size is 5MB
       #
       checkpoint-chunk-size-mb: 100
-      node-rest-api-url: "http://localhost:9000/api/v1"
+      node-grpc-url: "http://localhost:50051"
 ```
 
 ## Usage

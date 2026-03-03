@@ -1,0 +1,69 @@
+// Copyright (c) 2026 IOTA Stiftung
+// SPDX-License-Identifier: Apache-2.0
+
+//! Full-node-specific storage traits.
+//!
+//! This crate defines the [`NodeStateReader`] and [`NodeIndexes`] traits, which
+//! extend the core [`ObjectStore`] and [`ReadStore`] interfaces from
+//! `iota-types` with queries that are only available on full nodes (e.g. epoch
+//! info, transaction-to-checkpoint mapping, type layout resolution).
+//!
+//! These traits live in a dedicated lightweight crate so that:
+//! - `iota-core` can implement them without depending on `iota-grpc-server`
+//! - `iota-grpc-server` can consume them without depending on `iota-core`
+//! - `simulacrum` and other test harnesses can implement them freely
+
+use iota_types::{
+    base_types::EpochId,
+    digests::{ChainIdentifier, TransactionDigest},
+    messages_checkpoint::{CheckpointSequenceNumber, VerifiedCheckpoint},
+    storage::{EpochInfo, ObjectStore, ReadStore, TransactionInfo, error::Result},
+};
+use move_core_types::{
+    annotated_value::MoveTypeLayout,
+    language_storage::{StructTag, TypeTag},
+};
+
+/// Trait extending [`ReadStore`] with full-node-specific queries that may
+/// require richer databases or indexes to support.
+pub trait NodeStateReader: ObjectStore + ReadStore + Send + Sync {
+    /// Lowest available checkpoint for which object data can be requested.
+    ///
+    /// Specifically this is the lowest checkpoint for which input/output object
+    /// data will be available.
+    fn get_lowest_available_checkpoint_objects(&self) -> Result<CheckpointSequenceNumber>;
+
+    fn get_chain_identifier(&self) -> Result<ChainIdentifier>;
+
+    fn get_epoch_last_checkpoint(&self, epoch_id: EpochId) -> Result<Option<VerifiedCheckpoint>>;
+
+    /// Get a handle to an instance of the node indexes.
+    fn indexes(&self) -> Option<&dyn NodeIndexes>;
+
+    fn get_type_layout(&self, type_tag: &TypeTag) -> Result<Option<MoveTypeLayout>> {
+        match type_tag {
+            TypeTag::Bool => Ok(Some(MoveTypeLayout::Bool)),
+            TypeTag::U8 => Ok(Some(MoveTypeLayout::U8)),
+            TypeTag::U64 => Ok(Some(MoveTypeLayout::U64)),
+            TypeTag::U128 => Ok(Some(MoveTypeLayout::U128)),
+            TypeTag::Address => Ok(Some(MoveTypeLayout::Address)),
+            TypeTag::Signer => Ok(Some(MoveTypeLayout::Signer)),
+            TypeTag::Vector(type_tag) => Ok(self
+                .get_type_layout(type_tag)?
+                .map(|layout| MoveTypeLayout::Vector(Box::new(layout)))),
+            TypeTag::Struct(struct_tag) => self.get_struct_layout(struct_tag),
+            TypeTag::U16 => Ok(Some(MoveTypeLayout::U16)),
+            TypeTag::U32 => Ok(Some(MoveTypeLayout::U32)),
+            TypeTag::U256 => Ok(Some(MoveTypeLayout::U256)),
+        }
+    }
+
+    fn get_struct_layout(&self, type_tag: &StructTag) -> Result<Option<MoveTypeLayout>>;
+}
+
+/// Index queries available on full nodes.
+pub trait NodeIndexes: Send + Sync {
+    fn get_epoch_info(&self, epoch: EpochId) -> Result<Option<EpochInfo>>;
+
+    fn get_transaction_info(&self, digest: &TransactionDigest) -> Result<Option<TransactionInfo>>;
+}

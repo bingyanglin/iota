@@ -1093,15 +1093,18 @@ pub async fn download_db_snapshot(
         .into_iter()
         .for_each(|result| result.expect("Task failed"));
 
-    // The rest index is stored under the name "grpc_indexes" in the snapshot but
-    // must live at "rest_index" on disk so that RestIndexStore can open it.
+    // The node index is stored under the name "grpc_indexes" in the snapshot but
+    // must live at NODE_INDEX_DIR ("rest_index") on disk so that NodeIndexStore
+    // can open it. See `iota_core::node_index::NODE_INDEX_DIR` for details on
+    // the legacy directory name.
     let grpc_indexes_dir = path.join(format!("epoch_{epoch}")).join("grpc_indexes");
+    let node_index_dir = iota_core::node_index::NODE_INDEX_DIR;
     if grpc_indexes_dir.exists() {
         fs::rename(
             &grpc_indexes_dir,
-            path.join(format!("epoch_{epoch}")).join("rest_index"),
+            path.join(format!("epoch_{epoch}")).join(node_index_dir),
         )
-        .map_err(|e| anyhow::anyhow!("Failed to rename grpc_indexes to rest_index: {e}"))?;
+        .map_err(|e| anyhow::anyhow!("Failed to rename grpc_indexes to {node_index_dir}: {e}"))?;
     }
 
     let store_dir = path.join("store");

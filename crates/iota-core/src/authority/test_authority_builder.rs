@@ -51,7 +51,7 @@ use crate::{
     jsonrpc_index::IndexStore,
     mock_consensus::{ConsensusMode, MockConsensusClient},
     module_cache_metrics::ResolverMetrics,
-    rest_index::RestIndexStore,
+    node_index::{NODE_INDEX_DIR, NodeIndexStore},
     signature_verifier::SignatureVerifierMetrics,
 };
 
@@ -342,16 +342,14 @@ impl<'a> TestAuthorityBuilder<'a> {
                     .max_move_identifier_len_as_option(),
             )))
         };
-        let rest_index = if self.disable_indexer {
+        let node_index = if self.disable_indexer {
             None
         } else {
             Some(Arc::new(
-                RestIndexStore::new(
-                    path.join("rest_index"),
+                NodeIndexStore::new(
+                    path.join(NODE_INDEX_DIR),
                     &authority_store,
                     &checkpoint_store,
-                    &epoch_store,
-                    &cache_traits.backing_package_store,
                 )
                 .await,
             ))
@@ -378,7 +376,7 @@ impl<'a> TestAuthorityBuilder<'a> {
             epoch_store.clone(),
             committee_store,
             index_store,
-            rest_index,
+            node_index,
             checkpoint_store,
             &registry,
             genesis.objects(),

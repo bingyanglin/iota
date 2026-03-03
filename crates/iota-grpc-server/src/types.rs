@@ -14,9 +14,10 @@ use iota_grpc_types::{
         transaction as grpc_transaction,
     },
 };
+use iota_node_storage::NodeStateReader;
 use iota_types::{
     base_types::{ObjectID, VersionNumber},
-    digests::{TransactionDigest, TransactionEventsDigest},
+    digests::TransactionDigest,
     effects::{TransactionEffects, TransactionEffectsAPI, TransactionEvents},
     full_checkpoint_content::{
         CheckpointData as IotaTypesCheckpointData,
@@ -24,8 +25,7 @@ use iota_types::{
     },
     messages_checkpoint::{CertifiedCheckpointSummary, CheckpointContents},
     object::Object,
-    storage::{ObjectStore, ReadStore, RestStateReader, error::Kind},
-    transaction::VerifiedTransaction,
+    storage::error::Kind,
 };
 use prost::Message;
 use tokio::sync::broadcast::{Receiver, Sender, error::RecvError};
@@ -130,338 +130,50 @@ pub type ObjectsStreamResult = Result<grpc_ledger_service::GetObjectsResponse, S
 pub type TransactionsStreamResult = Result<grpc_ledger_service::GetTransactionsResponse, Status>;
 pub type CheckpointStreamResult = Result<grpc_ledger_service::CheckpointData, Status>;
 
-// Storage abstraction traits for gRPC access
-// These traits provide an abstraction layer over the storage backend,
-// making it easier to implement gRPC services with different storage types
-// (e.g., production database vs simulacrum for testing).
-
-/// Trait for reading checkpoint data from storage.
+/// Get the latest checkpoint sequence number from a `NodeStateReader`.
 ///
-/// All methods return `anyhow::Result<Option<T>>` for consistency:
-/// - `Ok(Some(value))`: The item was found
-/// - `Ok(None)`: The item does not exist (expected case)
-/// - `Err(e)`: A storage or other error occurred (unexpected)
-pub trait GrpcStateReader: Send + Sync + 'static {
-    /// Get the chain identifier.
-    /// Returns `Err` on storage errors.
-    fn get_chain_identifier(&self) -> anyhow::Result<iota_types::digests::ChainIdentifier>;
-
-    /// Get the latest checkpoint sequence number.
-    /// Returns `Ok(None)` if no checkpoints exist yet (e.g., during startup).
-    fn get_latest_checkpoint_sequence_number(&self) -> anyhow::Result<Option<u64>>;
-
-    /// Get checkpoint summary by sequence number.
-    /// Returns `Ok(None)` if the checkpoint doesn't exist.
-    fn get_checkpoint_summary(
-        &self,
-        seq: u64,
-    ) -> anyhow::Result<Option<CertifiedCheckpointSummary>>;
-
-    /// Get checkpoint sequence number by digest.
-    /// Returns `Ok(None)` if the checkpoint doesn't exist.
-    fn get_checkpoint_sequence_number_by_digest(
-        &self,
-        digest: &iota_types::digests::CheckpointDigest,
-    ) -> anyhow::Result<Option<u64>>;
-
-    /// Get full checkpoint data by sequence number.
-    /// Returns `Ok(None)` if the checkpoint doesn't exist.
-    fn get_checkpoint_data(&self, seq: u64) -> anyhow::Result<Option<IotaTypesCheckpointData>>;
-
-    /// Get checkpoint summary and contents by sequence number.
-    /// Returns `Ok(None)` if the checkpoint doesn't exist.
-    fn get_checkpoint_summary_and_contents(
-        &self,
-        seq: u64,
-    ) -> anyhow::Result<Option<(CertifiedCheckpointSummary, CheckpointContents)>>;
-
-    /// Stream checkpoint transactions individually to avoid large memory
-    /// footprint. Returns a stream of individual CheckpointTransaction items
-    /// along with metadata.
-    fn stream_checkpoint_transactions(
-        &self,
-        checkpoint_contents: CheckpointContents,
-    ) -> std::pin::Pin<
-        Box<dyn futures::Stream<Item = anyhow::Result<IotaTypesCheckpointTransaction>> + Send + '_>,
-    >;
-
-    /// Get epoch's last checkpoint for epoch boundary calculations.
-    /// Returns `Ok(None)` if the epoch doesn't exist or hasn't ended.
-    fn get_epoch_last_checkpoint(
-        &self,
-        epoch: u64,
-    ) -> anyhow::Result<Option<CertifiedCheckpointSummary>>;
-
-    /// Get the lowest available checkpoint for which checkpoint and transaction
-    /// data are available.
-    fn get_lowest_available_checkpoint(&self) -> anyhow::Result<u64>;
-
-    /// Get the lowest available checkpoint for which object data is available.
-    fn get_lowest_available_checkpoint_objects(&self) -> anyhow::Result<u64>;
-
-    /// Get an object by its ObjectID.
-    /// Returns `Ok(None)` if the object doesn't exist.
-    fn get_object(&self, object_id: &ObjectID) -> anyhow::Result<Option<Object>>;
-
-    /// Get an object by its ObjectID and version.
-    /// Returns `Ok(None)` if the object at that version doesn't exist.
-    fn get_object_by_key(
-        &self,
-        object_id: &ObjectID,
-        version: VersionNumber,
-    ) -> anyhow::Result<Option<Object>>;
-
-    /// Get committee for a specific epoch.
-    /// Returns `Ok(None)` if the epoch doesn't exist.
-    fn get_committee(
-        &self,
-        epoch: u64,
-    ) -> anyhow::Result<Option<Arc<iota_types::committee::Committee>>>;
-
-    /// Get the IOTA system state.
-    /// This loads the system state including its dynamic fields.
-    fn get_system_state(&self) -> anyhow::Result<iota_types::iota_system_state::IotaSystemState>;
-
-    /// Get indexed epoch information.
-    /// Returns `Ok(None)` if the epoch is not found, `Err` on storage errors.
-    fn get_epoch_info(&self, epoch: u64) -> anyhow::Result<Option<iota_types::storage::EpochInfo>>;
-
-    /// Get the Move type layout for a given TypeTag.
-    /// Returns `Ok(None)` if the layout is not available.
-    fn get_type_layout(
-        &self,
-        type_tag: &iota_types::TypeTag,
-    ) -> anyhow::Result<Option<move_core_types::annotated_value::MoveTypeLayout>>;
-
-    /// Get a transaction by its digest.
-    /// Returns `Ok(None)` if the transaction doesn't exist.
-    fn get_transaction(
-        &self,
-        digest: &TransactionDigest,
-    ) -> anyhow::Result<Option<Arc<VerifiedTransaction>>>;
-
-    /// Get transaction effects by digest.
-    /// Returns `Ok(None)` if the effects don't exist.
-    fn get_transaction_effects(
-        &self,
-        digest: &TransactionDigest,
-    ) -> anyhow::Result<Option<TransactionEffects>>;
-
-    /// Get transaction events by event digest.
-    /// Returns `Ok(None)` if the events don't exist.
-    fn get_transaction_events(
-        &self,
-        digest: &TransactionEventsDigest,
-    ) -> anyhow::Result<Option<TransactionEvents>>;
-
-    /// Get checkpoint sequence number for a transaction.
-    /// Returns `Ok(None)` if the transaction is not found, `Err` on storage
-    /// errors.
-    fn get_transaction_checkpoint(&self, digest: &TransactionDigest)
-    -> anyhow::Result<Option<u64>>;
-}
-
-/// Adapter that implements GrpcStateReader for RestStateReader
-pub struct RestStateReaderAdapter {
-    inner: Arc<dyn RestStateReader>,
-}
-
-impl GrpcStateReader for RestStateReaderAdapter {
-    fn get_chain_identifier(&self) -> anyhow::Result<iota_types::digests::ChainIdentifier> {
-        self.inner.get_chain_identifier().map_err(Into::into)
-    }
-
-    fn get_latest_checkpoint_sequence_number(&self) -> anyhow::Result<Option<u64>> {
-        match self.inner.try_get_latest_checkpoint() {
-            Ok(checkpoint) => Ok(Some(*checkpoint.sequence_number())),
-            Err(e) => match e.kind() {
-                // Expected during server initialization when no checkpoints have been executed yet
-                // Return None to indicate service is not ready
-                Kind::Missing => Ok(None),
-                // Unexpected storage errors - propagate instead of panicking
-                _ => Err(anyhow::anyhow!(
-                    "Storage error getting latest checkpoint: {e}"
-                )),
-            },
-        }
-    }
-
-    fn get_checkpoint_summary(
-        &self,
-        seq: u64,
-    ) -> anyhow::Result<Option<CertifiedCheckpointSummary>> {
-        Ok(self
-            .inner
-            .get_checkpoint_by_sequence_number(seq)
-            .map(CertifiedCheckpointSummary::from))
-    }
-
-    fn get_checkpoint_sequence_number_by_digest(
-        &self,
-        digest: &iota_types::digests::CheckpointDigest,
-    ) -> anyhow::Result<Option<u64>> {
-        Ok(self
-            .inner
-            .get_checkpoint_by_digest(digest)
-            .map(|checkpoint| *checkpoint.sequence_number()))
-    }
-
-    fn get_checkpoint_summary_and_contents(
-        &self,
-        seq: u64,
-    ) -> anyhow::Result<Option<(CertifiedCheckpointSummary, CheckpointContents)>> {
-        let Some(summary) = self.inner.get_checkpoint_by_sequence_number(seq) else {
-            return Ok(None);
-        };
-        let Some(contents) = self.inner.get_checkpoint_contents_by_sequence_number(seq) else {
-            return Ok(None);
-        };
-        Ok(Some((CertifiedCheckpointSummary::from(summary), contents)))
-    }
-
-    fn get_checkpoint_data(&self, seq: u64) -> anyhow::Result<Option<IotaTypesCheckpointData>> {
-        let Some(summary) = self.inner.get_checkpoint_by_sequence_number(seq) else {
-            return Ok(None);
-        };
-        let Some(contents) = self.inner.get_checkpoint_contents_by_sequence_number(seq) else {
-            return Ok(None);
-        };
-        Ok(Some(self.inner.get_checkpoint_data(summary, contents)))
-    }
-
-    fn stream_checkpoint_transactions(
-        &self,
-        checkpoint_contents: CheckpointContents,
-    ) -> std::pin::Pin<
-        Box<dyn futures::Stream<Item = anyhow::Result<IotaTypesCheckpointTransaction>> + Send + '_>,
-    > {
-        self.inner
-            .stream_checkpoint_transactions(checkpoint_contents)
-    }
-
-    fn get_epoch_last_checkpoint(
-        &self,
-        epoch: u64,
-    ) -> anyhow::Result<Option<CertifiedCheckpointSummary>> {
-        match self.inner.get_epoch_last_checkpoint(epoch) {
-            Ok(Some(checkpoint)) => Ok(Some(CertifiedCheckpointSummary::from(checkpoint))),
-            Ok(None) => Ok(None),
-            Err(e) => Err(e.into()),
-        }
-    }
-
-    fn get_lowest_available_checkpoint(&self) -> anyhow::Result<u64> {
-        self.inner
-            .try_get_lowest_available_checkpoint()
-            .map_err(Into::into)
-    }
-
-    fn get_lowest_available_checkpoint_objects(&self) -> anyhow::Result<u64> {
-        self.inner
-            .get_lowest_available_checkpoint_objects()
-            .map_err(Into::into)
-    }
-
-    fn get_object(&self, object_id: &ObjectID) -> anyhow::Result<Option<Object>> {
-        Ok(self.inner.get_object(object_id))
-    }
-
-    fn get_object_by_key(
-        &self,
-        object_id: &ObjectID,
-        version: VersionNumber,
-    ) -> anyhow::Result<Option<Object>> {
-        Ok(self.inner.get_object_by_key(object_id, version))
-    }
-
-    fn get_committee(
-        &self,
-        epoch: u64,
-    ) -> anyhow::Result<Option<Arc<iota_types::committee::Committee>>> {
-        self.inner.try_get_committee(epoch).map_err(Into::into)
-    }
-
-    fn get_system_state(&self) -> anyhow::Result<iota_types::iota_system_state::IotaSystemState> {
-        // self.inner is Arc<dyn RestStateReader>
-        // RestStateReader extends ObjectStore, so we can pass it directly
-        iota_types::iota_system_state::get_iota_system_state(self.inner.as_ref())
-            .map_err(Into::into)
-    }
-
-    fn get_epoch_info(&self, epoch: u64) -> anyhow::Result<Option<iota_types::storage::EpochInfo>> {
-        match self.inner.indexes() {
-            Some(indexes) => indexes.get_epoch_info(epoch).map_err(Into::into),
-            None => Ok(None),
-        }
-    }
-
-    fn get_type_layout(
-        &self,
-        type_tag: &iota_types::TypeTag,
-    ) -> anyhow::Result<Option<move_core_types::annotated_value::MoveTypeLayout>> {
-        self.inner.get_type_layout(type_tag).map_err(Into::into)
-    }
-
-    fn get_transaction(
-        &self,
-        digest: &TransactionDigest,
-    ) -> anyhow::Result<Option<Arc<VerifiedTransaction>>> {
-        Ok(self.inner.get_transaction(digest))
-    }
-
-    fn get_transaction_effects(
-        &self,
-        digest: &TransactionDigest,
-    ) -> anyhow::Result<Option<TransactionEffects>> {
-        Ok(self.inner.get_transaction_effects(digest))
-    }
-
-    fn get_transaction_events(
-        &self,
-        digest: &TransactionEventsDigest,
-    ) -> anyhow::Result<Option<TransactionEvents>> {
-        Ok(self.inner.get_events(digest))
-    }
-
-    fn get_transaction_checkpoint(
-        &self,
-        digest: &TransactionDigest,
-    ) -> anyhow::Result<Option<u64>> {
-        match self.inner.indexes() {
-            Some(indexes) => indexes
-                .get_transaction_info(digest)
-                .map(|opt| opt.map(|info| info.checkpoint))
-                .map_err(Into::into),
-            None => Ok(None),
-        }
+/// Handles the `Kind::Missing` error during server startup (when no checkpoints
+/// have been executed yet) by returning `Ok(None)`.
+fn latest_checkpoint_seq(reader: &dyn NodeStateReader) -> anyhow::Result<Option<u64>> {
+    match reader.try_get_latest_checkpoint() {
+        Ok(checkpoint) => Ok(Some(*checkpoint.sequence_number())),
+        Err(e) => match e.kind() {
+            Kind::Missing => Ok(None),
+            _ => Err(anyhow::anyhow!(
+                "Storage error getting latest checkpoint: {e}"
+            )),
+        },
     }
 }
 
-/// Central gRPC data reader that provides unified access to checkpoint data.
-/// It provides methods for streaming both full checkpoint data and checkpoint
-/// summaries.
+/// Compose checkpoint summary and contents from two storage calls.
+fn checkpoint_summary_and_contents(
+    reader: &dyn NodeStateReader,
+    seq: u64,
+) -> anyhow::Result<Option<(CertifiedCheckpointSummary, CheckpointContents)>> {
+    let summary = reader
+        .try_get_checkpoint_by_sequence_number(seq)
+        .map_err(anyhow::Error::from)?;
+    let contents = reader
+        .try_get_checkpoint_contents_by_sequence_number(seq)
+        .map_err(anyhow::Error::from)?;
+    match (summary, contents) {
+        (Some(s), Some(c)) => Ok(Some((CertifiedCheckpointSummary::from(s), c))),
+        _ => Ok(None),
+    }
+}
+
+/// Central gRPC data reader wrapping a [`NodeStateReader`].
 #[derive(Clone)]
 pub struct GrpcReader {
-    state_reader: Arc<dyn GrpcStateReader>,
+    state_reader: Arc<dyn NodeStateReader>,
     server_version: Option<String>,
 }
 
 impl GrpcReader {
-    pub fn new(state_reader: Arc<dyn GrpcStateReader>, server_version: Option<String>) -> Self {
+    pub fn new(state_reader: Arc<dyn NodeStateReader>, server_version: Option<String>) -> Self {
         Self {
             state_reader,
-            server_version,
-        }
-    }
-
-    pub fn from_rest_state_reader(
-        state_reader: Arc<dyn RestStateReader>,
-        server_version: Option<String>,
-    ) -> Self {
-        Self {
-            state_reader: Arc::new(RestStateReaderAdapter {
-                inner: state_reader,
-            }),
             server_version,
         }
     }
@@ -471,7 +183,7 @@ impl GrpcReader {
     }
 
     pub fn get_chain_identifier(&self) -> anyhow::Result<iota_types::digests::ChainIdentifier> {
-        self.state_reader.get_chain_identifier()
+        self.state_reader.get_chain_identifier().map_err(Into::into)
     }
 
     /// Get checkpoint sequence number by digest
@@ -480,7 +192,9 @@ impl GrpcReader {
         digest: &iota_types::digests::CheckpointDigest,
     ) -> anyhow::Result<Option<u64>> {
         self.state_reader
-            .get_checkpoint_sequence_number_by_digest(digest)
+            .try_get_checkpoint_by_digest(digest)
+            .map(|opt| opt.map(|c| *c.sequence_number()))
+            .map_err(Into::into)
     }
 
     /// Get the last checkpoint of a given epoch, if any
@@ -488,7 +202,10 @@ impl GrpcReader {
         &self,
         epoch: u64,
     ) -> anyhow::Result<Option<CertifiedCheckpointSummary>> {
-        self.state_reader.get_epoch_last_checkpoint(epoch)
+        self.state_reader
+            .get_epoch_last_checkpoint(epoch)
+            .map(|opt| opt.map(CertifiedCheckpointSummary::from))
+            .map_err(Into::into)
     }
 
     /// Get a single checkpoint as chunked messages stream
@@ -503,12 +220,11 @@ impl GrpcReader {
         event_filter: Option<crate::event_filter::EventFilter>,
     ) -> std::pin::Pin<Box<dyn futures::Stream<Item = CheckpointStreamResult> + Send>> {
         let state_reader = self.state_reader.clone();
-        match state_reader.get_checkpoint_summary_and_contents(sequence_number) {
+        match checkpoint_summary_and_contents(&*state_reader, sequence_number) {
             Ok(Some((checkpoint_summary, checkpoint_contents))) => {
                 Box::pin(async_stream::stream! {
                     let transaction_stream = state_reader.stream_checkpoint_transactions(checkpoint_contents.clone());
                     let mut checkpoint_stream = Box::pin(Self::create_checkpoint_messages_stream(
-                        state_reader.clone(),
                         checkpoint_summary,
                         checkpoint_contents,
                         transaction_stream,
@@ -546,7 +262,6 @@ impl GrpcReader {
     /// Generic over transaction stream source - works for both historical and
     /// live data.
     fn create_checkpoint_messages_stream<S>(
-        state_reader: Arc<dyn GrpcStateReader>,
         checkpoint_summary: CertifiedCheckpointSummary,
         checkpoint_contents: CheckpointContents,
         transaction_stream: S,
@@ -626,7 +341,7 @@ impl GrpcReader {
                                     for raw_event in &tx_events.data {
                                         // Apply event filter if present
                                         if let Some(ref evt_filter) = event_filter {
-                                            if !evt_filter.matches_event(state_reader.clone(), raw_event) {
+                                            if !evt_filter.matches_event(raw_event) {
                                                 continue; // Skip non-matching events
                                             }
                                         }
@@ -661,7 +376,7 @@ impl GrpcReader {
                             if transactions_mask.is_some() {
                                 // Apply transaction filter if present
                                 if let Some(ref tx_filter) = transaction_filter {
-                                    if !tx_filter.matches_transaction(state_reader.clone(), &checkpoint_transaction) {
+                                    if !tx_filter.matches_transaction(&checkpoint_transaction) {
                                         continue; // Skip non-matching transactions
                                     }
                                 }
@@ -720,31 +435,36 @@ impl GrpcReader {
 
     /// Get the latest checkpoint sequence number
     pub fn get_latest_checkpoint_sequence_number(&self) -> anyhow::Result<Option<u64>> {
-        self.state_reader.get_latest_checkpoint_sequence_number()
+        latest_checkpoint_seq(&*self.state_reader)
     }
 
     pub fn get_latest_checkpoint(&self) -> anyhow::Result<CertifiedCheckpointSummary> {
-        let seq = self
-            .state_reader
-            .get_latest_checkpoint_sequence_number()?
-            .ok_or_else(|| {
-                anyhow::anyhow!("Unable to determine current epoch: no checkpoints available")
-            })?;
+        let seq = latest_checkpoint_seq(&*self.state_reader)?.ok_or_else(|| {
+            anyhow::anyhow!("Unable to determine current epoch: no checkpoints available")
+        })?;
         self.state_reader
-            .get_checkpoint_summary(seq)?
+            .try_get_checkpoint_by_sequence_number(seq)
+            .map_err(anyhow::Error::from)?
+            .map(CertifiedCheckpointSummary::from)
             .ok_or_else(|| anyhow::anyhow!("Checkpoint {seq} not found"))
     }
 
     pub fn get_lowest_available_checkpoint(&self) -> anyhow::Result<u64> {
-        self.state_reader.get_lowest_available_checkpoint()
+        self.state_reader
+            .try_get_lowest_available_checkpoint()
+            .map_err(Into::into)
     }
 
     pub fn get_lowest_available_checkpoint_objects(&self) -> anyhow::Result<u64> {
-        self.state_reader.get_lowest_available_checkpoint_objects()
+        self.state_reader
+            .get_lowest_available_checkpoint_objects()
+            .map_err(Into::into)
     }
 
     pub fn get_object(&self, object_id: &ObjectID) -> anyhow::Result<Option<Object>> {
-        self.state_reader.get_object(object_id)
+        self.state_reader
+            .try_get_object(object_id)
+            .map_err(Into::into)
     }
 
     pub fn get_object_by_key(
@@ -752,20 +472,25 @@ impl GrpcReader {
         object_id: &ObjectID,
         version: VersionNumber,
     ) -> anyhow::Result<Option<Object>> {
-        self.state_reader.get_object_by_key(object_id, version)
+        self.state_reader
+            .try_get_object_by_key(object_id, version)
+            .map_err(Into::into)
     }
 
     pub fn get_committee(
         &self,
         epoch: u64,
     ) -> anyhow::Result<Option<Arc<iota_types::committee::Committee>>> {
-        self.state_reader.get_committee(epoch)
+        self.state_reader
+            .try_get_committee(epoch)
+            .map_err(Into::into)
     }
 
     pub fn get_system_state(
         &self,
     ) -> anyhow::Result<iota_types::iota_system_state::IotaSystemState> {
-        self.state_reader.get_system_state()
+        iota_types::iota_system_state::get_iota_system_state(self.state_reader.as_ref())
+            .map_err(Into::into)
     }
 
     pub fn get_system_state_summary(
@@ -785,14 +510,19 @@ impl GrpcReader {
         &self,
         epoch: u64,
     ) -> anyhow::Result<Option<iota_types::storage::EpochInfo>> {
-        self.state_reader.get_epoch_info(epoch)
+        match self.state_reader.indexes() {
+            Some(indexes) => indexes.get_epoch_info(epoch).map_err(Into::into),
+            None => Ok(None),
+        }
     }
 
     pub fn get_type_layout(
         &self,
         type_tag: &iota_types::TypeTag,
     ) -> anyhow::Result<Option<move_core_types::annotated_value::MoveTypeLayout>> {
-        self.state_reader.get_type_layout(type_tag)
+        self.state_reader
+            .get_type_layout(type_tag)
+            .map_err(Into::into)
     }
 
     /// Generic stream implementation for checkpoints
@@ -803,7 +533,7 @@ impl GrpcReader {
         end_sequence_number: Option<u64>,
         cancellation_token: CancellationToken,
         data_type_name: &'static str,
-        fetch_historical: impl Fn(Arc<dyn GrpcStateReader>, u64) -> Result<Option<Arc<S>>, Status>
+        fetch_historical: impl Fn(Arc<dyn NodeStateReader>, u64) -> Result<Option<Arc<S>>, Status>
         + Send,
         get_sequence_number_live: impl Fn(&Arc<T>) -> u64 + Send,
         process_item_historical: impl Fn(
@@ -824,8 +554,7 @@ impl GrpcReader {
     {
         let state_reader = self.state_reader.clone();
         async_stream::try_stream! {
-            let mut latest = state_reader
-                .get_latest_checkpoint_sequence_number()
+            let mut latest = latest_checkpoint_seq(&*state_reader)
                 .map_err(|e| Status::internal(format!("Failed to get latest checkpoint: {e}")))?
                 .unwrap_or(0);
             debug!("[profile][grpc] Latest checkpoint index: {latest}.");
@@ -901,8 +630,7 @@ impl GrpcReader {
                         break;
                     }
                 }
-                latest = state_reader
-                    .get_latest_checkpoint_sequence_number()
+                latest = latest_checkpoint_seq(&*state_reader)
                     .map_err(|e| Status::internal(format!("Failed to get latest checkpoint: {e}")))?
                     .unwrap_or(start);
                 debug!("[profile][grpc] Updating latest checkpoint index to {latest}.");
@@ -942,8 +670,7 @@ impl GrpcReader {
             "data",
             // Historical data fetcher - returns (summary, contents)
             |reader, seq| {
-                reader
-                    .get_checkpoint_summary_and_contents(seq)
+                checkpoint_summary_and_contents(&*reader, seq)
                     .map(|opt| opt.map(Arc::new))
                     .map_err(|e| {
                         Status::internal(format!("Failed to get checkpoint {seq}: {e}"))
@@ -966,7 +693,6 @@ impl GrpcReader {
                         Box::pin(async_stream::stream! {
                             let transaction_stream = state_reader_inner.stream_checkpoint_transactions(checkpoint_contents.clone());
                             let mut stream = Box::pin(Self::create_checkpoint_messages_stream(
-                                state_reader_inner.clone(),
                                 checkpoint_summary,
                                 checkpoint_contents,
                                 transaction_stream,
@@ -987,9 +713,7 @@ impl GrpcReader {
             },
             // Live data processor - extracts transactions from CheckpointData
             {
-                let state_reader_live = state_reader_clone.clone();
                 move |item: Arc<IotaTypesCheckpointData>| {
-                    let state_reader_inner = state_reader_live.clone();
                     let cp_mask = checkpoint_mask.clone();
                     let tx_mask = transactions_mask.clone();
                     let ev_mask = events_mask.clone();
@@ -1004,7 +728,6 @@ impl GrpcReader {
 
                             // Use the unified streaming function
                             Self::create_checkpoint_messages_stream(
-                                state_reader_inner.clone(),
                                 item.checkpoint_summary.clone(),
                                 item.checkpoint_contents.clone(),
                                 transaction_stream,
@@ -1038,7 +761,7 @@ impl GrpcReader {
             // Get the transaction if transaction data or signatures are requested
             let transaction = self
                 .state_reader
-                .get_transaction(digest)?
+                .try_get_transaction(digest)?
                 .ok_or(crate::error::TransactionNotFoundError(*digest))?;
 
             let transaction_data = fields
@@ -1063,14 +786,19 @@ impl GrpcReader {
         };
 
         let (checkpoint, timestamp_ms) = if fields.include_checkpoint || fields.include_timestamp {
-            let checkpoint = self.state_reader.get_transaction_checkpoint(digest)?;
+            let checkpoint = match self.state_reader.indexes() {
+                Some(indexes) => indexes
+                    .get_transaction_info(digest)?
+                    .map(|info| info.checkpoint),
+                None => None,
+            };
 
             let timestamp_ms = if fields.include_timestamp {
                 match checkpoint {
                     Some(checkpoint_seq) => {
                         let summary = self
                             .state_reader
-                            .get_checkpoint_summary(checkpoint_seq)?
+                            .try_get_checkpoint_by_sequence_number(checkpoint_seq)?
                             .ok_or_else(|| {
                                 crate::error::RpcError::new(
                                     tonic::Code::Internal,
@@ -1104,13 +832,13 @@ impl GrpcReader {
             // any of those are requested
             let effects = self
                 .state_reader
-                .get_transaction_effects(digest)?
+                .try_get_transaction_effects(digest)?
                 .ok_or(crate::error::TransactionNotFoundError(*digest))?;
 
             // Get events only if requested
             let events = if fields.include_events {
                 match effects.events_digest() {
-                    Some(event_digest) => self.state_reader.get_transaction_events(event_digest)?,
+                    Some(event_digest) => self.state_reader.try_get_events(event_digest)?,
                     None => None,
                 }
             } else {
@@ -1121,7 +849,10 @@ impl GrpcReader {
             let input_objects = if fields.include_input_objects {
                 let mut objects = Vec::new();
                 for (object_id, version) in effects.modified_at_versions() {
-                    if let Some(obj) = self.state_reader.get_object_by_key(&object_id, version)? {
+                    if let Some(obj) = self
+                        .state_reader
+                        .try_get_object_by_key(&object_id, version)?
+                    {
                         objects.push(obj);
                     }
                 }
@@ -1139,7 +870,10 @@ impl GrpcReader {
                     .chain(effects.mutated())
                     .chain(effects.unwrapped())
                 {
-                    if let Some(obj) = self.state_reader.get_object_by_key(&object_id, version)? {
+                    if let Some(obj) = self
+                        .state_reader
+                        .try_get_object_by_key(&object_id, version)?
+                    {
                         objects.push(obj);
                     }
                 }

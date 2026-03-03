@@ -4,8 +4,9 @@
 
 use std::sync::Arc;
 
+use iota_node_storage::{NodeIndexes, NodeStateReader};
 use iota_types::{
-    base_types::{IotaAddress, ObjectID, TransactionDigest},
+    base_types::TransactionDigest,
     committee::{Committee, EpochId},
     digests::TransactionEventsDigest,
     effects::{TransactionEffects, TransactionEvents},
@@ -16,24 +17,18 @@ use iota_types::{
     },
     object::Object,
     storage::{
-        AccountOwnedObjectInfo, CoinInfo, DynamicFieldIndexInfo, DynamicFieldKey, ObjectKey,
-        ObjectStore, ReadStore, RestIndexes, RestStateReader, TransactionInfo, WriteStore,
+        ObjectKey, ObjectStore, ReadStore, TransactionInfo, WriteStore,
         error::{Error as StorageError, Result},
     },
     transaction::VerifiedTransaction,
 };
-use move_core_types::language_storage::StructTag;
 use parking_lot::Mutex;
-use tap::Pipe;
 use tracing::instrument;
-use typed_store::TypedStoreError;
 
 use crate::{
-    authority::AuthorityState,
-    checkpoints::CheckpointStore,
-    epoch::committee_store::CommitteeStore,
-    execution_cache::ExecutionCacheTraitPointers,
-    rest_index::{CoinIndexInfo, OwnerIndexInfo, OwnerIndexKey, RestIndexStore},
+    authority::AuthorityState, checkpoints::CheckpointStore,
+    epoch::committee_store::CommitteeStore, execution_cache::ExecutionCacheTraitPointers,
+    node_index::NodeIndexStore,
 };
 
 #[derive(Clone)]
@@ -365,24 +360,24 @@ impl WriteStore for RocksDbStore {
     }
 }
 
-pub struct RestReadStore {
+pub struct NodeReadStore {
     state: Arc<AuthorityState>,
     rocks: RocksDbStore,
 }
 
-impl RestReadStore {
+impl NodeReadStore {
     pub fn new(state: Arc<AuthorityState>, rocks: RocksDbStore) -> Self {
         Self { state, rocks }
     }
 
-    fn index(&self) -> iota_types::storage::error::Result<&RestIndexStore> {
-        self.state.rest_index.as_deref().ok_or_else(|| {
-            iota_types::storage::error::Error::custom("rest index store is disabled")
+    fn index(&self) -> iota_types::storage::error::Result<&NodeIndexStore> {
+        self.state.node_index.as_deref().ok_or_else(|| {
+            iota_types::storage::error::Error::custom("node index store is disabled")
         })
     }
 }
 
-impl ObjectStore for RestReadStore {
+impl ObjectStore for NodeReadStore {
     fn try_get_object(
         &self,
         object_id: &iota_types::base_types::ObjectID,
@@ -399,7 +394,7 @@ impl ObjectStore for RestReadStore {
     }
 }
 
-impl ReadStore for RestReadStore {
+impl ReadStore for NodeReadStore {
     fn try_get_committee(
         &self,
         epoch: EpochId,
@@ -500,7 +495,7 @@ impl ReadStore for RestReadStore {
     }
 }
 
-impl RestStateReader for RestReadStore {
+impl NodeStateReader for NodeReadStore {
     fn get_lowest_available_checkpoint_objects(
         &self,
     ) -> iota_types::storage::error::Result<CheckpointSequenceNumber> {
@@ -527,7 +522,7 @@ impl RestStateReader for RestReadStore {
             .map_err(iota_types::storage::error::Error::custom)
     }
 
-    fn indexes(&self) -> Option<&dyn RestIndexes> {
+    fn indexes(&self) -> Option<&dyn NodeIndexes> {
         self.index().ok().map(|index| index as _)
     }
 
@@ -547,74 +542,16 @@ impl RestStateReader for RestReadStore {
     }
 }
 
-impl RestIndexes for RestIndexStore {
-    // only used in "grpc-server"
+impl NodeIndexes for NodeIndexStore {
     fn get_epoch_info(&self, epoch: EpochId) -> Result<Option<iota_types::storage::EpochInfo>> {
         self.get_epoch_info(epoch).map_err(StorageError::custom)
     }
 
-    // used in both "grpc-server" and "rest-api"
     fn get_transaction_info(
         &self,
         digest: &TransactionDigest,
     ) -> iota_types::storage::error::Result<Option<TransactionInfo>> {
         self.get_transaction_info(digest)
             .map_err(StorageError::custom)
-    }
-
-    // only used in "rest-api"
-    fn account_owned_objects_info_iter(
-        &self,
-        owner: IotaAddress,
-        cursor: Option<ObjectID>,
-    ) -> Result<Box<dyn Iterator<Item = Result<AccountOwnedObjectInfo, TypedStoreError>> + '_>>
-    {
-        let iter = self.owner_iter(owner, cursor)?.map(|result| {
-            result.map(
-                |(OwnerIndexKey { owner, object_id }, OwnerIndexInfo { version, type_ })| {
-                    AccountOwnedObjectInfo {
-                        owner,
-                        object_id,
-                        version,
-                        type_,
-                    }
-                },
-            )
-        });
-
-        Ok(Box::new(iter) as _)
-    }
-
-    // only used in "rest-api"
-    fn dynamic_field_iter(
-        &self,
-        parent: ObjectID,
-        cursor: Option<ObjectID>,
-    ) -> iota_types::storage::error::Result<
-        Box<
-            dyn Iterator<Item = Result<(DynamicFieldKey, DynamicFieldIndexInfo), TypedStoreError>>
-                + '_,
-        >,
-    > {
-        let iter = self.dynamic_field_iter(parent, cursor)?;
-        Ok(Box::new(iter) as _)
-    }
-
-    // only used in "rest-api"
-    fn get_coin_info(
-        &self,
-        coin_type: &StructTag,
-    ) -> iota_types::storage::error::Result<Option<CoinInfo>> {
-        self.get_coin_info(coin_type)?
-            .map(
-                |CoinIndexInfo {
-                     coin_metadata_object_id,
-                     treasury_object_id,
-                 }| CoinInfo {
-                    coin_metadata_object_id,
-                    treasury_object_id,
-                },
-            )
-            .pipe(Ok)
     }
 }

@@ -27,7 +27,7 @@ use crate::{
         authority_store_tables::AuthorityPerpetualTables,
     },
     checkpoints::CheckpointStore,
-    rest_index::RestIndexStore,
+    node_index::{NODE_INDEX_DIR, NodeIndexStore},
 };
 
 pub const SUCCESS_MARKER: &str = "_SUCCESS";
@@ -276,7 +276,7 @@ impl DBCheckpointHandler {
         let checkpoint_store = Arc::new(CheckpointStore::new_for_db_checkpoint_handler(
             &db_path.join("checkpoints"),
         ));
-        let rest_index = RestIndexStore::new_without_init(db_path.join("rest_index"));
+        let node_index = NodeIndexStore::new_without_init(db_path.join(NODE_INDEX_DIR));
         let metrics = AuthorityStorePruningMetrics::new(&Registry::default());
         info!(
             "Pruning db checkpoint in {:?} for epoch: {epoch}",
@@ -285,7 +285,7 @@ impl DBCheckpointHandler {
         AuthorityStorePruner::prune_objects_for_eligible_epochs(
             &perpetual_db,
             &checkpoint_store,
-            Some(&rest_index),
+            Some(&node_index),
             None,
             self.pruning_config.clone(),
             metrics,

@@ -19,8 +19,14 @@ const CHECKPOINTS_FILE_NAME: &str = "checkpoints.yaml";
 /// The config file for the light client.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Config {
-    /// An RPC endpoint to a full node.
+    /// A JSON-RPC endpoint to a full node.
     pub rpc_url: Url,
+    /// A gRPC endpoint to a full node. Falls back to `rpc_url` when not set,
+    /// which works when a reverse proxy routes both protocols on the same URL.
+    /// For local development the gRPC server typically listens on a separate
+    /// port (default 50051).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub grpc_url: Option<Url>,
     /// A GraphQL endpoint to a full node.
     pub graphql_url: Option<Url>,
     /// The directory containing synced checkpoints.
@@ -79,6 +85,12 @@ impl Config {
         Ok(())
     }
 
+    /// Returns the gRPC URL, falling back to `rpc_url` if `grpc_url` is not
+    /// set.
+    pub fn grpc_url(&self) -> &Url {
+        self.grpc_url.as_ref().unwrap_or(&self.rpc_url)
+    }
+
     pub fn validate(&self) -> Result<()> {
         if self.graphql_url.is_none() && self.archive_store_config.is_none() {
             bail!("Invalid config: either GraphQL URL or archive store config must be provided");
@@ -113,6 +125,8 @@ impl Config {
     fn create_config_from_network_name(network: &str) -> Self {
         Self {
             rpc_url: Url::parse(&format!("https://api.{network}.iota.cafe")).unwrap(),
+            // Known-network endpoints route gRPC via the same URL (reverse proxy).
+            grpc_url: None,
             graphql_url: Some(Url::parse(&format!("https://graphql.{network}.iota.cafe")).unwrap()),
             checkpoints_dir: PathBuf::from_str(&format!("checkpoints_{network}")).unwrap(),
             genesis_blob_download_url: Some(
@@ -157,6 +171,7 @@ mod tests {
         std::fs::File::create(temp_dir.path().join(GENESIS_FILE_NAME)).unwrap();
         let config = Config {
             rpc_url: "http://localhost:9000".parse().unwrap(),
+            grpc_url: Some("http://localhost:50051".parse().unwrap()),
             graphql_url: Some("http://localhost:9003".parse().unwrap()),
             checkpoints_dir: temp_dir.path().to_path_buf(),
             genesis_blob_download_url: None,
