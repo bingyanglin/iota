@@ -5948,11 +5948,11 @@ dependencies = [
  "iota-analytics-indexer-derive",
  "iota-config",
  "iota-data-ingestion-core",
+ "iota-grpc-client",
  "iota-indexer",
  "iota-json-rpc-types",
  "iota-metrics",
  "iota-package-resolver",
- "iota-rest-api",
  "iota-storage",
  "iota-types",
  "move-core-types",
@@ -6220,7 +6220,6 @@ dependencies = [
  "iota-genesis-common",
  "iota-keys",
  "iota-names",
- "iota-rest-api",
  "iota-types",
  "move-vm-config",
  "object_store 0.13.1",
@@ -6278,6 +6277,7 @@ dependencies = [
  "iota-move-build",
  "iota-network",
  "iota-network-stack",
+ "iota-node-storage",
  "iota-protocol-config",
  "iota-sdk-types",
  "iota-simulator",
@@ -6418,7 +6418,6 @@ dependencies = [
  "iota-grpc-types",
  "iota-metrics",
  "iota-protocol-config",
- "iota-rest-api",
  "iota-sdk-types",
  "iota-storage",
  "iota-types",
@@ -6470,7 +6469,6 @@ dependencies = [
  "iota-network",
  "iota-node",
  "iota-protocol-config",
- "iota-rest-api",
  "iota-sdk",
  "iota-sdk-types",
  "iota-simulator",
@@ -6762,11 +6760,13 @@ dependencies = [
  "hyper 1.8.1",
  "im",
  "insta",
+ "iota-config",
  "iota-framework",
  "iota-graphql-config",
  "iota-graphql-rpc-client",
  "iota-graphql-rpc-headers",
  "iota-grpc-client",
+ "iota-grpc-server",
  "iota-indexer",
  "iota-indexer-streaming",
  "iota-json",
@@ -6776,8 +6776,8 @@ dependencies = [
  "iota-metrics",
  "iota-names",
  "iota-network-stack",
+ "iota-node-storage",
  "iota-package-resolver",
- "iota-rest-api",
  "iota-sdk-types",
  "iota-swarm-config",
  "iota-test-transaction-builder",
@@ -6857,6 +6857,7 @@ dependencies = [
  "iota-grpc-client",
  "iota-grpc-types",
  "iota-metrics",
+ "iota-node-storage",
  "iota-protocol-config",
  "iota-sdk-types",
  "iota-test-transaction-builder",
@@ -6933,6 +6934,7 @@ dependencies = [
  "iota-config",
  "iota-data-ingestion-core",
  "iota-grpc-client",
+ "iota-grpc-server",
  "iota-grpc-types",
  "iota-json",
  "iota-json-rpc",
@@ -6946,7 +6948,6 @@ dependencies = [
  "iota-open-rpc",
  "iota-package-resolver",
  "iota-protocol-config",
- "iota-rest-api",
  "iota-storage",
  "iota-swarm-config",
  "iota-test-transaction-builder",
@@ -7273,10 +7274,11 @@ dependencies = [
  "iota-config",
  "iota-data-ingestion-core",
  "iota-graphql-rpc-client",
+ "iota-grpc-client",
  "iota-json-rpc-types",
  "iota-package-resolver",
- "iota-rest-api",
  "iota-sdk",
+ "iota-sdk-types",
  "iota-types",
  "move-core-types",
  "object_store 0.13.1",
@@ -7567,8 +7569,8 @@ dependencies = [
  "iota-names",
  "iota-network",
  "iota-network-stack",
+ "iota-node-storage",
  "iota-protocol-config",
- "iota-rest-api",
  "iota-sdk-types",
  "iota-simulator",
  "iota-snapshot",
@@ -7589,6 +7591,14 @@ dependencies = [
  "tracing",
  "typed-store",
  "url",
+]
+
+[[package]]
+name = "iota-node-storage"
+version = "1.18.0-alpha"
+dependencies = [
+ "iota-types",
+ "move-core-types",
 ]
 
 [[package]]
@@ -7833,35 +7843,6 @@ dependencies = [
  "tokio",
  "tokio-util 0.7.18",
  "tracing",
-]
-
-[[package]]
-name = "iota-rest-api"
-version = "1.18.0-alpha"
-dependencies = [
- "anyhow",
- "axum 0.8.4",
- "bcs",
- "diffy",
- "fastcrypto",
- "iota-network-stack",
- "iota-protocol-config",
- "iota-sdk-types",
- "iota-types",
- "itertools 0.13.0",
- "mime",
- "move-binary-format",
- "openapiv3",
- "prometheus",
- "reqwest",
- "schemars",
- "serde",
- "serde_json",
- "serde_with",
- "serde_yaml",
- "tap",
- "tokio",
- "url",
 ]
 
 [[package]]
@@ -8328,7 +8309,6 @@ dependencies = [
  "iota-macros",
  "iota-names",
  "iota-protocol-config",
- "iota-rest-api",
  "iota-sdk-types",
  "iota-simulator",
  "iota-types",
@@ -8488,6 +8468,7 @@ dependencies = [
  "iota-json-rpc",
  "iota-json-rpc-api",
  "iota-json-rpc-types",
+ "iota-node-storage",
  "iota-protocol-config",
  "iota-storage",
  "iota-swarm-config",
@@ -10880,17 +10861,6 @@ name = "opaque-debug"
 version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c08d65885ee38876c4f86fa503fb49d7b507c2b62552df7c70b2fce627e06381"
-
-[[package]]
-name = "openapiv3"
-version = "2.0.0"
-source = "git+https://github.com/bmwill/openapiv3.git?rev=ca4b4845b7c159a39f5c68ad8f7f76cb6f4d6963#ca4b4845b7c159a39f5c68ad8f7f76cb6f4d6963"
-dependencies = [
- "indexmap 2.11.0",
- "schemars",
- "serde",
- "serde_json",
-]
 
 [[package]]
 name = "openssl-probe"
@@ -14026,6 +13996,7 @@ dependencies = [
  "iota-config",
  "iota-execution",
  "iota-grpc-server",
+ "iota-node-storage",
  "iota-protocol-config",
  "iota-storage",
  "iota-swarm-config",
@@ -14036,6 +14007,7 @@ dependencies = [
  "move-core-types",
  "prometheus",
  "rand 0.8.5",
+ "tokio-util 0.7.18",
  "tracing",
 ]
 
@@ -14052,8 +14024,8 @@ dependencies = [
  "iota-config",
  "iota-execution",
  "iota-faucet",
- "iota-grpc-server",
  "iota-json-rpc-types",
+ "iota-node-storage",
  "iota-protocol-config",
  "iota-swarm-config",
  "iota-types",
