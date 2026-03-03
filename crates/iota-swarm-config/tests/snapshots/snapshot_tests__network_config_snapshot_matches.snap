@@ -1,6 +1,7 @@
 ---
 source: crates/iota-swarm-config/tests/snapshot_tests.rs
 expression: network_config
+snapshot_kind: text
 ---
 validator_configs:
   - authority-key-pair:
@@ -14,9 +15,6 @@ validator_configs:
     db-path: /tmp/foo/
     network-address: ""
     json-rpc-address: "0.0.0.0:1"
-    enable-rest-api: true
-    rest:
-      enable-unstable-apis: true
     metrics-address: "0.0.0.0:1"
     admin-interface-address: "127.0.0.1:8888"
     consensus-config:
@@ -146,9 +144,6 @@ validator_configs:
     db-path: /tmp/foo/
     network-address: ""
     json-rpc-address: "0.0.0.0:1"
-    enable-rest-api: true
-    rest:
-      enable-unstable-apis: true
     metrics-address: "0.0.0.0:1"
     admin-interface-address: "127.0.0.1:8888"
     consensus-config:
@@ -278,9 +273,6 @@ validator_configs:
     db-path: /tmp/foo/
     network-address: ""
     json-rpc-address: "0.0.0.0:1"
-    enable-rest-api: true
-    rest:
-      enable-unstable-apis: true
     metrics-address: "0.0.0.0:1"
     admin-interface-address: "127.0.0.1:8888"
     consensus-config:
@@ -410,9 +402,6 @@ validator_configs:
     db-path: /tmp/foo/
     network-address: ""
     json-rpc-address: "0.0.0.0:1"
-    enable-rest-api: true
-    rest:
-      enable-unstable-apis: true
     metrics-address: "0.0.0.0:1"
     admin-interface-address: "127.0.0.1:8888"
     consensus-config:
@@ -542,9 +531,6 @@ validator_configs:
     db-path: /tmp/foo/
     network-address: ""
     json-rpc-address: "0.0.0.0:1"
-    enable-rest-api: true
-    rest:
-      enable-unstable-apis: true
     metrics-address: "0.0.0.0:1"
     admin-interface-address: "127.0.0.1:8888"
     consensus-config:
@@ -674,9 +660,6 @@ validator_configs:
     db-path: /tmp/foo/
     network-address: ""
     json-rpc-address: "0.0.0.0:1"
-    enable-rest-api: true
-    rest:
-      enable-unstable-apis: true
     metrics-address: "0.0.0.0:1"
     admin-interface-address: "127.0.0.1:8888"
     consensus-config:
@@ -806,9 +789,6 @@ validator_configs:
     db-path: /tmp/foo/
     network-address: ""
     json-rpc-address: "0.0.0.0:1"
-    enable-rest-api: true
-    rest:
-      enable-unstable-apis: true
     metrics-address: "0.0.0.0:1"
     admin-interface-address: "127.0.0.1:8888"
     consensus-config:
