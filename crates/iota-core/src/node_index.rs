@@ -160,17 +160,17 @@ struct IndexStoreTables {
     /// queries.
     #[allow(dead_code)]
     #[deprecated_db_map]
-    owner: DBMap<OwnerIndexKey, OwnerIndexInfo>,
+    owner: Option<DBMap<OwnerIndexKey, OwnerIndexInfo>>,
 
     /// Deprecated: was used by the removed REST API for dynamic field queries.
     #[allow(dead_code)]
     #[deprecated_db_map]
-    dynamic_field: DBMap<DynamicFieldKey, DynamicFieldIndexInfo>,
+    dynamic_field: Option<DBMap<DynamicFieldKey, DynamicFieldIndexInfo>>,
 
     /// Deprecated: was used by the removed REST API for coin info queries.
     #[allow(dead_code)]
     #[deprecated_db_map]
-    coin: DBMap<CoinIndexKey, CoinIndexInfo>,
+    coin: Option<DBMap<CoinIndexKey, CoinIndexInfo>>,
 }
 
 impl IndexStoreTables {
