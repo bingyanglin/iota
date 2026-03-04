@@ -42,11 +42,15 @@ const CURRENT_DB_VERSION: u64 = 1;
 
 /// On-disk directory name for the node index store.
 ///
-/// This retains the historical name `"rest_index"` for backward compatibility
-/// with existing node databases. Renaming the directory on disk would require a
-/// migration step; for now we keep the legacy name so that nodes can upgrade
-/// without manual intervention.
-pub const NODE_INDEX_DIR: &str = "rest_index";
+/// TO DISCUSS: Renamed from `"rest_index"` to `"node_indexes"`. A one-time
+/// migration (`migrate_legacy_dirs`) renames the old `rest_index` or
+/// `grpc_indexes` directories at node startup. The migration code can be
+/// removed after one release cycle once all production nodes have upgraded.
+pub const NODE_INDEX_DIR: &str = "node_indexes";
+
+/// Legacy directory names that may exist on disk from previous releases.
+/// Used by `migrate_legacy_dirs` to find and rename old directories.
+const LEGACY_INDEX_DIRS: &[&str] = &["rest_index", "grpc_indexes"];
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 struct MetadataInfo {
@@ -489,6 +493,41 @@ pub struct NodeIndexStore {
 }
 
 impl NodeIndexStore {
+    /// One-time migration: rename legacy index directories to
+    /// [`NODE_INDEX_DIR`].
+    ///
+    /// Must be called before [`NodeIndexStore::new`] so that the DB is not
+    /// yet open. Safe to call multiple times — it is a no-op when the target
+    /// directory already exists.
+    ///
+    /// TODO(cleanup): Remove after one release cycle once all production nodes
+    /// have upgraded past this version.
+    pub fn migrate_legacy_dirs(db_path: &std::path::Path) {
+        let target = db_path.join(NODE_INDEX_DIR);
+        if target.exists() {
+            return;
+        }
+        for legacy_name in LEGACY_INDEX_DIRS {
+            let legacy = db_path.join(legacy_name);
+            if legacy.exists() {
+                info!(
+                    "migrating node index directory: renaming {:?} -> {:?}",
+                    legacy, target
+                );
+                if let Err(e) = std::fs::rename(&legacy, &target) {
+                    // Non-fatal: NodeIndexStore::new will re-create and re-index.
+                    tracing::warn!(
+                        "failed to rename {:?} to {:?}: {e}. \
+                         The index will be rebuilt from scratch on next startup.",
+                        legacy,
+                        target
+                    );
+                }
+                return;
+            }
+        }
+    }
+
     pub async fn new(
         path: PathBuf,
         authority_store: &AuthorityStore,

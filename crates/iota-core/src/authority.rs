@@ -171,7 +171,7 @@ use crate::{
     jsonrpc_index::{CoinInfo, IndexStore, ObjectIndexChanges},
     metrics::{LatencyObserver, RateTracker},
     module_cache_metrics::ResolverMetrics,
-    node_index::NodeIndexStore,
+    node_index::{NODE_INDEX_DIR, NodeIndexStore},
     overload_monitor::{AuthorityOverloadInfo, overload_monitor_accept_tx},
     stake_aggregator::StakeAggregator,
     state_accumulator::{AccumulatorStore, StateAccumulator},
@@ -3544,12 +3544,11 @@ impl AuthorityState {
                 indexes.checkpoint_db(&checkpoint_path_tmp.join("indexes"))?;
             }
             if let Some(node_index) = self.node_index.as_ref() {
-                // Snapshot directory name "grpc_indexes" is a legacy name that
-                // is already deployed in production snapshots and cannot be
-                // changed without a snapshot format migration. On disk the DB
-                // lives under NODE_INDEX_DIR ("rest_index"); see iota-tool for
-                // the rename step that runs after snapshot download.
-                node_index.checkpoint_db(&checkpoint_path_tmp.join("grpc_indexes"))?;
+                // TO DISCUSS: Snapshot directory name now matches the on-disk
+                // directory name (NODE_INDEX_DIR = "node_indexes"). Old
+                // snapshots used "grpc_indexes"; the iota-tool restore handles
+                // renaming legacy snapshot directories after download.
+                node_index.checkpoint_db(&checkpoint_path_tmp.join(NODE_INDEX_DIR))?;
             }
         }
 

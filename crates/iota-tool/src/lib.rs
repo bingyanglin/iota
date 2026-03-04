@@ -1035,7 +1035,15 @@ pub async fn download_db_snapshot(
     files.extend(epoch_manifest.filter_by_prefix("checkpoints").lines);
     if !skip_indexes {
         files.extend(epoch_manifest.filter_by_prefix("indexes").lines);
+        // Download node indexes regardless of which name the snapshot used.
+        // Old snapshots use "grpc_indexes", new ones use NODE_INDEX_DIR
+        // ("node_indexes").
         files.extend(epoch_manifest.filter_by_prefix("grpc_indexes").lines);
+        files.extend(
+            epoch_manifest
+                .filter_by_prefix(iota_core::node_index::NODE_INDEX_DIR)
+                .lines,
+        );
     }
     let local_store = ObjectStoreConfig {
         object_store: Some(ObjectStoreType::File),
@@ -1093,18 +1101,22 @@ pub async fn download_db_snapshot(
         .into_iter()
         .for_each(|result| result.expect("Task failed"));
 
-    // The node index is stored under the name "grpc_indexes" in the snapshot but
-    // must live at NODE_INDEX_DIR ("rest_index") on disk so that NodeIndexStore
-    // can open it. See `iota_core::node_index::NODE_INDEX_DIR` for details on
-    // the legacy directory name.
-    let grpc_indexes_dir = path.join(format!("epoch_{epoch}")).join("grpc_indexes");
+    // Rename legacy snapshot directory names to the current NODE_INDEX_DIR.
+    // Old snapshots used "grpc_indexes"; current ones use "node_indexes".
+    // TODO(cleanup): Remove the "grpc_indexes" branch after one release cycle.
+    let epoch_dir = path.join(format!("epoch_{epoch}"));
     let node_index_dir = iota_core::node_index::NODE_INDEX_DIR;
-    if grpc_indexes_dir.exists() {
-        fs::rename(
-            &grpc_indexes_dir,
-            path.join(format!("epoch_{epoch}")).join(node_index_dir),
-        )
-        .map_err(|e| anyhow::anyhow!("Failed to rename grpc_indexes to {node_index_dir}: {e}"))?;
+    let target_dir = epoch_dir.join(node_index_dir);
+    if !target_dir.exists() {
+        for legacy_name in &["grpc_indexes", "rest_index"] {
+            let legacy_dir = epoch_dir.join(legacy_name);
+            if legacy_dir.exists() {
+                fs::rename(&legacy_dir, &target_dir).map_err(|e| {
+                    anyhow::anyhow!("Failed to rename {legacy_name} to {node_index_dir}: {e}")
+                })?;
+                break;
+            }
+        }
     }
 
     let store_dir = path.join("store");

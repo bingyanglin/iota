@@ -653,7 +653,11 @@ impl IotaNode {
             checkpoint_store.clone(),
         );
 
-        let index_store = if is_full_node && config.enable_index_processing {
+        // TO DISCUSS: Full nodes always create indexes now (enable_index_processing
+        // flag removed). Without indexes gRPC clients silently get empty results
+        // for epoch/transaction lookups. Trade-off: lightweight nodes pay an
+        // upfront backfill cost at startup (see NodeIndexStore::init).
+        let index_store = if is_full_node {
             info!("creating index store");
             Some(Arc::new(IndexStore::new(
                 config.db_path().join("indexes"),
@@ -666,7 +670,9 @@ impl IotaNode {
             None
         };
 
-        let node_index = if is_full_node && config.enable_index_processing {
+        let node_index = if is_full_node {
+            // Migrate legacy directory names before opening the DB.
+            NodeIndexStore::migrate_legacy_dirs(&config.db_path());
             Some(Arc::new(
                 NodeIndexStore::new(
                     config.db_path().join(NODE_INDEX_DIR),
