@@ -9,7 +9,7 @@ use std::{net::SocketAddr, sync::Arc, time::Duration};
 
 use anyhow::Result;
 use clap::Parser;
-use iota_node_storage::NodeStateReader;
+use iota_node_storage::GrpcStateReader;
 use iota_swarm_config::genesis_config::AccountConfig;
 use simulacrum::Simulacrum;
 use tokio::signal;

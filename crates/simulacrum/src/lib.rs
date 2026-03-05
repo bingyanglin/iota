@@ -30,7 +30,7 @@ use iota_config::{
     genesis, transaction_deny_config::TransactionDenyConfig,
     verifier_signing_config::VerifierSigningConfig,
 };
-use iota_node_storage::{NodeIndexes, NodeStateReader};
+use iota_node_storage::{GrpcIndexes, GrpcStateReader};
 use iota_protocol_config::ProtocolVersion;
 use iota_storage::blob::{Blob, BlobEncoding};
 use iota_swarm_config::{
@@ -693,7 +693,7 @@ impl<T, V: store::SimulatorStore> ReadStore for Simulacrum<T, V> {
     }
 }
 
-impl<T: Send + Sync, V: store::SimulatorStore + Send + Sync> NodeStateReader for Simulacrum<T, V> {
+impl<T: Send + Sync, V: store::SimulatorStore + Send + Sync> GrpcStateReader for Simulacrum<T, V> {
     fn get_lowest_available_checkpoint_objects(
         &self,
     ) -> iota_types::storage::error::Result<CheckpointSequenceNumber> {
@@ -722,7 +722,7 @@ impl<T: Send + Sync, V: store::SimulatorStore + Send + Sync> NodeStateReader for
         }))
     }
 
-    fn indexes(&self) -> Option<&dyn iota_node_storage::NodeIndexes> {
+    fn grpc_indexes(&self) -> Option<&dyn iota_node_storage::GrpcIndexes> {
         Some(self)
     }
 
@@ -750,7 +750,7 @@ impl<T: Send + Sync, V: store::SimulatorStore + Send + Sync> Simulacrum<T, V> {
     }
 }
 
-impl<T: Send + Sync, V: store::SimulatorStore + Send + Sync> NodeIndexes for Simulacrum<T, V> {
+impl<T: Send + Sync, V: store::SimulatorStore + Send + Sync> GrpcIndexes for Simulacrum<T, V> {
     fn get_epoch_info(
         &self,
         epoch: iota_types::committee::EpochId,
@@ -814,7 +814,7 @@ impl<T: Send + Sync, V: store::SimulatorStore + Send + Sync> NodeIndexes for Sim
                             .iter()
                             .any(|exec_digests| exec_digests.transaction == *digest)
                         {
-                            // object_types left empty — production NodeIndexStore
+                            // object_types left empty — production GrpcIndexesStore
                             // populates this from input/output objects but that is
                             // not needed for the simulacrum test harness.
                             return Some(TransactionInfo {

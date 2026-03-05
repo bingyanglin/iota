@@ -48,10 +48,10 @@ use crate::{
         committee_store::CommitteeStore, epoch_metrics::EpochMetrics, randomness::RandomnessManager,
     },
     execution_cache::build_execution_cache,
+    grpc_indexes::{GRPC_INDEXES_DIR, GrpcIndexesStore},
     jsonrpc_index::IndexStore,
     mock_consensus::{ConsensusMode, MockConsensusClient},
     module_cache_metrics::ResolverMetrics,
-    node_index::{GRPC_INDEX_DIR, NodeIndexStore},
     signature_verifier::SignatureVerifierMetrics,
 };
 
@@ -342,12 +342,12 @@ impl<'a> TestAuthorityBuilder<'a> {
                     .max_move_identifier_len_as_option(),
             )))
         };
-        let node_index = if self.disable_indexer {
+        let grpc_indexes_store = if self.disable_indexer {
             None
         } else {
             Some(Arc::new(
-                NodeIndexStore::new(
-                    path.join(GRPC_INDEX_DIR),
+                GrpcIndexesStore::new(
+                    path.join(GRPC_INDEXES_DIR),
                     &authority_store,
                     &checkpoint_store,
                 )
@@ -376,7 +376,7 @@ impl<'a> TestAuthorityBuilder<'a> {
             epoch_store.clone(),
             committee_store,
             index_store,
-            node_index,
+            grpc_indexes_store,
             checkpoint_store,
             &registry,
             genesis.objects(),

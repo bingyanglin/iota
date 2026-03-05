@@ -12,7 +12,7 @@ use iota_indexer::{
     store::{PgIndexerStore, indexer_store::IndexerStore},
     test_utils::{IndexerTypeConfig, force_delete_database, start_test_indexer_impl},
 };
-use iota_node_storage::NodeStateReader;
+use iota_node_storage::GrpcStateReader;
 use iota_swarm_config::genesis_config::{AccountConfig, DEFAULT_GAS_AMOUNT};
 use iota_types::transaction::{Transaction, TransactionData};
 use test_cluster::{TestCluster, TestClusterBuilder};
@@ -118,7 +118,7 @@ pub async fn start_cluster(
 pub async fn serve_executor(
     graphql_connection_config: ConnectionConfig,
     internal_data_source_rpc_port: u16,
-    executor: Arc<dyn NodeStateReader + Send + Sync>,
+    executor: Arc<dyn GrpcStateReader + Send + Sync>,
     snapshot_config: Option<SnapshotLagConfig>,
     epochs_to_keep: Option<u64>,
     data_ingestion_path: PathBuf,

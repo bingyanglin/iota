@@ -5,7 +5,7 @@
 use std::{collections::BTreeMap, num::NonZeroUsize, path::PathBuf, sync::Arc, time::Duration};
 
 use iota_config::genesis;
-use iota_node_storage::NodeStateReader;
+use iota_node_storage::GrpcStateReader;
 use iota_protocol_config::ProtocolVersion;
 use iota_swarm_config::{genesis_config::AccountConfig, network_config_builder::ConfigBuilder};
 use iota_types::{
@@ -797,7 +797,7 @@ impl ReadStore for PersistedStoreInnerReadOnlyWrapper {
     }
 }
 
-impl NodeStateReader for PersistedStoreInnerReadOnlyWrapper {
+impl GrpcStateReader for PersistedStoreInnerReadOnlyWrapper {
     fn get_lowest_available_checkpoint_objects(
         &self,
     ) -> iota_types::storage::error::Result<CheckpointSequenceNumber> {
@@ -817,7 +817,7 @@ impl NodeStateReader for PersistedStoreInnerReadOnlyWrapper {
         todo!()
     }
 
-    fn indexes(&self) -> Option<&dyn iota_node_storage::NodeIndexes> {
+    fn grpc_indexes(&self) -> Option<&dyn iota_node_storage::GrpcIndexes> {
         None
     }
 

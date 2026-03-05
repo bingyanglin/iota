@@ -446,7 +446,7 @@ impl CheckpointExecutor {
     }
 
     fn checkpoint_data_enabled(&self) -> bool {
-        self.state.node_index.is_some() || self.config.data_ingestion_dir.is_some()
+        self.state.grpc_indexes_store.is_some() || self.config.data_ingestion_dir.is_some()
     }
 
     fn process_checkpoint_data(
@@ -467,8 +467,8 @@ impl CheckpointExecutor {
         // Index the checkpoint. this is done out of order and is not written and
         // committed to the DB until later (committing must be done
         // in-order)
-        if let Some(node_index) = &self.state.node_index {
-            node_index.index_checkpoint(&checkpoint_data);
+        if let Some(grpc_indexes_store) = &self.state.grpc_indexes_store {
+            grpc_indexes_store.index_checkpoint(&checkpoint_data);
         }
 
         if let Some(path) = &self.config.data_ingestion_dir {
@@ -788,10 +788,10 @@ impl CheckpointExecutor {
     /// If configured, commit the pending index updates for the provided
     /// checkpoint
     fn commit_index_updates(&self, checkpoint: CheckpointData) {
-        if let Some(node_index) = &self.state.node_index {
-            node_index
+        if let Some(grpc_indexes_store) = &self.state.grpc_indexes_store {
+            grpc_indexes_store
                 .commit_update_for_checkpoint(checkpoint.checkpoint_summary.sequence_number)
-                .expect("failed to update node indexes");
+                .expect("failed to update gRPC indexes");
         }
     }
 

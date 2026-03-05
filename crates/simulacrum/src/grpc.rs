@@ -14,7 +14,7 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use iota_grpc_server::{GrpcReader, GrpcServerHandle, start_grpc_server};
-use iota_node_storage::NodeStateReader;
+use iota_node_storage::GrpcStateReader;
 use iota_types::transaction_executor::TransactionExecutor as TransactionExecutorTrait;
 use tokio_util::sync::CancellationToken;
 
@@ -23,7 +23,7 @@ use crate::{Simulacrum, transaction_executor::TransactionExecutor};
 /// Start a gRPC server for the given simulacrum instance.
 ///
 /// This creates the full server stack with:
-/// - The [`Simulacrum`] as the state reader (implements [`NodeStateReader`])
+/// - The [`Simulacrum`] as the state reader (implements [`GrpcStateReader`])
 /// - A [`TransactionExecutor`] for transaction execution/simulation
 /// - The real chain identifier from the simulacrum genesis
 pub async fn start_simulacrum_grpc_server(

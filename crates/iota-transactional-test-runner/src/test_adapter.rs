@@ -31,7 +31,7 @@ use iota_json_rpc_types::{
     DevInspectResults, DryRunTransactionBlockResponse, IotaExecutionStatus,
     IotaTransactionBlockEffects, IotaTransactionBlockEffectsAPI, IotaTransactionBlockEvents,
 };
-use iota_node_storage::NodeStateReader;
+use iota_node_storage::GrpcStateReader;
 use iota_protocol_config::{Chain, ProtocolConfig};
 use iota_storage::{
     key_value_store::TransactionKeyValueStore, key_value_store_metrics::KeyValueStoreMetrics,
@@ -183,10 +183,10 @@ pub struct IotaTestAdapter {
     pub(crate) staged_modules: BTreeMap<Symbol, StagedPackage>,
     is_simulator: bool,
     /// If `is_simulator` is true, the executor will be a `Simulacrum`, and this
-    /// will be a `NodeStateReader` that can be used to spawn the equivalent
+    /// will be a `GrpcStateReader` that can be used to spawn the equivalent
     /// of a fullnode gRPC server. This can then be used to serve an indexer
     /// that reads from said gRPC service.
-    pub read_replica: Option<Arc<dyn NodeStateReader + Send + Sync>>,
+    pub read_replica: Option<Arc<dyn GrpcStateReader + Send + Sync>>,
     /// Configuration for offchain state reader read from the file itself, and
     /// can be passed to the specific indexing and reader flavor.
     pub offchain_config: Option<OffChainConfig>,
@@ -2560,7 +2560,7 @@ async fn init_val_fullnode_executor(
 ) -> (
     Box<dyn TransactionalAdapter>,
     AccountSetup,
-    Option<Arc<dyn NodeStateReader + Send + Sync>>,
+    Option<Arc<dyn GrpcStateReader + Send + Sync>>,
 ) {
     // Initial list of named addresses with specified values
     let mut named_address_mapping = NAMED_ADDRESSES.clone();
@@ -2630,7 +2630,7 @@ async fn init_sim_executor(
 ) -> (
     Box<dyn TransactionalAdapter>,
     AccountSetup,
-    Option<Arc<dyn NodeStateReader + Send + Sync>>,
+    Option<Arc<dyn GrpcStateReader + Send + Sync>>,
 ) {
     // Initial list of named addresses with specified values
     let mut named_address_mapping = NAMED_ADDRESSES.clone();

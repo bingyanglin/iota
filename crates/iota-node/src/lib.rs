@@ -68,14 +68,14 @@ use iota_core::{
         reconfiguration::ReconfigurationInitiator,
     },
     execution_cache::build_execution_cache,
+    grpc_indexes::{GRPC_INDEXES_DIR, GrpcIndexesStore},
     jsonrpc_index::IndexStore,
     module_cache_metrics::ResolverMetrics,
-    node_index::{GRPC_INDEX_DIR, NodeIndexStore},
     overload_monitor::overload_monitor,
     safe_client::SafeClientMetricsBase,
     signature_verifier::SignatureVerifierMetrics,
     state_accumulator::{StateAccumulator, StateAccumulatorMetrics},
-    storage::{NodeReadStore, RocksDbStore},
+    storage::{GrpcReadStore, RocksDbStore},
     traffic_controller::metrics::TrafficControllerMetrics,
     transaction_orchestrator::TransactionOrchestrator,
     validator_tx_finalizer::ValidatorTxFinalizer,
@@ -666,13 +666,13 @@ impl IotaNode {
             None
         };
 
-        let node_index =
+        let grpc_indexes_store =
             if is_full_node && (config.enable_index_processing || config.enable_grpc_api) {
                 // Migrate legacy directory names before opening the DB.
-                NodeIndexStore::migrate_legacy_dirs(&config.db_path());
+                GrpcIndexesStore::migrate_legacy_dirs(&config.db_path());
                 Some(Arc::new(
-                    NodeIndexStore::new(
-                        config.db_path().join(GRPC_INDEX_DIR),
+                    GrpcIndexesStore::new(
+                        config.db_path().join(GRPC_INDEXES_DIR),
                         &store,
                         &checkpoint_store,
                     )
@@ -761,7 +761,7 @@ impl IotaNode {
             epoch_store.clone(),
             committee_store.clone(),
             index_store.clone(),
-            node_index,
+            grpc_indexes_store,
             checkpoint_store.clone(),
             &prometheus_registry,
             &genesis_objects,
@@ -2431,14 +2431,14 @@ async fn build_grpc_server(
     // Get chain identifier from state directly
     let chain_id = state.get_chain_identifier();
 
-    let node_read_store = Arc::new(NodeReadStore::new(state.clone(), state_sync_store));
+    let grpc_read_store = Arc::new(GrpcReadStore::new(state.clone(), state_sync_store));
 
     // Create cancellation token for proper shutdown hierarchy
     let shutdown_token = CancellationToken::new();
 
     // Create GrpcReader
     let grpc_reader = Arc::new(GrpcReader::new(
-        node_read_store,
+        grpc_read_store,
         Some(env!("CARGO_PKG_VERSION").to_string()),
     ));
 

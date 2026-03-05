@@ -25,8 +25,8 @@ use iota_core::{
     },
     checkpoints::CheckpointStore,
     epoch::committee_store::CommitteeStoreTables,
+    grpc_indexes::{GRPC_INDEXES_DIR, GrpcIndexesStore},
     jsonrpc_index::IndexStoreTables,
-    node_index::{GRPC_INDEX_DIR, NodeIndexStore},
 };
 use iota_types::base_types::{EpochId, ObjectID};
 use prometheus::Registry;
@@ -208,7 +208,7 @@ pub fn compact(db_path: PathBuf) -> anyhow::Result<()> {
 pub async fn prune_objects(db_path: PathBuf) -> anyhow::Result<()> {
     let perpetual_db = Arc::new(AuthorityPerpetualTables::open(&db_path.join("store"), None));
     let checkpoint_store = CheckpointStore::new(&db_path.join("checkpoints"));
-    let node_index = NodeIndexStore::new_without_init(db_path.join(GRPC_INDEX_DIR));
+    let grpc_indexes_store = GrpcIndexesStore::new_without_init(db_path.join(GRPC_INDEXES_DIR));
     let highest_pruned_checkpoint = checkpoint_store
         .get_highest_pruned_checkpoint_seq_number()?
         .unwrap_or(0);
@@ -228,7 +228,7 @@ pub async fn prune_objects(db_path: PathBuf) -> anyhow::Result<()> {
     AuthorityStorePruner::prune_objects_for_eligible_epochs(
         &perpetual_db,
         &checkpoint_store,
-        Some(&node_index),
+        Some(&grpc_indexes_store),
         None,
         pruning_config,
         metrics,
@@ -241,7 +241,7 @@ pub async fn prune_objects(db_path: PathBuf) -> anyhow::Result<()> {
 pub async fn prune_checkpoints(db_path: PathBuf) -> anyhow::Result<()> {
     let perpetual_db = Arc::new(AuthorityPerpetualTables::open(&db_path.join("store"), None));
     let checkpoint_store = CheckpointStore::new(&db_path.join("checkpoints"));
-    let node_index = NodeIndexStore::new_without_init(db_path.join(GRPC_INDEX_DIR));
+    let grpc_indexes_store = GrpcIndexesStore::new_without_init(db_path.join(GRPC_INDEXES_DIR));
     let metrics = AuthorityStorePruningMetrics::new(&Registry::default());
     info!("Pruning setup for db at path: {:?}", db_path.display());
     let pruning_config = AuthorityStorePruningConfig {
@@ -253,7 +253,7 @@ pub async fn prune_checkpoints(db_path: PathBuf) -> anyhow::Result<()> {
     AuthorityStorePruner::prune_checkpoints_for_eligible_epochs(
         &perpetual_db,
         &checkpoint_store,
-        Some(&node_index),
+        Some(&grpc_indexes_store),
         None,
         pruning_config,
         metrics,

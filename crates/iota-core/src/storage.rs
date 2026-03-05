@@ -4,7 +4,7 @@
 
 use std::sync::Arc;
 
-use iota_node_storage::{NodeIndexes, NodeStateReader};
+use iota_node_storage::{GrpcIndexes, GrpcStateReader};
 use iota_types::{
     base_types::TransactionDigest,
     committee::{Committee, EpochId},
@@ -28,7 +28,7 @@ use tracing::instrument;
 use crate::{
     authority::AuthorityState, checkpoints::CheckpointStore,
     epoch::committee_store::CommitteeStore, execution_cache::ExecutionCacheTraitPointers,
-    node_index::NodeIndexStore,
+    grpc_indexes::GrpcIndexesStore,
 };
 
 #[derive(Clone)]
@@ -360,24 +360,24 @@ impl WriteStore for RocksDbStore {
     }
 }
 
-pub struct NodeReadStore {
+pub struct GrpcReadStore {
     state: Arc<AuthorityState>,
     rocks: RocksDbStore,
 }
 
-impl NodeReadStore {
+impl GrpcReadStore {
     pub fn new(state: Arc<AuthorityState>, rocks: RocksDbStore) -> Self {
         Self { state, rocks }
     }
 
-    fn index(&self) -> iota_types::storage::error::Result<&NodeIndexStore> {
-        self.state.node_index.as_deref().ok_or_else(|| {
-            iota_types::storage::error::Error::custom("node index store is disabled")
+    fn grpc_indexes_store(&self) -> iota_types::storage::error::Result<&GrpcIndexesStore> {
+        self.state.grpc_indexes_store.as_deref().ok_or_else(|| {
+            iota_types::storage::error::Error::custom("gRPC index store is disabled")
         })
     }
 }
 
-impl ObjectStore for NodeReadStore {
+impl ObjectStore for GrpcReadStore {
     fn try_get_object(
         &self,
         object_id: &iota_types::base_types::ObjectID,
@@ -394,7 +394,7 @@ impl ObjectStore for NodeReadStore {
     }
 }
 
-impl ReadStore for NodeReadStore {
+impl ReadStore for GrpcReadStore {
     fn try_get_committee(
         &self,
         epoch: EpochId,
@@ -495,7 +495,7 @@ impl ReadStore for NodeReadStore {
     }
 }
 
-impl NodeStateReader for NodeReadStore {
+impl GrpcStateReader for GrpcReadStore {
     fn get_lowest_available_checkpoint_objects(
         &self,
     ) -> iota_types::storage::error::Result<CheckpointSequenceNumber> {
@@ -522,8 +522,8 @@ impl NodeStateReader for NodeReadStore {
             .map_err(iota_types::storage::error::Error::custom)
     }
 
-    fn indexes(&self) -> Option<&dyn NodeIndexes> {
-        self.index().ok().map(|index| index as _)
+    fn grpc_indexes(&self) -> Option<&dyn GrpcIndexes> {
+        self.grpc_indexes_store().ok().map(|index| index as _)
     }
 
     fn get_struct_layout(
@@ -542,7 +542,7 @@ impl NodeStateReader for NodeReadStore {
     }
 }
 
-impl NodeIndexes for NodeIndexStore {
+impl GrpcIndexes for GrpcIndexesStore {
     fn get_epoch_info(&self, epoch: EpochId) -> Result<Option<iota_types::storage::EpochInfo>> {
         self.get_epoch_info(epoch).map_err(StorageError::custom)
     }

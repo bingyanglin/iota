@@ -33,8 +33,8 @@ use crate::{authority::AuthorityStore, checkpoints::CheckpointStore};
 /// triggers a full re-index of all checkpoints.
 const CURRENT_DB_VERSION: u64 = 1;
 
-/// On-disk directory name for the gRPC index store.
-pub const GRPC_INDEX_DIR: &str = "grpc_indexes";
+/// On-disk directory name for the gRPC indexes store.
+pub const GRPC_INDEXES_DIR: &str = "grpc_indexes";
 
 /// Legacy directory name from before the REST API removal.
 /// Used by `migrate_legacy_dirs` to find and rename the old directory.
@@ -53,7 +53,7 @@ pub enum Watermark {
     Pruned,
 }
 
-/// RocksDB tables for the NodeIndexStore
+/// RocksDB tables for the GrpcIndexesStore
 ///
 /// Anytime a new table is added, or an existing one has its schema changed,
 /// make sure to also update the value of `CURRENT_DB_VERSION`.
@@ -154,7 +154,7 @@ impl IndexStoreTables {
     fn open<P: Into<PathBuf>>(path: P) -> Self {
         IndexStoreTables::open_tables_read_write(
             path.into(),
-            MetricConf::new("node-index"),
+            MetricConf::new("grpc-index"),
             None,
             None,
         )
@@ -184,7 +184,7 @@ impl IndexStoreTables {
         authority_store: &AuthorityStore,
         checkpoint_store: &CheckpointStore,
     ) -> Result<(), StorageError> {
-        info!("Initializing node indexes");
+        info!("Initializing gRPC indexes");
 
         let highest_executed_checkpoint =
             checkpoint_store.get_highest_executed_checkpoint_seq_number()?;
@@ -215,7 +215,7 @@ impl IndexStoreTables {
             },
         )?;
 
-        info!("Finished initializing node indexes");
+        info!("Finished initializing gRPC indexes");
 
         Ok(())
     }
@@ -465,23 +465,23 @@ impl IndexStoreTables {
     }
 }
 
-pub struct NodeIndexStore {
+pub struct GrpcIndexesStore {
     tables: IndexStoreTables,
     pending_updates: Mutex<BTreeMap<u64, typed_store::rocks::DBBatch>>,
 }
 
-impl NodeIndexStore {
+impl GrpcIndexesStore {
     /// One-time migration: rename the legacy `rest_index` directory to
-    /// [`GRPC_INDEX_DIR`].
+    /// [`GRPC_INDEXES_DIR`].
     ///
-    /// Must be called before [`NodeIndexStore::new`] so that the DB is not
+    /// Must be called before [`GrpcIndexesStore::new`] so that the DB is not
     /// yet open. Safe to call multiple times — it is a no-op when the target
     /// directory already exists.
     ///
     /// TODO(cleanup): Remove after one release cycle once all production nodes
     /// have upgraded past this version.
     pub fn migrate_legacy_dirs(db_path: &std::path::Path) {
-        let target = db_path.join(GRPC_INDEX_DIR);
+        let target = db_path.join(GRPC_INDEXES_DIR);
         if target.exists() {
             return;
         }
@@ -492,7 +492,7 @@ impl NodeIndexStore {
                 legacy, target
             );
             if let Err(e) = std::fs::rename(&legacy, &target) {
-                // Non-fatal: NodeIndexStore::new will re-create and re-index.
+                // Non-fatal: GrpcIndexesStore::new will re-create and re-index.
                 tracing::warn!(
                     "failed to rename {:?} to {:?}: {e}. \
                      The index will be rebuilt from scratch on next startup.",
@@ -518,13 +518,13 @@ impl NodeIndexStore {
                     drop(tables);
                     typed_store::rocks::safe_drop_db(path.clone(), Duration::from_secs(30))
                         .await
-                        .expect("unable to destroy old node-index db");
+                        .expect("unable to destroy old gRPC index db");
                     IndexStoreTables::open(path)
                 };
 
                 tables
                     .init(authority_store, checkpoint_store)
-                    .expect("unable to initialize node index");
+                    .expect("unable to initialize gRPC index");
                 tables
             } else {
                 tables

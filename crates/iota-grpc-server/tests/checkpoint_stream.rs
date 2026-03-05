@@ -10,7 +10,7 @@ use std::{
 use iota_config::{local_ip_utils, node::GrpcApiConfig};
 use iota_grpc_client::Client;
 use iota_grpc_server::{GrpcReader, GrpcServerHandle, start_grpc_server};
-use iota_node_storage::{NodeIndexes, NodeStateReader};
+use iota_node_storage::{GrpcIndexes, GrpcStateReader};
 use iota_test_transaction_builder::TestTransactionBuilder;
 use iota_types::{
     base_types::{ObjectID, random_object_ref},
@@ -26,12 +26,12 @@ use iota_types::{
 };
 use tokio_stream::StreamExt;
 
-struct MockNodeStateReader {
+struct MockGrpcStateReader {
     chain_identifier: iota_types::digests::ChainIdentifier,
     checkpoints: Arc<Mutex<HashSet<CheckpointSequenceNumber>>>,
     large_checkpoints: Arc<Mutex<HashSet<CheckpointSequenceNumber>>>,
 }
-impl MockNodeStateReader {
+impl MockGrpcStateReader {
     fn new_from_iter<I: Iterator<Item = u64>>(iter: I) -> Self {
         Self {
             chain_identifier: iota_types::digests::ChainIdentifier::default(),
@@ -122,8 +122,8 @@ fn mock_large_checkpoint_data(sequence_number: u64) -> CheckpointData {
     }
 }
 
-// Minimal empty trait impls to satisfy NodeStateReader supertraits
-impl iota_types::storage::ObjectStore for MockNodeStateReader {
+// Minimal empty trait impls to satisfy GrpcStateReader supertraits
+impl iota_types::storage::ObjectStore for MockGrpcStateReader {
     fn try_get_object(
         &self,
         _id: &ObjectID,
@@ -153,7 +153,7 @@ impl iota_types::storage::ObjectStore for MockNodeStateReader {
     }
 }
 
-impl iota_types::storage::ReadStore for MockNodeStateReader {
+impl iota_types::storage::ReadStore for MockGrpcStateReader {
     fn try_get_committee(
         &self,
         _epoch: EpochId,
@@ -410,7 +410,7 @@ impl iota_types::storage::ReadStore for MockNodeStateReader {
     }
 }
 
-impl NodeStateReader for MockNodeStateReader {
+impl GrpcStateReader for MockGrpcStateReader {
     fn get_lowest_available_checkpoint_objects(&self) -> StorageResult<CheckpointSequenceNumber> {
         Ok(0)
     }
@@ -426,7 +426,7 @@ impl NodeStateReader for MockNodeStateReader {
         unimplemented!()
     }
 
-    fn indexes(&self) -> Option<&dyn NodeIndexes> {
+    fn grpc_indexes(&self) -> Option<&dyn GrpcIndexes> {
         None
     }
 
@@ -453,7 +453,7 @@ async fn test_server_and_client_setup_with_large_checkpoints<
     Client,
     Arc<Mutex<HashSet<CheckpointSequenceNumber>>>,
 ) {
-    let mock = Arc::new(MockNodeStateReader::new_from_iter(checkpoint_range));
+    let mock = Arc::new(MockGrpcStateReader::new_from_iter(checkpoint_range));
 
     // Mark specified checkpoints as large
     for seq in large_checkpoints {
@@ -472,14 +472,14 @@ async fn test_server_and_client_setup_with_large_checkpoints<
 async fn test_server_and_client_setup<I: Iterator<Item = u64>>(
     checkpoint_range: I,
     config_customizer: impl FnOnce(&mut GrpcApiConfig),
-    mock_state_reader: Option<Arc<MockNodeStateReader>>,
+    mock_state_reader: Option<Arc<MockGrpcStateReader>>,
     client_max_message_size_bytes: Option<u32>,
 ) -> (
     GrpcServerHandle,
     Client,
     Arc<Mutex<HashSet<CheckpointSequenceNumber>>>,
 ) {
-    let mock = mock_state_reader.unwrap_or(Arc::new(MockNodeStateReader::new_from_iter(
+    let mock = mock_state_reader.unwrap_or(Arc::new(MockGrpcStateReader::new_from_iter(
         checkpoint_range,
     )));
     let checkpoints = mock.checkpoints.clone();

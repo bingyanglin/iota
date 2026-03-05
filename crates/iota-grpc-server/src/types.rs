@@ -14,7 +14,7 @@ use iota_grpc_types::{
         transaction as grpc_transaction,
     },
 };
-use iota_node_storage::NodeStateReader;
+use iota_node_storage::GrpcStateReader;
 use iota_types::{
     base_types::{ObjectID, VersionNumber},
     digests::TransactionDigest,
@@ -130,11 +130,11 @@ pub type ObjectsStreamResult = Result<grpc_ledger_service::GetObjectsResponse, S
 pub type TransactionsStreamResult = Result<grpc_ledger_service::GetTransactionsResponse, Status>;
 pub type CheckpointStreamResult = Result<grpc_ledger_service::CheckpointData, Status>;
 
-/// Get the latest checkpoint sequence number from a `NodeStateReader`.
+/// Get the latest checkpoint sequence number from a `GrpcStateReader`.
 ///
 /// Handles the `Kind::Missing` error during server startup (when no checkpoints
 /// have been executed yet) by returning `Ok(None)`.
-fn latest_checkpoint_seq(reader: &dyn NodeStateReader) -> anyhow::Result<Option<u64>> {
+fn latest_checkpoint_seq(reader: &dyn GrpcStateReader) -> anyhow::Result<Option<u64>> {
     match reader.try_get_latest_checkpoint() {
         Ok(checkpoint) => Ok(Some(*checkpoint.sequence_number())),
         Err(e) => match e.kind() {
@@ -148,7 +148,7 @@ fn latest_checkpoint_seq(reader: &dyn NodeStateReader) -> anyhow::Result<Option<
 
 /// Compose checkpoint summary and contents from two storage calls.
 fn checkpoint_summary_and_contents(
-    reader: &dyn NodeStateReader,
+    reader: &dyn GrpcStateReader,
     seq: u64,
 ) -> anyhow::Result<Option<(CertifiedCheckpointSummary, CheckpointContents)>> {
     let summary = reader
@@ -163,15 +163,15 @@ fn checkpoint_summary_and_contents(
     }
 }
 
-/// Central gRPC data reader wrapping a [`NodeStateReader`].
+/// Central gRPC data reader wrapping a [`GrpcStateReader`].
 #[derive(Clone)]
 pub struct GrpcReader {
-    state_reader: Arc<dyn NodeStateReader>,
+    state_reader: Arc<dyn GrpcStateReader>,
     server_version: Option<String>,
 }
 
 impl GrpcReader {
-    pub fn new(state_reader: Arc<dyn NodeStateReader>, server_version: Option<String>) -> Self {
+    pub fn new(state_reader: Arc<dyn GrpcStateReader>, server_version: Option<String>) -> Self {
         Self {
             state_reader,
             server_version,
@@ -510,7 +510,7 @@ impl GrpcReader {
         &self,
         epoch: u64,
     ) -> anyhow::Result<Option<iota_types::storage::EpochInfo>> {
-        match self.state_reader.indexes() {
+        match self.state_reader.grpc_indexes() {
             Some(indexes) => indexes.get_epoch_info(epoch).map_err(Into::into),
             None => Ok(None),
         }
@@ -533,7 +533,7 @@ impl GrpcReader {
         end_sequence_number: Option<u64>,
         cancellation_token: CancellationToken,
         data_type_name: &'static str,
-        fetch_historical: impl Fn(Arc<dyn NodeStateReader>, u64) -> Result<Option<Arc<S>>, Status>
+        fetch_historical: impl Fn(Arc<dyn GrpcStateReader>, u64) -> Result<Option<Arc<S>>, Status>
         + Send,
         get_sequence_number_live: impl Fn(&Arc<T>) -> u64 + Send,
         process_item_historical: impl Fn(
@@ -786,7 +786,7 @@ impl GrpcReader {
         };
 
         let (checkpoint, timestamp_ms) = if fields.include_checkpoint || fields.include_timestamp {
-            let checkpoint = match self.state_reader.indexes() {
+            let checkpoint = match self.state_reader.grpc_indexes() {
                 Some(indexes) => indexes
                     .get_transaction_info(digest)?
                     .map(|info| info.checkpoint),

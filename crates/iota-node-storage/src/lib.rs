@@ -3,7 +3,7 @@
 
 //! Full-node-specific storage traits.
 //!
-//! This crate defines the [`NodeStateReader`] and [`NodeIndexes`] traits, which
+//! This crate defines the [`GrpcStateReader`] and [`GrpcIndexes`] traits, which
 //! extend the core [`ObjectStore`] and [`ReadStore`] interfaces from
 //! `iota-types` with queries that are only available on full nodes (e.g. epoch
 //! info, transaction-to-checkpoint mapping, type layout resolution).
@@ -26,7 +26,7 @@ use move_core_types::{
 
 /// Trait extending [`ReadStore`] with full-node-specific queries that may
 /// require richer databases or indexes to support.
-pub trait NodeStateReader: ObjectStore + ReadStore + Send + Sync {
+pub trait GrpcStateReader: ObjectStore + ReadStore + Send + Sync {
     /// Lowest available checkpoint for which object data can be requested.
     ///
     /// Specifically this is the lowest checkpoint for which input/output object
@@ -37,8 +37,8 @@ pub trait NodeStateReader: ObjectStore + ReadStore + Send + Sync {
 
     fn get_epoch_last_checkpoint(&self, epoch_id: EpochId) -> Result<Option<VerifiedCheckpoint>>;
 
-    /// Get a handle to an instance of the node indexes.
-    fn indexes(&self) -> Option<&dyn NodeIndexes>;
+    /// Get a handle to an instance of the gRPC indexes.
+    fn grpc_indexes(&self) -> Option<&dyn GrpcIndexes>;
 
     fn get_type_layout(&self, type_tag: &TypeTag) -> Result<Option<MoveTypeLayout>> {
         match type_tag {
@@ -61,8 +61,8 @@ pub trait NodeStateReader: ObjectStore + ReadStore + Send + Sync {
     fn get_struct_layout(&self, type_tag: &StructTag) -> Result<Option<MoveTypeLayout>>;
 }
 
-/// Index queries available on full nodes.
-pub trait NodeIndexes: Send + Sync {
+/// GRPC-index-specific queries.
+pub trait GrpcIndexes: Send + Sync {
     fn get_epoch_info(&self, epoch: EpochId) -> Result<Option<EpochInfo>>;
 
     fn get_transaction_info(&self, digest: &TransactionDigest) -> Result<Option<TransactionInfo>>;
