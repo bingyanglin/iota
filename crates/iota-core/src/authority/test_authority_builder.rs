@@ -51,7 +51,7 @@ use crate::{
     jsonrpc_index::IndexStore,
     mock_consensus::{ConsensusMode, MockConsensusClient},
     module_cache_metrics::ResolverMetrics,
-    node_index::{NODE_INDEX_DIR, NodeIndexStore},
+    node_index::{GRPC_INDEX_DIR, NodeIndexStore},
     signature_verifier::SignatureVerifierMetrics,
 };
 
@@ -347,7 +347,7 @@ impl<'a> TestAuthorityBuilder<'a> {
         } else {
             Some(Arc::new(
                 NodeIndexStore::new(
-                    path.join(NODE_INDEX_DIR),
+                    path.join(GRPC_INDEX_DIR),
                     &authority_store,
                     &checkpoint_store,
                 )

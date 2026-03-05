@@ -89,16 +89,12 @@ pub struct NodeConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub consensus_config: Option<ConsensusConfig>,
 
-    // TO DISCUSS: Removed `enable_index_processing`. Full nodes always create
-    // indexes now so gRPC clients don't silently get empty results. Trade-offs:
-    // 1. Lightweight/relay nodes pay an upfront backfill cost at startup (loading non-pruned
-    //    checkpoint transactions to populate the index). Could re-introduce the flag or make the
-    //    backfill lazy/async if needed.
-    // 2. This also forces JSON-RPC IndexStore creation, but that store will be removed together
-    //    with the JSON-RPC API deprecation.
-    // 3. Alternative: only create NodeIndexStore when `enable_grpc_api` is true, since only gRPC
-    //    needs it — all other code paths (checkpoint executor, pruner, snapshots) already skip
-    //    gracefully when indexes are None.
+    /// Flag to enable index processing for a full node.
+    ///
+    /// If set to true, node creates `IndexStore` for transaction
+    /// data including ownership and balance information.
+    #[serde(default = "default_enable_index_processing")]
+    pub enable_index_processing: bool,
 
     // only allow websocket connections for jsonrpc traffic
     #[serde(default)]
@@ -651,6 +647,10 @@ fn default_transaction_kv_store_config() -> TransactionKeyValueStoreReadConfig {
 
 fn default_authority_store_pruning_config() -> AuthorityStorePruningConfig {
     AuthorityStorePruningConfig::default()
+}
+
+pub fn default_enable_index_processing() -> bool {
+    true
 }
 
 fn default_grpc_address() -> Multiaddr {

@@ -28,8 +28,8 @@ An example of `config.yaml` for the Blob worker:
 # IndexerExecutor config
 #
 path: "./test-checkpoints"
-# Remote object store URL (or gRPC URL for hybrid mode, see v2 reader)
-remote-store-url: "https://checkpoints.example.com"
+# Remote store URL
+remote-store-url: "http://localhost:9000"
 
 # Path to the progress store JSON file.
 #

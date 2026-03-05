@@ -70,7 +70,7 @@ use iota_core::{
     execution_cache::build_execution_cache,
     jsonrpc_index::IndexStore,
     module_cache_metrics::ResolverMetrics,
-    node_index::{NODE_INDEX_DIR, NodeIndexStore},
+    node_index::{GRPC_INDEX_DIR, NodeIndexStore},
     overload_monitor::overload_monitor,
     safe_client::SafeClientMetricsBase,
     signature_verifier::SignatureVerifierMetrics,
@@ -653,11 +653,7 @@ impl IotaNode {
             checkpoint_store.clone(),
         );
 
-        // TO DISCUSS: Full nodes always create indexes now (enable_index_processing
-        // flag removed). Without indexes gRPC clients silently get empty results
-        // for epoch/transaction lookups. Trade-off: lightweight nodes pay an
-        // upfront backfill cost at startup (see NodeIndexStore::init).
-        let index_store = if is_full_node {
+        let index_store = if is_full_node && config.enable_index_processing {
             info!("creating index store");
             Some(Arc::new(IndexStore::new(
                 config.db_path().join("indexes"),
@@ -670,20 +666,21 @@ impl IotaNode {
             None
         };
 
-        let node_index = if is_full_node {
-            // Migrate legacy directory names before opening the DB.
-            NodeIndexStore::migrate_legacy_dirs(&config.db_path());
-            Some(Arc::new(
-                NodeIndexStore::new(
-                    config.db_path().join(NODE_INDEX_DIR),
-                    &store,
-                    &checkpoint_store,
-                )
-                .await,
-            ))
-        } else {
-            None
-        };
+        let node_index =
+            if is_full_node && (config.enable_index_processing || config.enable_grpc_api) {
+                // Migrate legacy directory names before opening the DB.
+                NodeIndexStore::migrate_legacy_dirs(&config.db_path());
+                Some(Arc::new(
+                    NodeIndexStore::new(
+                        config.db_path().join(GRPC_INDEX_DIR),
+                        &store,
+                        &checkpoint_store,
+                    )
+                    .await,
+                ))
+            } else {
+                None
+            };
 
         info!("creating archive reader");
         // Create network

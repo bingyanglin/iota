@@ -545,10 +545,10 @@ impl<P: ProgressStore> IndexerExecutor<P> {
 /// async fn main() {
 ///     let (executor, _) = setup_single_workflow(
 ///         CustomWorker,
-///         "https://checkpoints.example.com".to_string(), // remote object store URL
-///         0,                                             // initial checkpoint number.
-///         5,                                             // concurrency.
-///         None,                                          // extra reader options.
+///         "http://127.0.0.1:9000".to_string(), // remote store URL
+///         0,                                   // initial checkpoint number.
+///         5,                                   // concurrency.
+///         None,                                // extra reader options.
 ///     )
 ///     .await
 ///     .unwrap();

@@ -10,7 +10,6 @@ use std::{
 };
 
 use iota_types::{
-    base_types::{IotaAddress, MoveObjectType, ObjectID, SequenceNumber},
     committee::EpochId,
     digests::TransactionDigest,
     error::IotaResult,
@@ -19,10 +18,9 @@ use iota_types::{
     messages_checkpoint::{CheckpointContents, CheckpointSequenceNumber},
     storage::{EpochInfo, TransactionInfo, error::Error as StorageError},
 };
-use move_core_types::language_storage::StructTag;
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
 use serde::{Deserialize, Serialize};
-use tracing::info;
+use tracing::{debug, info};
 use typed_store::{
     DBMapUtils, TypedStoreError,
     rocks::{DBMap, MetricConf},
@@ -31,26 +29,16 @@ use typed_store::{
 
 use crate::{authority::AuthorityStore, checkpoints::CheckpointStore};
 
-/// DB version stays at 1 because the schema of active tables (meta, watermark,
-/// epochs, transactions) has not changed. Deprecated tables (owner,
-/// dynamic_field, coin) are cleaned up automatically via `#[deprecated_db_map]`
-/// on the next DB open — no re-indexing is required.
-///
 /// Only increment this version when an active table's schema changes, as that
 /// triggers a full re-index of all checkpoints.
 const CURRENT_DB_VERSION: u64 = 1;
 
-/// On-disk directory name for the node index store.
-///
-/// TO DISCUSS: Renamed from `"rest_index"` to `"node_indexes"`. A one-time
-/// migration (`migrate_legacy_dirs`) renames the old `rest_index` or
-/// `grpc_indexes` directories at node startup. The migration code can be
-/// removed after one release cycle once all production nodes have upgraded.
-pub const NODE_INDEX_DIR: &str = "node_indexes";
+/// On-disk directory name for the gRPC index store.
+pub const GRPC_INDEX_DIR: &str = "grpc_indexes";
 
-/// Legacy directory names that may exist on disk from previous releases.
-/// Used by `migrate_legacy_dirs` to find and rename old directories.
-const LEGACY_INDEX_DIRS: &[&str] = &["rest_index", "grpc_indexes"];
+/// Legacy directory name from before the REST API removal.
+/// Used by `migrate_legacy_dirs` to find and rename the old directory.
+const LEGACY_INDEX_DIR: &str = "rest_index";
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 struct MetadataInfo {
@@ -63,57 +51,6 @@ struct MetadataInfo {
 pub enum Watermark {
     Indexed,
     Pruned,
-}
-
-// Types retained only for the deprecated RocksDB column families below.
-// The `#[deprecated_db_map]` attribute on their corresponding table entries
-// causes the column families to be dropped on the next DB open. These types
-// and the deprecated table entries can be fully removed once all nodes have
-// performed at least one startup cycle after this change (i.e. the CFs have
-// been cleaned up on disk).
-// TODO(cleanup): Remove these types and the `#[deprecated_db_map]` entries
-// after all production nodes have upgraded past this version.
-#[allow(dead_code)]
-#[derive(Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Debug)]
-struct OwnerIndexKey {
-    owner: IotaAddress,
-    object_id: ObjectID,
-}
-
-#[allow(dead_code)]
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
-struct OwnerIndexInfo {
-    version: SequenceNumber,
-    type_: MoveObjectType,
-}
-
-#[allow(dead_code)]
-#[derive(Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Debug)]
-struct DynamicFieldKey {
-    parent: ObjectID,
-    field_id: ObjectID,
-}
-
-#[allow(dead_code)]
-#[derive(Clone, Serialize, Deserialize, PartialEq, Eq, Debug)]
-struct DynamicFieldIndexInfo {
-    dynamic_field_type: iota_types::dynamic_field::DynamicFieldType,
-    name_type: move_core_types::language_storage::TypeTag,
-    name_value: Vec<u8>,
-    dynamic_object_id: Option<ObjectID>,
-}
-
-#[allow(dead_code)]
-#[derive(Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
-struct CoinIndexKey {
-    coin_type: StructTag,
-}
-
-#[allow(dead_code)]
-#[derive(Clone, Serialize, Deserialize, PartialEq, Eq, Debug)]
-struct CoinIndexInfo {
-    coin_metadata_object_id: Option<ObjectID>,
-    treasury_object_id: Option<ObjectID>,
 }
 
 /// RocksDB tables for the NodeIndexStore
@@ -150,27 +87,67 @@ struct IndexStoreTables {
     /// main database.
     epochs: DBMap<EpochId, EpochInfo>,
 
-    /// An index of extra metadata for Transactions.
+    /// Maps transaction digests to the checkpoint that contains them.
     ///
     /// Only contains entries for transactions which have yet to be pruned from
     /// the main database.
-    transactions: DBMap<TransactionDigest, TransactionInfo>,
+    transaction_checkpoints: DBMap<TransactionDigest, CheckpointSequenceNumber>,
+
+    /// Deprecated: migrated to `transaction_checkpoints` (checkpoint-only).
+    #[allow(dead_code)]
+    #[deprecated_db_map(migration = "migrate_transactions_to_checkpoints")]
+    transactions: Option<DBMap<TransactionDigest, TransactionInfo>>,
 
     /// Deprecated: was used by the removed REST API for object ownership
     /// queries.
     #[allow(dead_code)]
     #[deprecated_db_map]
-    owner: Option<DBMap<OwnerIndexKey, OwnerIndexInfo>>,
+    owner: Option<DBMap<(), ()>>,
 
     /// Deprecated: was used by the removed REST API for dynamic field queries.
     #[allow(dead_code)]
     #[deprecated_db_map]
-    dynamic_field: Option<DBMap<DynamicFieldKey, DynamicFieldIndexInfo>>,
+    dynamic_field: Option<DBMap<(), ()>>,
 
     /// Deprecated: was used by the removed REST API for coin info queries.
     #[allow(dead_code)]
     #[deprecated_db_map]
-    coin: Option<DBMap<CoinIndexKey, CoinIndexInfo>>,
+    coin: Option<DBMap<(), ()>>,
+    // NOTE: Authors and Reviewers before adding any new tables ensure that they
+    // are either:
+    // - bounded in size by the live object set
+    // - are prune-able and have corresponding logic in the `prune` function
+}
+
+/// Migration: copy checkpoint numbers from old `transactions` table into
+/// `transaction_checkpoints`, discarding the now-unused `object_types` field.
+fn migrate_transactions_to_checkpoints(
+    db: &std::sync::Arc<typed_store::rocks::RocksDB>,
+) -> Result<(), TypedStoreError> {
+    use typed_store::traits::Map;
+
+    let old = typed_store::rocks::DBMap::<TransactionDigest, TransactionInfo>::reopen(
+        db,
+        Some("transactions"),
+        &typed_store::rocks::ReadWriteOptions::default(),
+        true,
+    )?;
+    let new = typed_store::rocks::DBMap::<TransactionDigest, CheckpointSequenceNumber>::reopen(
+        db,
+        Some("transaction_checkpoints"),
+        &typed_store::rocks::ReadWriteOptions::default(),
+        false,
+    )?;
+
+    let mut batch = new.batch();
+    for item in old.safe_iter() {
+        let (digest, info) = item?;
+        batch.insert_batch(&new, std::iter::once((digest, info.checkpoint)))?;
+    }
+    batch.write()?;
+
+    info!("migrated transactions -> transaction_checkpoints");
+    Ok(())
 }
 
 impl IndexStoreTables {
@@ -215,16 +192,6 @@ impl IndexStoreTables {
             .get_highest_pruned_checkpoint_seq_number()?
             .map(|c| c.saturating_add(1))
             .unwrap_or(0);
-        let lowest_available_checkpoint_objects = authority_store
-            .perpetual_tables
-            .get_highest_pruned_checkpoint()?
-            .map(|c| c.saturating_add(1))
-            .unwrap_or(0);
-
-        // Backfill reads input/output objects to populate TransactionInfo, so
-        // restrict the range to checkpoints that still have object data.
-        let lowest_available_checkpoint =
-            lowest_available_checkpoint.max(lowest_available_checkpoint_objects);
 
         let checkpoint_range = highest_executed_checkpoint.map(|highest_executed_checkpoint| {
             lowest_available_checkpoint..=highest_executed_checkpoint
@@ -270,7 +237,7 @@ impl IndexStoreTables {
             let checkpoint_data =
                 sparse_checkpoint_data_for_backfill(authority_store, checkpoint_store, seq)?;
 
-            let mut batch = self.transactions.batch();
+            let mut batch = self.transaction_checkpoints.batch();
 
             self.index_epoch(&checkpoint_data, &mut batch)?;
             self.index_transactions(&checkpoint_data, &mut batch)?;
@@ -291,13 +258,13 @@ impl IndexStoreTables {
         pruned_checkpoint_watermark: u64,
         checkpoint_contents_to_prune: &[CheckpointContents],
     ) -> Result<(), TypedStoreError> {
-        let mut batch = self.transactions.batch();
+        let mut batch = self.transaction_checkpoints.batch();
 
         let transactions_to_prune = checkpoint_contents_to_prune
             .iter()
             .flat_map(|contents| contents.iter().map(|digests| digests.transaction));
 
-        batch.delete_batch(&self.transactions, transactions_to_prune)?;
+        batch.delete_batch(&self.transaction_checkpoints, transactions_to_prune)?;
         batch.insert_batch(
             &self.watermark,
             [(Watermark::Pruned, pruned_checkpoint_watermark)],
@@ -311,7 +278,12 @@ impl IndexStoreTables {
         &self,
         checkpoint: &CheckpointData,
     ) -> Result<typed_store::rocks::DBBatch, StorageError> {
-        let mut batch = self.transactions.batch();
+        debug!(
+            checkpoint = checkpoint.checkpoint_summary.sequence_number,
+            "indexing checkpoint"
+        );
+
+        let mut batch = self.transaction_checkpoints.batch();
 
         self.index_epoch(checkpoint, &mut batch)?;
         self.index_transactions(checkpoint, &mut batch)?;
@@ -323,6 +295,11 @@ impl IndexStoreTables {
                 checkpoint.checkpoint_summary.sequence_number,
             )],
         )?;
+
+        debug!(
+            checkpoint = checkpoint.checkpoint_summary.sequence_number,
+            "finished indexing checkpoint"
+        );
 
         Ok(batch)
     }
@@ -461,15 +438,10 @@ impl IndexStoreTables {
         checkpoint: &CheckpointData,
         batch: &mut typed_store::rocks::DBBatch,
     ) -> Result<(), StorageError> {
+        let seq = checkpoint.checkpoint_summary.sequence_number;
         for tx in &checkpoint.transactions {
-            let info = TransactionInfo::new(
-                &tx.input_objects,
-                &tx.output_objects,
-                checkpoint.checkpoint_summary.sequence_number,
-            );
-
             let digest = tx.transaction.digest();
-            batch.insert_batch(&self.transactions, [(digest, info)])?;
+            batch.insert_batch(&self.transaction_checkpoints, [(digest, seq)])?;
         }
 
         Ok(())
@@ -483,7 +455,13 @@ impl IndexStoreTables {
         &self,
         digest: &TransactionDigest,
     ) -> Result<Option<TransactionInfo>, TypedStoreError> {
-        self.transactions.get(digest)
+        Ok(self
+            .transaction_checkpoints
+            .get(digest)?
+            .map(|checkpoint| TransactionInfo {
+                checkpoint,
+                object_types: Default::default(),
+            }))
     }
 }
 
@@ -493,8 +471,8 @@ pub struct NodeIndexStore {
 }
 
 impl NodeIndexStore {
-    /// One-time migration: rename legacy index directories to
-    /// [`NODE_INDEX_DIR`].
+    /// One-time migration: rename the legacy `rest_index` directory to
+    /// [`GRPC_INDEX_DIR`].
     ///
     /// Must be called before [`NodeIndexStore::new`] so that the DB is not
     /// yet open. Safe to call multiple times — it is a no-op when the target
@@ -503,27 +481,24 @@ impl NodeIndexStore {
     /// TODO(cleanup): Remove after one release cycle once all production nodes
     /// have upgraded past this version.
     pub fn migrate_legacy_dirs(db_path: &std::path::Path) {
-        let target = db_path.join(NODE_INDEX_DIR);
+        let target = db_path.join(GRPC_INDEX_DIR);
         if target.exists() {
             return;
         }
-        for legacy_name in LEGACY_INDEX_DIRS {
-            let legacy = db_path.join(legacy_name);
-            if legacy.exists() {
-                info!(
-                    "migrating node index directory: renaming {:?} -> {:?}",
-                    legacy, target
+        let legacy = db_path.join(LEGACY_INDEX_DIR);
+        if legacy.exists() {
+            info!(
+                "migrating index directory: renaming {:?} -> {:?}",
+                legacy, target
+            );
+            if let Err(e) = std::fs::rename(&legacy, &target) {
+                // Non-fatal: NodeIndexStore::new will re-create and re-index.
+                tracing::warn!(
+                    "failed to rename {:?} to {:?}: {e}. \
+                     The index will be rebuilt from scratch on next startup.",
+                    legacy,
+                    target
                 );
-                if let Err(e) = std::fs::rename(&legacy, &target) {
-                    // Non-fatal: NodeIndexStore::new will re-create and re-index.
-                    tracing::warn!(
-                        "failed to rename {:?} to {:?}: {e}. \
-                         The index will be rebuilt from scratch on next startup.",
-                        legacy,
-                        target
-                    );
-                }
-                return;
             }
         }
     }
@@ -636,11 +611,11 @@ impl NodeIndexStore {
     }
 }
 
-// TODO: Overlaps with `ReadStore::try_get_checkpoint_data` but reads directly
-// from AuthorityStore/CheckpointStore rather than through the ReadStore trait.
-// Deduplicating requires making AuthorityStore accessible via ReadStore.
-//
-// Builds a CheckpointData without event data for backfill indexing.
+/// Build a lightweight `CheckpointData` for backfill indexing.
+///
+/// Only checkpoint summary, contents, and transaction blocks/effects are
+/// fetched. Input/output objects are left empty because we only need the
+/// transaction digests and checkpoint sequence number for the index.
 fn sparse_checkpoint_data_for_backfill(
     authority_store: &AuthorityStore,
     checkpoint_store: &CheckpointStore,
@@ -673,29 +648,21 @@ fn sparse_checkpoint_data_for_backfill(
         .map(|maybe_effects| maybe_effects.ok_or_else(|| StorageError::custom("missing effects")))
         .collect::<Result<Vec<_>, _>>()?;
 
-    let mut full_transactions = Vec::with_capacity(transactions.len());
-    for (tx, fx) in transactions.into_iter().zip(effects) {
-        let input_objects =
-            iota_types::storage::get_transaction_input_objects(authority_store, &fx)?;
-        let output_objects =
-            iota_types::storage::get_transaction_output_objects(authority_store, &fx)?;
-
-        let full_transaction = CheckpointTransaction {
+    let full_transactions = transactions
+        .into_iter()
+        .zip(effects)
+        .map(|(tx, fx)| CheckpointTransaction {
             transaction: tx.into(),
             effects: fx,
             events: None,
-            input_objects,
-            output_objects,
-        };
+            input_objects: vec![],
+            output_objects: vec![],
+        })
+        .collect();
 
-        full_transactions.push(full_transaction);
-    }
-
-    let checkpoint_data = CheckpointData {
+    Ok(CheckpointData {
         checkpoint_summary: summary.into(),
         checkpoint_contents: contents,
         transactions: full_transactions,
-    };
-
-    Ok(checkpoint_data)
+    })
 }
