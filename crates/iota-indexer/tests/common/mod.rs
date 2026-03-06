@@ -437,7 +437,7 @@ pub async fn start_simulacrum_grpc_with_write_indexer(
             address: server_url,
             ..Default::default()
         };
-        simulacrum::grpc::start_simulacrum_grpc_server(
+        simulacrum_server::start_simulacrum_grpc_server(
             sim,
             grpc_config,
             tokio_util::sync::CancellationToken::new(),

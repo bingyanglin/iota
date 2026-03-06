@@ -666,21 +666,20 @@ impl IotaNode {
             None
         };
 
-        let grpc_indexes_store =
-            if is_full_node && config.enable_grpc_api {
-                // Migrate legacy directory names before opening the DB.
-                GrpcIndexesStore::migrate_legacy_dirs(&config.db_path());
-                Some(Arc::new(
-                    GrpcIndexesStore::new(
-                        config.db_path().join(GRPC_INDEXES_DIR),
-                        &store,
-                        &checkpoint_store,
-                    )
-                    .await,
-                ))
-            } else {
-                None
-            };
+        let grpc_indexes_store = if is_full_node && config.enable_grpc_api {
+            // Migrate legacy directory names before opening the DB.
+            GrpcIndexesStore::migrate_legacy_dirs(&config.db_path());
+            Some(Arc::new(
+                GrpcIndexesStore::new(
+                    config.db_path().join(GRPC_INDEXES_DIR),
+                    &store,
+                    &checkpoint_store,
+                )
+                .await,
+            ))
+        } else {
+            None
+        };
 
         info!("creating archive reader");
         // Create network

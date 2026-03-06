@@ -299,7 +299,10 @@ pub async fn sync_and_verify_checkpoints(config: &Config) -> anyhow::Result<()> 
             info!("Downloading missing summaries from full node.");
 
             // Download summaries from the full node via gRPC
-            let client = iota_grpc_client::Client::connect(config.grpc_url().as_str())
+            let grpc_url = config
+                .grpc_url()
+                .context("gRPC URL must be configured to download summaries from full node")?;
+            let client = iota_grpc_client::Client::connect(grpc_url.as_str())
                 .await
                 .context("Failed to connect to gRPC server")?;
 
@@ -308,7 +311,7 @@ pub async fn sync_and_verify_checkpoints(config: &Config) -> anyhow::Result<()> 
                 info!("Downloading summary: {seq}");
 
                 let response = client
-                    .get_checkpoint_by_sequence_number(seq, Some("checkpoint"), None, None)
+                    .get_checkpoint_by_sequence_number(seq, Some("checkpoint.summary"), None, None)
                     .await
                     .context(format!("Failed to download checkpoint summary '{seq}'"))?;
                 let checkpoint_data: iota_types::full_checkpoint_content::CheckpointData =

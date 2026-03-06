@@ -139,12 +139,21 @@ fn migrate_transactions_to_checkpoints(
         false,
     )?;
 
+    const BATCH_SIZE: usize = 10_000;
     let mut batch = new.batch();
+    let mut count = 0usize;
     for item in old.safe_iter() {
         let (digest, info) = item?;
         batch.insert_batch(&new, std::iter::once((digest, info.checkpoint)))?;
+        count += 1;
+        if count.is_multiple_of(BATCH_SIZE) {
+            batch.write()?;
+            batch = new.batch();
+        }
     }
-    batch.write()?;
+    if !count.is_multiple_of(BATCH_SIZE) {
+        batch.write()?;
+    }
 
     info!("migrated transactions -> transaction_checkpoints");
     Ok(())

@@ -6965,6 +6965,7 @@ dependencies = [
  "serde_json",
  "serde_with",
  "simulacrum",
+ "simulacrum-server",
  "strum 0.26.3",
  "strum_macros 0.26.4",
  "tap",
@@ -13992,7 +13993,6 @@ dependencies = [
  "fastcrypto",
  "iota-config",
  "iota-execution",
- "iota-grpc-server",
  "iota-node-storage",
  "iota-protocol-config",
  "iota-storage",
@@ -14004,7 +14004,6 @@ dependencies = [
  "move-core-types",
  "prometheus",
  "rand 0.8.5",
- "tokio-util 0.7.18",
  "tracing",
 ]
 
@@ -14021,6 +14020,7 @@ dependencies = [
  "iota-config",
  "iota-execution",
  "iota-faucet",
+ "iota-grpc-server",
  "iota-json-rpc-types",
  "iota-node-storage",
  "iota-protocol-config",

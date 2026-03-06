@@ -123,7 +123,10 @@ pub async fn get_verified_effects_and_events(
             .context("Cannot get full checkpoint")?
     } else {
         // use gRPC API (for custom networks)
-        let client = iota_grpc_client::Client::connect(config.grpc_url().as_str()).await?;
+        let grpc_url = config
+            .grpc_url()
+            .context("gRPC URL must be configured for custom networks")?;
+        let client = iota_grpc_client::Client::connect(grpc_url.as_str()).await?;
         client
             .get_checkpoint_by_sequence_number(seq, Some("checkpoint,transactions"), None, None)
             .await

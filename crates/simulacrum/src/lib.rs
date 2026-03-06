@@ -13,7 +13,6 @@
 //! [`Simulacrum`]: crate::Simulacrum
 
 mod epoch_state;
-pub mod grpc;
 pub mod store;
 pub mod transaction_executor;
 

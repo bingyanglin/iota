@@ -21,10 +21,7 @@ const CHECKPOINTS_FILE_NAME: &str = "checkpoints.yaml";
 pub struct Config {
     /// A JSON-RPC endpoint to a full node.
     pub rpc_url: Url,
-    /// A gRPC endpoint to a full node. Falls back to `rpc_url` when not set,
-    /// which works when a reverse proxy routes both protocols on the same URL.
-    /// For local development the gRPC server typically listens on a separate
-    /// port (default 50051).
+    /// A gRPC endpoint to a full node.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub grpc_url: Option<Url>,
     /// A GraphQL endpoint to a full node.
@@ -85,10 +82,9 @@ impl Config {
         Ok(())
     }
 
-    /// Returns the gRPC URL, falling back to `rpc_url` if `grpc_url` is not
-    /// set.
-    pub fn grpc_url(&self) -> &Url {
-        self.grpc_url.as_ref().unwrap_or(&self.rpc_url)
+    /// Returns the gRPC URL if configured.
+    pub fn grpc_url(&self) -> Option<&Url> {
+        self.grpc_url.as_ref()
     }
 
     pub fn validate(&self) -> Result<()> {
