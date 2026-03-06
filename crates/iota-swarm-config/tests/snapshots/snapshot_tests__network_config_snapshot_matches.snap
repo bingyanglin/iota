@@ -24,6 +24,7 @@ validator_configs:
       max-submit-position: ~
       submit-delay-step-override-millis: ~
       parameters: ~
+    enable-index-processing: true
     jsonrpc-server-type: ~
     grpc-load-shed: ~
     grpc-concurrency-limit: 20000000000
@@ -152,6 +153,7 @@ validator_configs:
       max-submit-position: ~
       submit-delay-step-override-millis: ~
       parameters: ~
+    enable-index-processing: true
     jsonrpc-server-type: ~
     grpc-load-shed: ~
     grpc-concurrency-limit: 20000000000
@@ -280,6 +282,7 @@ validator_configs:
       max-submit-position: ~
       submit-delay-step-override-millis: ~
       parameters: ~
+    enable-index-processing: true
     jsonrpc-server-type: ~
     grpc-load-shed: ~
     grpc-concurrency-limit: 20000000000
@@ -408,6 +411,7 @@ validator_configs:
       max-submit-position: ~
       submit-delay-step-override-millis: ~
       parameters: ~
+    enable-index-processing: true
     jsonrpc-server-type: ~
     grpc-load-shed: ~
     grpc-concurrency-limit: 20000000000
@@ -536,6 +540,7 @@ validator_configs:
       max-submit-position: ~
       submit-delay-step-override-millis: ~
       parameters: ~
+    enable-index-processing: true
     jsonrpc-server-type: ~
     grpc-load-shed: ~
     grpc-concurrency-limit: 20000000000
@@ -664,6 +669,7 @@ validator_configs:
       max-submit-position: ~
       submit-delay-step-override-millis: ~
       parameters: ~
+    enable-index-processing: true
     jsonrpc-server-type: ~
     grpc-load-shed: ~
     grpc-concurrency-limit: 20000000000
@@ -792,6 +798,7 @@ validator_configs:
       max-submit-position: ~
       submit-delay-step-override-millis: ~
       parameters: ~
+    enable-index-processing: true
     jsonrpc-server-type: ~
     grpc-load-shed: ~
     grpc-concurrency-limit: 20000000000
