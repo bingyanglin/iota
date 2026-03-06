@@ -35,6 +35,8 @@ pub async fn start_simulacrum_grpc_server(
         .get_chain_identifier()
         .expect("chain identifier should be set");
 
+    // Create a transaction executor for simulacrum to enable transaction execution
+    // and simulation via gRPC
     let executor =
         Some(Arc::new(TransactionExecutor::new(simulacrum.clone()))
             as Arc<dyn TransactionExecutorTrait>);
