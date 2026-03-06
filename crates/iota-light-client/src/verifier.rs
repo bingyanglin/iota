@@ -93,10 +93,6 @@ pub async fn get_verified_object(config: &Config, object_id: ObjectID) -> Result
     Ok(object)
 }
 
-// TODO: Consider accepting pre-built clients (IotaClient /
-// iota_grpc_client::Client) as parameters instead of constructing new ones on
-// every call, to avoid redundant TCP connections when callers invoke this
-// function repeatedly (e.g. from `get_verified_object`).
 pub async fn get_verified_effects_and_events(
     config: &Config,
     transaction_digest: TransactionDigest,

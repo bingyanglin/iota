@@ -208,7 +208,7 @@ async fn deprecate_test() {
     }
 
     // First open: table2 CF exists on disk, gets dropped during cleanup
-    tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
     {
         let db = DeprecatedTables::open_tables_read_write(
             dbdir.clone(),
@@ -232,7 +232,7 @@ async fn deprecate_test() {
     );
 
     // Second open: table2 CF no longer exists on disk — must not panic
-    tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
     {
         let db = DeprecatedTables::open_tables_read_write(
             dbdir.clone(),
@@ -272,7 +272,7 @@ async fn deprecate_type_erased_test() {
         original_db.table2.insert(&42, &value).unwrap();
     }
 
-    tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
     // Step 2: Reopen with type-erased `(), ()` — CF should be dropped cleanly
     {
@@ -297,7 +297,7 @@ async fn deprecate_type_erased_test() {
     );
 
     // Step 3: Reopen again — must not panic when CF is already gone
-    tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
     {
         let db = DeprecatedTablesTypeErased::open_tables_read_write(
             dbdir.clone(),

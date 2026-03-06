@@ -1035,14 +1035,7 @@ pub async fn download_db_snapshot(
     files.extend(epoch_manifest.filter_by_prefix("checkpoints").lines);
     if !skip_indexes {
         files.extend(epoch_manifest.filter_by_prefix("indexes").lines);
-        // Download gRPC indexes regardless of which name the snapshot used.
-        // Current snapshots use "grpc_indexes"; old ones used "rest_index".
-        files.extend(
-            epoch_manifest
-                .filter_by_prefix(iota_core::grpc_indexes::GRPC_INDEXES_DIR)
-                .lines,
-        );
-        files.extend(epoch_manifest.filter_by_prefix("rest_index").lines);
+        files.extend(epoch_manifest.filter_by_prefix("grpc_indexes").lines);
     }
     let local_store = ObjectStoreConfig {
         object_store: Some(ObjectStoreType::File),
@@ -1099,20 +1092,6 @@ pub async fn download_db_snapshot(
         .collect::<Result<Vec<_>, _>>()?
         .into_iter()
         .for_each(|result| result.expect("Task failed"));
-
-    // Rename legacy "rest_index" snapshot directory to "grpc_indexes".
-    // TODO(cleanup): Remove after one release cycle.
-    let epoch_dir = path.join(format!("epoch_{epoch}"));
-    let grpc_indexes_dir = iota_core::grpc_indexes::GRPC_INDEXES_DIR;
-    let target_dir = epoch_dir.join(grpc_indexes_dir);
-    if !target_dir.exists() {
-        let legacy_dir = epoch_dir.join("rest_index");
-        if legacy_dir.exists() {
-            fs::rename(&legacy_dir, &target_dir).map_err(|e| {
-                anyhow::anyhow!("Failed to rename rest_index to {grpc_indexes_dir}: {e}")
-            })?;
-        }
-    }
 
     let store_dir = path.join("store");
     if store_dir.exists() {

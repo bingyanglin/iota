@@ -786,6 +786,8 @@ impl GrpcReader {
         };
 
         let (checkpoint, timestamp_ms) = if fields.include_checkpoint || fields.include_timestamp {
+            // grpc_indexes() returns None only in test mocks; in production the
+            // gRPC server starts only when indexes are available.
             let checkpoint = match self.state_reader.grpc_indexes() {
                 Some(indexes) => indexes
                     .get_transaction_info(digest)?

@@ -125,7 +125,7 @@ impl Config {
     fn create_config_from_network_name(network: &str) -> Self {
         Self {
             rpc_url: Url::parse(&format!("https://api.{network}.iota.cafe")).unwrap(),
-            // Known-network endpoints route gRPC via the same URL (reverse proxy).
+            // TODO: Set the real gRPC endpoint once it is known for each network.
             grpc_url: None,
             graphql_url: Some(Url::parse(&format!("https://graphql.{network}.iota.cafe")).unwrap()),
             checkpoints_dir: PathBuf::from_str(&format!("checkpoints_{network}")).unwrap(),
