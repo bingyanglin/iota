@@ -667,7 +667,7 @@ impl IotaNode {
         };
 
         let grpc_indexes_store =
-            if is_full_node && (config.enable_index_processing || config.enable_grpc_api) {
+            if is_full_node && config.enable_grpc_api {
                 // Migrate legacy directory names before opening the DB.
                 GrpcIndexesStore::migrate_legacy_dirs(&config.db_path());
                 Some(Arc::new(
