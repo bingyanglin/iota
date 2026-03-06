@@ -311,12 +311,20 @@ pub async fn sync_and_verify_checkpoints(config: &Config) -> anyhow::Result<()> 
                 info!("Downloading summary: {seq}");
 
                 let response = client
-                    .get_checkpoint_by_sequence_number(seq, Some("checkpoint.summary"), None, None)
+                    .get_checkpoint_by_sequence_number(
+                        seq,
+                        Some("checkpoint.summary,checkpoint.signature"),
+                        None,
+                        None,
+                    )
                     .await
                     .context(format!("Failed to download checkpoint summary '{seq}'"))?;
-                let checkpoint_data: iota_types::full_checkpoint_content::CheckpointData =
-                    response.checkpoint_data()?.try_into()?;
-                write_checkpoint_summary(config, &checkpoint_data.checkpoint_summary)?;
+                let summary: CertifiedCheckpointSummary = iota_sdk_types::SignedCheckpointSummary {
+                    checkpoint: response.summary()?.summary()?,
+                    signature: response.signature()?.signature()?,
+                }
+                .try_into()?;
+                write_checkpoint_summary(config, &summary)?;
             }
         }
     }
