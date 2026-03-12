@@ -174,11 +174,21 @@ Move code appears in three areas with different severity levels:
 
 ---
 
-## How to structure your output
+## Review output
 
-Group findings by severity: **blocking issues first**, then non-blocking suggestions.
+After completing your review, you **must** post a review comment on the pull request. Every review produces a comment — no exceptions, even if there are no issues found.
+
+### Comment structure
+
+Your review comment must contain two parts:
+
+**1. Summary of changes:** Start with a concise explanation of what the PR does and why. Describe the purpose and scope of the changes in 2–4 sentences so that other reviewers and the author can quickly understand the intent and impact. Reference the tier(s) of code affected.
+
+**2. Review findings:** Group findings by severity — **blocking issues first**, then non-blocking suggestions. If there are no blocking issues and no non-blocking suggestions, explicitly state that the changes look good and the review found no issues.
 
 For each finding: state the file and line, describe the problem precisely, explain why it matters, and suggest what a fix looks like. Do not leave a comment that says something is wrong without explaining what better looks like.
+
+### Additional guidelines
 
 Do not flag formatting or style issues enforced by CI (`rustfmt`, Prettier, ESLint auto-fixable rules). These are not review concerns.
 
