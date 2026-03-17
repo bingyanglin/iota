@@ -350,6 +350,8 @@ impl<'a> TestAuthorityBuilder<'a> {
                     path.join(GRPC_INDEXES_DIR),
                     &authority_store,
                     &checkpoint_store,
+                    &epoch_store,
+                    &cache_traits.backing_package_store,
                 )
                 .await,
             ))

@@ -19,7 +19,7 @@ use anemo_tower::{
     callback::CallbackLayer,
     trace::{DefaultMakeSpan, DefaultOnFailure, TraceLayer},
 };
-use anyhow::{Result, anyhow};
+use anyhow::{Context, Result, anyhow};
 use arc_swap::ArcSwap;
 use fastcrypto_zkp::bn254::zk_login::{JWK, JwkId, OIDCProvider};
 use futures::future::BoxFuture;
@@ -100,7 +100,9 @@ use iota_network::{
     api::ValidatorServer, discovery, discovery::TrustedPeerChangeEvent, randomness, state_sync,
 };
 use iota_network_stack::server::{IOTA_TLS_SERVER_NAME, ServerBuilder};
+use iota_node_storage::GrpcStateReader;
 use iota_protocol_config::ProtocolConfig;
+use iota_rest_api::RestMetrics;
 use iota_sdk_types::crypto::{Intent, IntentMessage, IntentScope};
 use iota_snapshot::uploader::StateSnapshotUploader;
 use iota_storage::{
@@ -666,20 +668,23 @@ impl IotaNode {
             None
         };
 
-        let grpc_indexes_store = if is_full_node && config.enable_grpc_api {
-            // Migrate legacy directory names before opening the DB.
-            GrpcIndexesStore::migrate_legacy_dirs(&config.db_path());
-            Some(Arc::new(
-                GrpcIndexesStore::new(
-                    config.db_path().join(GRPC_INDEXES_DIR),
-                    &store,
-                    &checkpoint_store,
-                )
-                .await,
-            ))
-        } else {
-            None
-        };
+        let grpc_indexes_store =
+            if is_full_node && (config.enable_grpc_api || config.enable_rest_api) {
+                // Migrate legacy directory names before opening the DB.
+                GrpcIndexesStore::migrate_legacy_dirs(&config.db_path());
+                Some(Arc::new(
+                    GrpcIndexesStore::new(
+                        config.db_path().join(GRPC_INDEXES_DIR),
+                        &store,
+                        &checkpoint_store,
+                        &epoch_store,
+                        &cache_traits.backing_package_store,
+                    )
+                    .await,
+                ))
+            } else {
+                None
+            };
 
         info!("creating archive reader");
         // Create network
@@ -833,12 +838,17 @@ impl IotaNode {
             None
         };
 
+        // Shared storage reader for REST and gRPC APIs — created once and
+        // passed to both `build_http_server` and `build_grpc_server`.
+        let grpc_read_store = Arc::new(GrpcReadStore::new(state.clone(), state_sync_store.clone()));
+
         let http_server = build_http_server(
             state.clone(),
             &transaction_orchestrator.clone(),
             &config,
             &prometheus_registry,
             custom_rpc_runtime,
+            grpc_read_store.clone(),
         )
         .await?;
 
@@ -881,7 +891,7 @@ impl IotaNode {
                 .map(|o| o as Arc<dyn iota_types::transaction_executor::TransactionExecutor>);
 
         let grpc_server_handle =
-            build_grpc_server(&config, state.clone(), state_sync_store.clone(), executor).await?;
+            build_grpc_server(&config, grpc_read_store.clone(), executor).await?;
 
         let validator_components = if state.is_committee_validator(&epoch_store) {
             let (components, _) = futures::join!(
@@ -2406,16 +2416,13 @@ fn build_kv_store(
 ///    configuration; if so, it returns early as validators do not expose gRPC
 ///    APIs.
 /// 2. Checks if gRPC is enabled in the configuration.
-/// 3. Creates broadcast channels for checkpoint streaming.
-/// 4. Initializes the gRPC checkpoint service.
-/// 5. Spawns the gRPC server to listen for incoming connections.
+/// 3. Initializes the gRPC reader from the shared storage reader.
+/// 4. Spawns the gRPC server to listen for incoming connections.
 ///
-/// Returns a tuple of optional broadcast channels for checkpoint summary and
-/// data.
+/// Returns an optional gRPC server handle.
 async fn build_grpc_server(
     config: &NodeConfig,
-    state: Arc<AuthorityState>,
-    state_sync_store: RocksDbStore,
+    grpc_read_store: Arc<GrpcReadStore>,
     executor: Option<Arc<dyn iota_types::transaction_executor::TransactionExecutor>>,
 ) -> Result<Option<GrpcServerHandle>> {
     // Validators do not expose gRPC APIs
@@ -2427,10 +2434,7 @@ async fn build_grpc_server(
         return Err(anyhow!("gRPC API is enabled but no configuration provided"));
     };
 
-    // Get chain identifier from state directly
-    let chain_id = state.get_chain_identifier();
-
-    let grpc_read_store = Arc::new(GrpcReadStore::new(state.clone(), state_sync_store));
+    let chain_id = grpc_read_store.get_chain_identifier()?;
 
     // Create cancellation token for proper shutdown hierarchy
     let shutdown_token = CancellationToken::new();
@@ -2473,6 +2477,7 @@ pub async fn build_http_server(
     config: &NodeConfig,
     prometheus_registry: &Registry,
     _custom_runtime: Option<Handle>,
+    grpc_read_store: Arc<GrpcReadStore>,
 ) -> Result<Option<iota_http::ServerHandle>> {
     // Validators do not expose these APIs
     if config.consensus_config().is_some() {
@@ -2539,6 +2544,28 @@ pub async fn build_http_server(
     };
 
     router = router.merge(json_rpc_router);
+
+    if config.enable_rest_api {
+        let mut rest_service =
+            iota_rest_api::RestService::new(grpc_read_store, env!("CARGO_PKG_VERSION"))
+                .context("failed to initialize REST API")?;
+
+        if let Some(rest_config) = config.rest.clone() {
+            rest_service.with_config(rest_config);
+        }
+
+        rest_service.with_metrics(RestMetrics::new(prometheus_registry));
+
+        if let Some(transaction_orchestrator) = transaction_orchestrator {
+            rest_service.with_executor(transaction_orchestrator.clone());
+        }
+
+        tracing::warn!(
+            "REST API is deprecated and will be removed in a future release. Please migrate to gRPC."
+        );
+
+        router = router.merge(rest_service.into_router());
+    }
 
     router = router
         .route("/health", axum::routing::get(health_check_handler))

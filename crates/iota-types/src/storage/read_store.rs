@@ -4,15 +4,17 @@
 
 use std::{collections::HashMap, sync::Arc};
 
+use move_core_types::language_storage::TypeTag;
 use serde::{Deserialize, Serialize};
 
 use super::{ObjectStore, error::Result};
 use crate::{
-    base_types::{EpochId, ObjectID, ObjectType},
+    base_types::{EpochId, IotaAddress, MoveObjectType, ObjectID, ObjectType, SequenceNumber},
     committee::Committee,
     digests::{
         CheckpointContentsDigest, CheckpointDigest, TransactionDigest, TransactionEventsDigest,
     },
+    dynamic_field::DynamicFieldType,
     effects::{TransactionEffects, TransactionEvents},
     full_checkpoint_content::{CheckpointData, CheckpointTransaction},
     messages_checkpoint::{
@@ -871,4 +873,48 @@ pub struct EpochInfo {
     pub reference_gas_price: u64,
     /// System State as of the start of the epoch
     pub system_state: crate::iota_system_state::IotaSystemState,
+}
+
+pub type DynamicFieldIteratorItem =
+    std::result::Result<(DynamicFieldKey, DynamicFieldIndexInfo), super::error::Error>;
+
+pub type AccountOwnedObjectIteratorItem =
+    std::result::Result<AccountOwnedObjectInfo, super::error::Error>;
+
+pub struct AccountOwnedObjectInfo {
+    pub owner: IotaAddress,
+    pub object_id: ObjectID,
+    pub version: SequenceNumber,
+    pub type_: MoveObjectType,
+}
+
+#[derive(Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Debug)]
+pub struct DynamicFieldKey {
+    pub parent: ObjectID,
+    pub field_id: ObjectID,
+}
+
+impl DynamicFieldKey {
+    pub fn new<P: Into<ObjectID>>(parent: P, field_id: ObjectID) -> Self {
+        Self {
+            parent: parent.into(),
+            field_id,
+        }
+    }
+}
+
+#[derive(Clone, Serialize, Deserialize, PartialEq, Eq, Debug)]
+pub struct DynamicFieldIndexInfo {
+    pub dynamic_field_type: DynamicFieldType,
+    pub name_type: TypeTag,
+    pub name_value: Vec<u8>,
+    /// ObjectId of the child object when `dynamic_field_type ==
+    /// DynamicFieldType::DynamicObject`
+    pub dynamic_object_id: Option<ObjectID>,
+}
+
+#[derive(Clone, Serialize, Deserialize, PartialEq, Eq, Debug)]
+pub struct CoinInfo {
+    pub coin_metadata_object_id: Option<ObjectID>,
+    pub treasury_object_id: Option<ObjectID>,
 }

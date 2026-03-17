@@ -14,10 +14,13 @@
 //! - `simulacrum` and other test harnesses can implement them freely
 
 use iota_types::{
-    base_types::EpochId,
+    base_types::{EpochId, IotaAddress, ObjectID},
     digests::{ChainIdentifier, TransactionDigest},
     messages_checkpoint::{CheckpointSequenceNumber, VerifiedCheckpoint},
-    storage::{EpochInfo, ObjectStore, ReadStore, TransactionInfo, error::Result},
+    storage::{
+        AccountOwnedObjectIteratorItem, CoinInfo, DynamicFieldIteratorItem, EpochInfo, ObjectStore,
+        ReadStore, TransactionInfo, error::Result,
+    },
 };
 use move_core_types::{
     annotated_value::MoveTypeLayout,
@@ -66,4 +69,21 @@ pub trait GrpcIndexes: Send + Sync {
     fn get_epoch_info(&self, epoch: EpochId) -> Result<Option<EpochInfo>>;
 
     fn get_transaction_info(&self, digest: &TransactionDigest) -> Result<Option<TransactionInfo>>;
+
+    fn account_owned_objects_info_iter(
+        &self,
+        owner: IotaAddress,
+        cursor: Option<ObjectID>,
+    ) -> Result<Box<dyn Iterator<Item = AccountOwnedObjectIteratorItem> + '_>>;
+
+    fn dynamic_field_iter(
+        &self,
+        parent: ObjectID,
+        cursor: Option<ObjectID>,
+    ) -> Result<Box<dyn Iterator<Item = DynamicFieldIteratorItem> + '_>>;
+
+    fn get_coin_info(
+        &self,
+        coin_type: &move_core_types::language_storage::StructTag,
+    ) -> Result<Option<CoinInfo>>;
 }

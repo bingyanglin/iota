@@ -6220,6 +6220,7 @@ dependencies = [
  "iota-genesis-common",
  "iota-keys",
  "iota-names",
+ "iota-rest-api",
  "iota-types",
  "move-vm-config",
  "object_store 0.13.1",
@@ -7278,6 +7279,7 @@ dependencies = [
  "iota-json-rpc-types",
  "iota-package-resolver",
  "iota-sdk",
+ "iota-sdk-types",
  "iota-types",
  "move-core-types",
  "object_store 0.13.1",
@@ -7570,6 +7572,7 @@ dependencies = [
  "iota-network-stack",
  "iota-node-storage",
  "iota-protocol-config",
+ "iota-rest-api",
  "iota-sdk-types",
  "iota-simulator",
  "iota-snapshot",
@@ -7842,6 +7845,36 @@ dependencies = [
  "tokio",
  "tokio-util 0.7.18",
  "tracing",
+]
+
+[[package]]
+name = "iota-rest-api"
+version = "1.18.0-alpha"
+dependencies = [
+ "anyhow",
+ "axum 0.8.4",
+ "bcs",
+ "diffy",
+ "fastcrypto",
+ "iota-network-stack",
+ "iota-node-storage",
+ "iota-protocol-config",
+ "iota-sdk-types",
+ "iota-types",
+ "itertools 0.13.0",
+ "mime",
+ "move-binary-format",
+ "openapiv3",
+ "prometheus",
+ "reqwest",
+ "schemars",
+ "serde",
+ "serde_json",
+ "serde_with",
+ "serde_yaml",
+ "tap",
+ "tokio",
+ "url",
 ]
 
 [[package]]
@@ -10860,6 +10893,17 @@ name = "opaque-debug"
 version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c08d65885ee38876c4f86fa503fb49d7b507c2b62552df7c70b2fce627e06381"
+
+[[package]]
+name = "openapiv3"
+version = "2.0.0"
+source = "git+https://github.com/bmwill/openapiv3.git?rev=ca4b4845b7c159a39f5c68ad8f7f76cb6f4d6963#ca4b4845b7c159a39f5c68ad8f7f76cb6f4d6963"
+dependencies = [
+ "indexmap 2.11.0",
+ "schemars",
+ "serde",
+ "serde_json",
+]
 
 [[package]]
 name = "openssl-probe"

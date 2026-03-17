@@ -34,6 +34,7 @@ use iota_types::{
     effects::{TransactionEffects, TransactionEffectsAPI},
     executable_transaction::VerifiedExecutableTransaction,
     full_checkpoint_content::CheckpointData,
+    inner_temporary_store::PackageStoreWithFallback,
     message_envelope::Message,
     messages_checkpoint::{CheckpointContents, CheckpointSequenceNumber, VerifiedCheckpoint},
     transaction::{TransactionDataAPI, TransactionKind, VerifiedTransaction},
@@ -468,7 +469,13 @@ impl CheckpointExecutor {
         // committed to the DB until later (committing must be done
         // in-order)
         if let Some(grpc_indexes_store) = &self.state.grpc_indexes_store {
-            grpc_indexes_store.index_checkpoint(&checkpoint_data);
+            let mut layout_resolver = self.epoch_store.executor().type_layout_resolver(Box::new(
+                PackageStoreWithFallback::new(
+                    self.state.get_backing_package_store(),
+                    &checkpoint_data,
+                ),
+            ));
+            grpc_indexes_store.index_checkpoint(&checkpoint_data, layout_resolver.as_mut());
         }
 
         if let Some(path) = &self.config.data_ingestion_dir {

@@ -259,6 +259,15 @@ pub struct NodeConfig {
     )]
     pub grpc_api_config: Option<GrpcApiConfig>,
 
+    /// Enable the REST API server (deprecated, use gRPC instead).
+    /// Will be removed in a future release.
+    #[serde(default = "default_enable_rest_api")]
+    pub enable_rest_api: bool,
+
+    /// REST API configuration (deprecated).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rest: Option<iota_rest_api::Config>,
+
     /// Allow overriding the chain for testing purposes. For instance, it allows
     /// you to create a test network that believes it is mainnet or testnet.
     /// Attempting to override this value on production networks will result
@@ -682,6 +691,10 @@ pub fn default_json_rpc_address() -> SocketAddr {
 
 pub fn default_grpc_api_config() -> Option<GrpcApiConfig> {
     Some(GrpcApiConfig::default())
+}
+
+pub fn default_enable_rest_api() -> bool {
+    true // Enabled by default for backward compatibility
 }
 
 pub fn default_concurrency_limit() -> Option<usize> {

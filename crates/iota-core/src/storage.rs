@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use iota_node_storage::{GrpcIndexes, GrpcStateReader};
 use iota_types::{
-    base_types::TransactionDigest,
+    base_types::{IotaAddress, ObjectID, TransactionDigest},
     committee::{Committee, EpochId},
     digests::TransactionEventsDigest,
     effects::{TransactionEffects, TransactionEvents},
@@ -552,6 +552,54 @@ impl GrpcIndexes for GrpcIndexesStore {
         digest: &TransactionDigest,
     ) -> iota_types::storage::error::Result<Option<TransactionInfo>> {
         self.get_transaction_info(digest)
+            .map_err(StorageError::custom)
+    }
+
+    fn account_owned_objects_info_iter(
+        &self,
+        owner: IotaAddress,
+        cursor: Option<ObjectID>,
+    ) -> Result<Box<dyn Iterator<Item = iota_types::storage::AccountOwnedObjectIteratorItem> + '_>>
+    {
+        let iter = self
+            .owner_iter(owner, cursor)
+            .map_err(StorageError::custom)?;
+        Ok(Box::new(iter.map(|result| {
+            result
+                .map(|(key, info)| iota_types::storage::AccountOwnedObjectInfo {
+                    owner: key.owner,
+                    object_id: key.object_id,
+                    version: info.version,
+                    type_: info.type_,
+                })
+                .map_err(StorageError::custom)
+        })))
+    }
+
+    fn dynamic_field_iter(
+        &self,
+        parent: ObjectID,
+        cursor: Option<ObjectID>,
+    ) -> Result<Box<dyn Iterator<Item = iota_types::storage::DynamicFieldIteratorItem> + '_>> {
+        let iter = self
+            .dynamic_field_iter(parent, cursor)
+            .map_err(StorageError::custom)?;
+        Ok(Box::new(
+            iter.map(|result| result.map_err(StorageError::custom)),
+        ))
+    }
+
+    fn get_coin_info(
+        &self,
+        coin_type: &move_core_types::language_storage::StructTag,
+    ) -> Result<Option<iota_types::storage::CoinInfo>> {
+        self.get_coin_info(coin_type)
+            .map(|opt| {
+                opt.map(|info| iota_types::storage::CoinInfo {
+                    coin_metadata_object_id: info.coin_metadata_object_id,
+                    treasury_object_id: info.treasury_object_id,
+                })
+            })
             .map_err(StorageError::custom)
     }
 }

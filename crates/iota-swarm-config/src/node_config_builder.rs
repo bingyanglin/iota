@@ -255,6 +255,8 @@ impl ValidatorConfigBuilder {
             enable_index_processing: true,
             enable_grpc_api: false,
             grpc_api_config: None,
+            enable_rest_api: false,
+            rest: None,
             chain_override_for_testing: self.chain_override,
         }
     }
@@ -609,6 +611,9 @@ impl FullnodeConfigBuilder {
             enable_index_processing: true,
             enable_grpc_api: self.enable_grpc_api,
             grpc_api_config,
+            // Enabled by default to match production and provide test coverage.
+            enable_rest_api: true,
+            rest: None,
             chain_override_for_testing: self.chain_override,
         }
     }
