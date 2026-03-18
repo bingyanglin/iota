@@ -43,7 +43,7 @@ impl Event {
     ///
     /// Requires `package_id` in the read_mask.
     pub fn package_id(&self) -> Result<iota_sdk_types::ObjectId, TryFromProtoError> {
-        get_inner_field!(self.package_id, Self::PACKAGE_ID_FIELD, try_into)
+        get_inner_field!(self.package_id, Self::PACKAGE_ID_FIELD, object_id)
     }
 
     /// Get the module name of the Move module that emitted this event.
