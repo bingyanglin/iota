@@ -1550,6 +1550,9 @@ importers:
       '@types/react':
         specifier: ^18.3.3
         version: 18.3.9
+      docusaurus-plugin-llms:
+        specifier: ^0.3.0
+        version: 0.3.0(@docusaurus/core@3.9.2(@docusaurus/faster@3.9.2(@docusaurus/types@3.9.2(react-dom@18.3.1(react@18.3.1))(react@18.3.1))(@swc/helpers@0.5.18))(@mdx-js/react@3.0.1(@types/react@18.3.9)(react@18.3.1))(@rspack/core@1.7.6(@swc/helpers@0.5.18))(bufferutil@4.0.9)(react-dom@18.3.1(react@18.3.1))(react@18.3.1)(typescript@5.6.2)(utf-8-validate@5.0.10))
       docusaurus-plugin-typedoc:
         specifier: ^1.4.2
         version: 1.4.2(typedoc-plugin-markdown@4.10.0(typedoc@0.28.17(typescript@5.6.2)))
@@ -13097,6 +13100,12 @@ packages:
   doctrine@3.0.0:
     resolution: {integrity: sha512-yS+Q5i3hBf7GBkd4KG8a7eBNNWNGLTaEwwYWUijIYM7zrlYDM0BFXHjjPWlWZ1Rg7UaddZeIDmi9jF3HmqiQ2w==}
     engines: {node: '>=6.0.0'}
+
+  docusaurus-plugin-llms@0.3.0:
+    resolution: {integrity: sha512-JuADAJA2fjTv1U4XQUoIu1LyjISDzxFhRK5HbCZiHum4HlmdPwyx8NBXsi+LfdUyjK9acbZgazGsHPhdwEZs0g==}
+    engines: {node: '>=18.0'}
+    peerDependencies:
+      '@docusaurus/core': ^3.0.0
 
   docusaurus-plugin-openapi-docs@4.3.7:
     resolution: {integrity: sha512-wCXuHniG108OGCj6qKtTOFLgyhnlztMegj63BbEyHC/OgM7PDL2Yj2VFkWsU3eCmJKI+czahanztFMhVLFD67w==}
@@ -37256,6 +37265,13 @@ snapshots:
   doctrine@3.0.0:
     dependencies:
       esutils: 2.0.3
+
+  docusaurus-plugin-llms@0.3.0(@docusaurus/core@3.9.2(@docusaurus/faster@3.9.2(@docusaurus/types@3.9.2(react-dom@18.3.1(react@18.3.1))(react@18.3.1))(@swc/helpers@0.5.18))(@mdx-js/react@3.0.1(@types/react@18.3.9)(react@18.3.1))(@rspack/core@1.7.6(@swc/helpers@0.5.18))(bufferutil@4.0.9)(react-dom@18.3.1(react@18.3.1))(react@18.3.1)(typescript@5.6.2)(utf-8-validate@5.0.10)):
+    dependencies:
+      '@docusaurus/core': 3.9.2(@docusaurus/faster@3.9.2(@docusaurus/types@3.9.2(react-dom@18.3.1(react@18.3.1))(react@18.3.1))(@swc/helpers@0.5.18))(@mdx-js/react@3.0.1(@types/react@18.3.9)(react@18.3.1))(@rspack/core@1.7.6(@swc/helpers@0.5.18))(bufferutil@4.0.9)(react-dom@18.3.1(react@18.3.1))(react@18.3.1)(typescript@5.6.2)(utf-8-validate@5.0.10)
+      gray-matter: 4.0.3
+      minimatch: 9.0.9
+      yaml: 2.8.2
 
   docusaurus-plugin-openapi-docs@4.3.7(@docusaurus/plugin-content-docs@3.9.2(@docusaurus/faster@3.9.2(@docusaurus/types@3.9.2(react-dom@18.3.1(react@18.3.1))(react@18.3.1))(@swc/helpers@0.5.18))(@mdx-js/react@3.0.1(@types/react@18.3.9)(react@18.3.1))(@rspack/core@1.7.6(@swc/helpers@0.5.18))(bufferutil@4.0.9)(react-dom@18.3.1(react@18.3.1))(react@18.3.1)(typescript@5.6.2)(utf-8-validate@5.0.10))(@docusaurus/utils-validation@3.9.2(react-dom@18.3.1(react@18.3.1))(react@18.3.1))(@docusaurus/utils@3.9.2(react-dom@18.3.1(react@18.3.1))(react@18.3.1))(react@18.3.1):
     dependencies:
