@@ -65,3 +65,9 @@ pub const SIMULATE_TRANSACTION_READ_MASK: &str = field_mask!(
     "suggested_gas_price",
     "execution_result",
 );
+
+/// Default read mask for `list_dynamic_fields`.
+pub const LIST_DYNAMIC_FIELDS_READ_MASK: &str = field_mask!("parent", "field_id");
+
+/// Default read mask for `list_owned_objects`.
+pub const LIST_OWNED_OBJECTS_READ_MASK: &str = field_mask!("reference", "bcs");

@@ -13,15 +13,18 @@ mod common;
 pub mod execution;
 pub mod ledger;
 mod metadata;
+pub mod move_package;
+pub mod state;
 
 pub use common::{Error, Result, RpcStatus};
 pub(crate) use common::{
-    ProtoResult, TryFromProtoError, build_proto_transaction, field_mask_with_default,
+    ProtoResult, TryFromProtoError, build_proto_transaction, collect_stream,
+    field_mask_with_default, proto_object_id, saturating_usize_to_u32,
 };
 pub use iota_grpc_types::read_masks::{
     EXECUTE_TRANSACTION_READ_MASK, GET_CHECKPOINT_READ_MASK, GET_EPOCH_READ_MASK,
     GET_OBJECTS_READ_MASK, GET_SERVICE_INFO_READ_MASK, GET_TRANSACTIONS_READ_MASK,
-    SIMULATE_TRANSACTION_READ_MASK,
+    LIST_DYNAMIC_FIELDS_READ_MASK, LIST_OWNED_OBJECTS_READ_MASK, SIMULATE_TRANSACTION_READ_MASK,
 };
 pub use metadata::MetadataEnvelope;
 
