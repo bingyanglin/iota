@@ -51,7 +51,11 @@ async fn get_coin_info_iota() {
         "treasury should have total_supply"
     );
     // IOTA native gas coin has fixed supply
-    assert_eq!(treasury.supply_state, Some(1), "IOTA supply should be FIXED (1)");
+    assert_eq!(
+        treasury.supply_state,
+        Some(1),
+        "IOTA supply should be FIXED (1)"
+    );
 }
 
 #[sim_test]
