@@ -87,11 +87,14 @@ async fn test_reopen_macro() {
     const FIRST_CF: &str = "First_CF";
     const SECOND_CF: &str = "Second_CF";
 
-    let rocks = open_cf(
+    let rocks = open_cf_opts(
         temp_dir(),
         None,
         MetricConf::default(),
-        &[FIRST_CF, SECOND_CF],
+        &[
+            (FIRST_CF, rocksdb::Options::default()),
+            (SECOND_CF, rocksdb::Options::default()),
+        ],
     )
     .unwrap();
 
@@ -695,11 +698,11 @@ async fn open_as_secondary_test() {
 
     let opt = rocksdb::Options::default();
     let secondary_store = open_cf_opts_secondary(
-        primary_path.clone(),
+        primary_path,
         None,
         None,
         MetricConf::default(),
-        &[("table", opt.clone())],
+        &[("table", opt)],
     )
     .unwrap();
     let secondary_db = DBMap::<i32, String>::reopen(
@@ -741,5 +744,15 @@ fn open_map<P: AsRef<Path>, K, V>(path: P, opt_cf: Option<&str>) -> DBMap<K, V> 
 }
 
 fn open_rocksdb<P: AsRef<Path>>(path: P, opt_cfs: &[&str]) -> Arc<Database> {
-    open_cf(path, None, MetricConf::default(), opt_cfs).expect("failed to open rocksdb")
+    let opts = rocksdb::Options::default();
+    open_cf_opts(
+        path,
+        None,
+        MetricConf::default(),
+        &opt_cfs
+            .iter()
+            .map(|cf| (*cf, opts.clone()))
+            .collect::<Vec<_>>(),
+    )
+    .expect("failed to open rocksdb")
 }
