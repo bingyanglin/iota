@@ -13,8 +13,8 @@ use crate::{
     crypto::{AuthoritySignInfo, AuthorityStrongQuorumSignInfo},
     digests::TransactionEffectsDigest,
     effects::{
-        SignedTransactionEffects, TransactionEffects, TransactionEvents,
-        VerifiedSignedTransactionEffects,
+        SignedTransactionEffects, TransactionEffects, TransactionEffectsExtForTesting,
+        TransactionEvents, VerifiedSignedTransactionEffects,
     },
     error::IotaError,
     messages_consensus::SignedAuthorityCapabilitiesV1,
@@ -321,9 +321,8 @@ pub struct ExecutedData {
 
 impl Default for ExecutedData {
     fn default() -> Self {
-        use crate::effects::TransactionEffectsExt as _;
         Self {
-            effects: TransactionEffects::new_empty_v1(TransactionDigest::default()),
+            effects: TransactionEffects::new_empty_v1_for_testing(TransactionDigest::default()),
             events: None,
             input_objects: Vec::new(),
             output_objects: Vec::new(),
