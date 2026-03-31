@@ -9,4 +9,3 @@ publish = false
 [dependencies]
 iota-types.workspace = true
 move-core-types.workspace = true
-typed-store-error.workspace = true
