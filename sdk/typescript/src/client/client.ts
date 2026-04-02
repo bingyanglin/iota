@@ -101,6 +101,7 @@ import type {
     IsTransactionIndexedOnNodeParams,
     IotaMoveViewCallResults,
     ViewParams,
+    IotaValidatorSummary,
 } from './types/index.js';
 
 export interface PaginationArguments<Cursor> {
@@ -131,6 +132,30 @@ type NetworkOrTransport =
       };
 
 const IOTA_CLIENT_BRAND = Symbol.for('@iota/IotaClient') as never;
+
+/** Protocol version that introduced V2 system state. */
+const PROTOCOL_VERSION_V2_SYSTEM_STATE = 5;
+/** Protocol version that introduced IIP-8 (effective commission rate). */
+const PROTOCOL_VERSION_IIP8 = 20;
+
+/**
+ * Maps an array of validators, filling in `effectiveCommissionRate` when absent.
+ * For protocol >= IIP-8: uses the API value if present, otherwise calculates max(commissionRate, votingPower).
+ * For protocol < IIP-8: falls back to commissionRate.
+ */
+function mapValidatorsWithEffectiveCommission(
+    validators: IotaValidatorSummary[],
+    protocolVersion: number,
+): IotaValidatorSummary[] {
+    const isIIP8Active = protocolVersion >= PROTOCOL_VERSION_IIP8;
+    return validators.map((v) => ({
+        ...v,
+        effectiveCommissionRate: isIIP8Active
+            ? (v.effectiveCommissionRate ??
+              String(Math.max(Number(v.commissionRate), Number(v.votingPower))))
+            : v.commissionRate,
+    }));
+}
 
 export function isIotaClient(client: unknown): client is IotaClient {
     return (
@@ -643,8 +668,8 @@ export class IotaClient {
         signal,
     }: { signal?: AbortSignal } = {}): Promise<LatestIotaSystemStateSummary> {
         const protocolConfig = await this.getProtocolConfig({ signal });
-        const isV2Supported = Number(protocolConfig.maxSupportedProtocolVersion) >= 5;
-        const isEffectiveCommissionRateSupported = Number(protocolConfig.protocolVersion) >= 20;
+        const isV2Supported =
+            Number(protocolConfig.maxSupportedProtocolVersion) >= PROTOCOL_VERSION_V2_SYSTEM_STATE;
 
         const iotaSystemStateSummary: IotaSystemStateSummary = isV2Supported
             ? await this.getLatestIotaSystemStateV2({ signal })
@@ -652,14 +677,11 @@ export class IotaClient {
                   V1: await this.getLatestIotaSystemStateV1({ signal }),
               };
 
-        const activeValidators = (
-            'V2' in iotaSystemStateSummary ? iotaSystemStateSummary.V2 : iotaSystemStateSummary.V1
-        ).activeValidators.map((v) => ({
-            ...v,
-            effectiveCommissionRate: isEffectiveCommissionRateSupported
-                ? v.effectiveCommissionRate
-                : v.commissionRate,
-        }));
+        const activeValidators = mapValidatorsWithEffectiveCommission(
+            ('V2' in iotaSystemStateSummary ? iotaSystemStateSummary.V2 : iotaSystemStateSummary.V1)
+                .activeValidators,
+            Number(protocolConfig.protocolVersion),
+        );
 
         return 'V2' in iotaSystemStateSummary
             ? {
@@ -941,11 +963,33 @@ export class IotaClient {
             signal?: AbortSignal;
         } & PaginationArguments<EpochPage['nextCursor']>,
     ): Promise<EpochPage> {
-        return await this.transport.request({
-            method: 'iotax_getEpochs',
-            params: [input?.cursor, input?.limit, input?.descendingOrder],
-            signal: input?.signal,
-        });
+        const [epochPage, protocolConfig] = await Promise.all([
+            this.transport.request<EpochPage>({
+                method: 'iotax_getEpochs',
+                params: [input?.cursor, input?.limit, input?.descendingOrder],
+                signal: input?.signal,
+            }),
+            this.getProtocolConfig({ signal: input?.signal }),
+        ]);
+
+        const currentProtocolVersion = Number(protocolConfig.protocolVersion);
+
+        return {
+            ...epochPage,
+            data: epochPage.data.map((epoch) => {
+                const epochProtocolVersion = epoch.endOfEpochInfo
+                    ? Number(epoch.endOfEpochInfo.protocolVersion)
+                    : currentProtocolVersion;
+
+                return {
+                    ...epoch,
+                    validators: mapValidatorsWithEffectiveCommission(
+                        epoch.validators,
+                        epochProtocolVersion,
+                    ),
+                };
+            }),
+        };
     }
 
     /**
