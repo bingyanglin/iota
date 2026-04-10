@@ -55,6 +55,7 @@ impl IotaTxValidator {
         let mut ckpt_messages = Vec::new();
         let mut ckpt_batch = Vec::new();
         let mut authority_cap_batch = Vec::new();
+        let mut user_tx_v1_count: u64 = 0;
 
         for tx in txs.iter() {
             match tx {
@@ -116,6 +117,7 @@ impl IotaTxValidator {
                         .tap_err(|e| {
                             warn!("UserTransactionV1 signature verification failed: {}", e)
                         })?;
+                    user_tx_v1_count += 1;
                 }
 
                 ConsensusTransactionKind::EndOfPublish(_)
@@ -149,6 +151,9 @@ impl IotaTxValidator {
         self.metrics
             .authority_capabilities_verified
             .inc_by(authority_cap_count as u64);
+        self.metrics
+            .user_transaction_signatures_verified
+            .inc_by(user_tx_v1_count);
         Ok(())
 
         // todo - we should un-comment line below once we have a way to revert
@@ -194,6 +199,7 @@ pub struct IotaTxValidatorMetrics {
     certificate_signatures_verified: IntCounter,
     checkpoint_signatures_verified: IntCounter,
     authority_capabilities_verified: IntCounter,
+    user_transaction_signatures_verified: IntCounter,
 }
 
 impl IotaTxValidatorMetrics {
@@ -217,6 +223,12 @@ impl IotaTxValidatorMetrics {
                 registry
             )
             .unwrap(),
+            user_transaction_signatures_verified: register_int_counter_with_registry!(
+                "user_transaction_signatures_verified",
+                "Number of UserTransactionV1 signatures verified in consensus validator",
+                registry
+            )
+            .unwrap(),
         })
     }
 }
@@ -227,6 +239,7 @@ mod tests {
 
     use iota_macros::sim_test;
     use iota_protocol_config::Chain;
+    use iota_sdk_types::ObjectId;
     use iota_types::{
         crypto::Ed25519IotaSignature,
         error::IotaError,
@@ -330,15 +343,14 @@ mod tests {
     #[sim_test]
     async fn validate_transactions_feature_gating() {
         use iota_protocol_config::ProtocolConfig;
-        use iota_types::{
-            base_types::ObjectID,
-            crypto::{AccountKeyPair, AuthorityPublicKeyBytes, deterministic_random_account_key},
+        use iota_types::crypto::{
+            AccountKeyPair, AuthorityPublicKeyBytes, deterministic_random_account_key,
         };
 
         use crate::test_utils::make_transfer_iota_transaction;
 
         let (sender, sender_key): (_, AccountKeyPair) = deterministic_random_account_key();
-        let gas_object_id = ObjectID::random();
+        let gas_object_id = ObjectId::random();
         let gas_object = Object::with_id_owner_for_testing(gas_object_id, sender);
 
         let network_config =
@@ -353,11 +365,7 @@ mod tests {
             .await;
 
         let rgp = state.epoch_store_for_testing().reference_gas_price();
-        let gas_ref = state
-            .get_object(&gas_object_id)
-            .await
-            .unwrap()
-            .compute_object_reference();
+        let gas_ref = state.get_object(&gas_object_id).await.unwrap().object_ref();
         let recipient = iota_types::crypto::get_key_pair::<AccountKeyPair>().0;
         let signed_tx =
             make_transfer_iota_transaction(gas_ref, recipient, None, sender, &sender_key, rgp);
@@ -414,6 +422,7 @@ mod tests {
         // SignedCapabilityNotificationV1 are excluded because they require valid
         // cryptographic signatures and would fail before reaching the feature
         // gate check; their gating is verified by the exhaustive match above.
+        #[allow(deprecated)]
         let testable_variants: Vec<(&str, ConsensusTransactionKind)> = vec![
             (
                 "EndOfPublish",
