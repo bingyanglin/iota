@@ -301,6 +301,14 @@ pub struct GrpcApiConfig {
     #[serde(default = "default_grpc_api_broadcast_buffer_size")]
     pub broadcast_buffer_size: u32,
 
+    /// Maximum number of concurrent subscribers to checkpoint streaming RPCs.
+    /// Once the cap is reached, additional subscribe requests are rejected
+    /// with `Unavailable` to protect the server from being overwhelmed by
+    /// unbounded streaming clients. Values below 1 are clamped to 1 at
+    /// server startup.
+    #[serde(default = "default_grpc_api_max_concurrent_stream_subscribers")]
+    pub max_concurrent_stream_subscribers: u32,
+
     /// Maximum size for Move values when rendering to JSON
     /// in bytes.
     #[serde(default = "default_grpc_api_max_json_move_value_size")]
@@ -331,6 +339,10 @@ fn default_grpc_api_broadcast_buffer_size() -> u32 {
     100
 }
 
+fn default_grpc_api_max_concurrent_stream_subscribers() -> u32 {
+    1024
+}
+
 fn default_grpc_api_max_message_size_bytes() -> u32 {
     128 * 1024 * 1024 // 128MB
 }
@@ -358,6 +370,7 @@ impl Default for GrpcApiConfig {
             tls: None,
             max_message_size_bytes: default_grpc_api_max_message_size_bytes(),
             broadcast_buffer_size: default_grpc_api_broadcast_buffer_size(),
+            max_concurrent_stream_subscribers: default_grpc_api_max_concurrent_stream_subscribers(),
             max_json_move_value_size: default_grpc_api_max_json_move_value_size(),
             max_execute_transaction_batch_size: default_grpc_api_max_execute_transaction_batch_size(
             ),
