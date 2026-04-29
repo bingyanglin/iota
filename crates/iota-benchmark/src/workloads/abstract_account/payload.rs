@@ -13,8 +13,7 @@ use iota_sdk::types::transaction::{
     Argument, CallArg, Command, ObjectArg, ProgrammableTransaction,
 };
 use iota_types::{
-    Identifier,
-    base_types::{IotaAddress, ObjectID, ObjectRef, SequenceNumber},
+    base_types::{Identifier, IotaAddress, ObjectID, ObjectRef, SequenceNumber},
     crypto::AccountKeyPair,
     move_authenticator::MoveAuthenticator,
     programmable_transaction_builder::ProgrammableTransactionBuilder,
@@ -251,7 +250,7 @@ impl AbstractAccountPayload {
             // validator_to_stake_address)
             b.programmable_move_call(
                 self.aa_package_id,
-                Identifier::new(AA_MODULE_NAME).unwrap(),
+                Identifier::from_static(AA_MODULE_NAME),
                 Identifier::new("touch").unwrap(),
                 vec![],
                 vec![shared_obj_arg],

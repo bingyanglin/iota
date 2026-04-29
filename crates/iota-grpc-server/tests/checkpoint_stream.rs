@@ -14,14 +14,13 @@ use iota_grpc_server::GrpcServerHandle;
 use iota_grpc_types::v1::{filter, ledger_service::checkpoint_data};
 use iota_test_transaction_builder::TestTransactionBuilder;
 use iota_types::{
-    base_types::{IotaAddress, random_object_ref},
+    base_types::{Identifier, IotaAddress, StructTag, random_object_ref},
     crypto::{AccountKeyPair, get_key_pair},
     effects::{TestEffectsBuilder, TransactionEvents},
     event::Event,
     full_checkpoint_content::{CheckpointData, CheckpointTransaction},
     messages_checkpoint::CheckpointSequenceNumber,
 };
-use move_core_types::{account_address::AccountAddress, ident_str, language_storage::StructTag};
 use prost::Message;
 use tokio_stream::StreamExt;
 
@@ -923,15 +922,15 @@ fn build_checkpoint_transactions_with_events(
             let mut data = Vec::with_capacity(events_per_tx);
             for _ in 0..events_per_tx {
                 data.push(Event::new(
-                    &AccountAddress::ZERO,
-                    ident_str!("test_module"),
+                    IotaAddress::ZERO,
+                    Identifier::from_static("test_module"),
                     sender,
-                    StructTag {
-                        address: AccountAddress::ZERO,
-                        module: ident_str!("test_module").into(),
-                        name: ident_str!("TestEvent").into(),
-                        type_params: vec![],
-                    },
+                    StructTag::new(
+                        IotaAddress::ZERO,
+                        Identifier::from_static("test_module"),
+                        Identifier::from_static("TestEvent"),
+                        vec![],
+                    ),
                     vec![0u8; 64], // 64 bytes of dummy content
                 ));
             }
@@ -1086,8 +1085,8 @@ async fn test_chunked_checkpoint_message_sizes_within_limit() {
 
 #[tokio::test]
 async fn test_chunked_checkpoint_event_message_sizes_within_limit() {
-    // 2 000 transactions × 5 events each → total event payload exceeds 4 MB.
-    let transactions = build_checkpoint_transactions_with_events(2_000, 5);
+    // 2 500 transactions × 5 events each → total event payload exceeds 4 MB.
+    let transactions = build_checkpoint_transactions_with_events(2_500, 5);
     let summary = common::mock_summary(0, &common::EMPTY_CHECKPOINT_CONTENTS);
     let contents = common::EMPTY_CHECKPOINT_CONTENTS.clone();
 
