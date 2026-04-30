@@ -289,7 +289,7 @@ pub async fn mint_owned_coins_to_address(
         *init_coin = update_gas_from_effects(init_coin, &effects)?;
 
         for (r, o) in effects.created().into_iter() {
-            if matches!(o, Owner::AddressOwner(a) if a == recipient) {
+            if matches!(o, Owner::Address(a) if a == recipient) {
                 minted.push(r);
             }
         }
@@ -374,7 +374,14 @@ pub fn update_gas_from_effects(current: &Gas, effects: &ExecutionEffects) -> Res
         .find(|(r, _)| r.object_id == current.0.object_id)
         .ok_or_else(|| anyhow::anyhow!("init coin not found in mutated effects"))?;
 
-    Ok((updated.0, updated.1.get_owner_address()?, current.2.clone()))
+    Ok((
+        updated.0,
+        *updated
+            .1
+            .address_or_object()
+            .ok_or_else(|| anyhow::anyhow!("not an address or object owner"))?,
+        current.2.clone(),
+    ))
 }
 
 /// If the object is not a Move object — returns None.
