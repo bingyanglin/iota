@@ -16,6 +16,7 @@ use iota_protocol_config::{Chain, ProtocolConfig};
 use iota_types::{
     base_types::{Identifier, IotaAddress, ObjectID, ObjectRef, SequenceNumber, StructTag},
     execution_config_utils::to_binary_config,
+    move_package::MovePackageExt,
     object::{Object, Owner},
     storage::WriteKind,
     transaction::{CallArg, ObjectArg, TEST_ONLY_GAS_UNIT_FOR_PUBLISH, TransactionData},
@@ -280,7 +281,12 @@ impl SurferState {
         let binary_config = to_binary_config(&config);
         let pool: &mut normalized::ArcPool = &mut *self.pool.write().await;
         let entry_functions: Vec<_> = move_package
-            .normalize(pool, &binary_config, /* include code */ false)
+            .normalize(
+                pool,
+                &binary_config,
+                // include code
+                false,
+            )
             .unwrap()
             .into_iter()
             .flat_map(|(module_name, module)| {

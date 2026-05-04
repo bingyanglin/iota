@@ -7,7 +7,7 @@ use std::{fmt::Formatter, sync::LazyLock};
 use iota_types::{
     base_types::{ObjectID, ObjectRef},
     digests::TransactionDigest,
-    move_package::MovePackage,
+    move_package::{MovePackage, MovePackageExt},
     object::{OBJECT_START_VERSION, Object},
     storage::ObjectStore,
 };
@@ -267,6 +267,9 @@ pub async fn compare_system_package<S: ObjectStore>(
         }
     }
 
-    new_pkg.increment_version();
+    new_pkg
+        .increment_version()
+        .expect("package version should never overflow");
+
     Some(new_object.compute_object_reference())
 }

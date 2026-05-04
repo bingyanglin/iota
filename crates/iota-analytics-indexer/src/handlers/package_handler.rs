@@ -9,6 +9,7 @@ use fastcrypto::encoding::{Base64, Encoding};
 use iota_data_ingestion_core::Worker;
 use iota_types::{
     full_checkpoint_content::{CheckpointData, CheckpointTransaction},
+    move_package::MovePackageExt,
     object::Object,
 };
 use tokio::sync::Mutex;

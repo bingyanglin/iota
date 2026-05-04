@@ -16,7 +16,7 @@ use iota_types::{
         Identifier, IotaAddress, ObjectID, TxContext, TxContextKind, TypeTag, is_primitive_type_tag,
     },
     iota_sdk_types_conversions::type_tag_core_to_sdk,
-    move_package::MovePackage,
+    move_package::{MovePackage, MovePackageExt},
     object::Owner,
     programmable_transaction_builder::ProgrammableTransactionBuilder,
     resolve_address,
@@ -440,7 +440,11 @@ impl<'a> PTBBuilder<'a> {
         MovePackage::new(
             package.id,
             package.version,
-            package.module_map,
+            package
+                .module_map
+                .into_iter()
+                .map(|(k, v)| (Identifier::new_unchecked(k), v))
+                .collect(),
             // This package came from on-chain and the tool runs locally, so don't worry about
             // trying to enforce the package size limit.
             u64::MAX,

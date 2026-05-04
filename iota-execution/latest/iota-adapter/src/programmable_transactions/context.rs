@@ -30,7 +30,7 @@ mod checked {
         execution_status::CommandArgumentError,
         iota_sdk_types_conversions::{struct_tag_core_to_sdk, type_tag_core_to_sdk},
         metrics::LimitsMetrics,
-        move_package::{MovePackage, derive_package_metadata_id},
+        move_package::{MovePackage, MovePackageExt, derive_package_metadata_id},
         object::{Data, MoveObject, Object, ObjectInner, Owner},
         storage::{BackingPackageStore, DenyListResult, PackageObject},
         transaction::{Argument, CallArg, ObjectArg},
@@ -1668,7 +1668,13 @@ mod checked {
 
         fn get_module(&self, module_id: &ModuleId) -> Option<&Vec<u8>> {
             for package in self.new_packages {
-                let module = package.get_module(module_id);
+                if package.id != ObjectID::from(module_id.address().into_bytes()) {
+                    continue;
+                }
+
+                let module =
+                    package.get_module(&Identifier::new_unchecked(module_id.name().as_str()));
+
                 if module.is_some() {
                     return module;
                 }

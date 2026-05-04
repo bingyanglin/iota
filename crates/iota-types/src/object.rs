@@ -34,7 +34,7 @@ use crate::{
     gas_coin::{GAS, GasCoin},
     iota_sdk_types_conversions::type_tag_sdk_to_core,
     layout_resolver::LayoutResolver,
-    move_package::MovePackage,
+    move_package::{MovePackage, MovePackageExt},
     timelock::timelock::TimeLock,
 };
 
@@ -735,14 +735,14 @@ impl ObjectInner {
     }
 
     /// Approximate size of the object in bytes. This is used for gas metering.
-    /// This will be slgihtly different from the serialized size, but
+    /// This will be slightly different from the serialized size, but
     /// we also don't want to serialize the object just to get the size.
     /// This approximation should be good enough for gas metering.
     pub fn object_size_for_gas_metering(&self) -> usize {
         let meta_data_size = size_of::<Owner>() + size_of::<TransactionDigest>() + size_of::<u64>();
         let data_size = match &self.data {
             Data::Move(m) => m.object_size_for_gas_metering(),
-            Data::Package(p) => p.object_size_for_gas_metering(),
+            Data::Package(p) => p.size(),
         };
         meta_data_size + data_size
     }

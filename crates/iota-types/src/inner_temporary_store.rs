@@ -17,6 +17,7 @@ use crate::{
     effects::{TransactionEffects, TransactionEffectsAPI, TransactionEvents},
     error::IotaResult,
     execution::DynamicallyLoadedObjectMetadata,
+    move_package::MovePackageExt,
     object::{Object, Owner},
     storage::{BackingPackageStore, InputKey, PackageObject},
 };

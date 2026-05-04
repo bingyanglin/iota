@@ -22,7 +22,9 @@ use iota_move_build::CompiledPackage;
 use iota_protocol_config::ProtocolConfig;
 use iota_sdk::apis::ReadApi;
 use iota_types::{
-    base_types::ObjectID, execution_config_utils::to_binary_config, move_package::UpgradePolicy,
+    base_types::ObjectID,
+    execution_config_utils::to_binary_config,
+    move_package::{MovePackageExt, UpgradePolicy},
 };
 use move_binary_format::{
     CompiledModule,

@@ -18,6 +18,7 @@ use iota_types::{
     full_checkpoint_content::CheckpointData,
     iota_system_state::IotaSystemStateTrait,
     messages_checkpoint::{CheckpointContents, CheckpointSequenceNumber},
+    move_package::MovePackageExt,
     object::{Object, Owner},
     storage::{
         AccountOwnedObjectInfo, DynamicFieldKey, EpochInfo, OwnedObjectCursor,

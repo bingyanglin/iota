@@ -21,7 +21,7 @@ use iota_types::{
     execution_status::{
         CommandArgumentError, ExecutionFailureStatus, ExecutionStatus, PackageUpgradeError,
     },
-    move_package::UpgradePolicy,
+    move_package::{MovePackageExt, UpgradePolicy},
     object::{Object, Owner},
     programmable_transaction_builder::ProgrammableTransactionBuilder,
     storage::ObjectStore,
@@ -336,7 +336,12 @@ async fn test_upgrade_package_happy_path() {
     let pool = &mut move_binary_format::normalized::RcPool::new();
     let normalized_modules = package
         .move_package()
-        .normalize(pool, &binary_config, /* include code */ true)
+        .normalize(
+            pool,
+            &binary_config,
+            // include code
+            true,
+        )
         .unwrap();
     assert!(normalized_modules.contains_key("new_module"));
     assert!(

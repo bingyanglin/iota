@@ -20,7 +20,7 @@ use iota_types::{
     error::UserInputError,
     fp_ensure,
     gas_coin::GasCoin,
-    move_package::MovePackage,
+    move_package::{MovePackage, MovePackageExt},
     object::{Object, Owner},
     programmable_transaction_builder::ProgrammableTransactionBuilder,
     transaction::{Argument, CallArg, ObjectArg},
@@ -423,10 +423,15 @@ impl TransactionBuilder {
         let Some(IotaRawData::Package(package)) = object.bcs else {
             bail!("Bcs field in object [{package_id}] is missing or not a package.");
         };
+
         Ok(MovePackage::new(
             package.id,
             object.version,
-            package.module_map,
+            package
+                .module_map
+                .iter()
+                .map(|(k, v)| (Identifier::new_unchecked(k.as_str()), v.clone()))
+                .collect(),
             ProtocolConfig::get_for_min_version().max_move_package_size(),
             package.type_origin_table,
             package.linkage_table,

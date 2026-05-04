@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use diesel::prelude::*;
+use iota_types::move_package::MovePackageExt;
 
 use crate::{schema::packages, types::IndexedPackage};
 

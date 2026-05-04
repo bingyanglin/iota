@@ -655,7 +655,7 @@ MovePackage:
     - id:
         TYPENAME: ObjectId
     - version: U64
-    - module_map:
+    - modules:
         MAP:
           KEY: STR
           VALUE: BYTES

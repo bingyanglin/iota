@@ -18,7 +18,7 @@ use iota_types::{
     },
     id::{self, RESOLVED_IOTA_ID},
     iota_sdk_types_conversions::struct_tag_core_to_sdk,
-    move_package::MovePackage,
+    move_package::{MovePackage, MovePackageExt},
     object::bounded_visitor::BoundedVisitor,
     transfer::RESOLVED_RECEIVING_STRUCT,
 };
