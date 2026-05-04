@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use crate::{
     IOTA_FRAMEWORK_ADDRESS,
     base_types::{ObjectID, ObjectRef, SequenceNumber},
-    transaction::{Argument, CallArg, Command, ObjectArg},
+    transaction::{Argument, CallArg, Command},
     type_input::TypeName,
 };
 
@@ -117,8 +117,8 @@ impl MoveCommand {
 // MoveCallArg
 // ---------------------------------------------------------------------------
 
-/// Mirrors [`crate::transaction::ObjectArg`], matching the BCS layout expected
-/// by the Move-side `ptb_call_arg::ObjectArg`.
+/// Mirrors the object variants of [`crate::transaction::CallArg`], matching
+/// the BCS layout expected by the Move-side `ptb_call_arg::ObjectArg`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum MoveObjectArg {
     ImmOrOwnedObject(ObjectRef),
@@ -128,24 +128,6 @@ pub enum MoveObjectArg {
         mutable: bool,
     },
     Receiving(ObjectRef),
-}
-
-impl From<&ObjectArg> for MoveObjectArg {
-    fn from(obj: &ObjectArg) -> Self {
-        match obj {
-            ObjectArg::ImmOrOwnedObject(r) => MoveObjectArg::ImmOrOwnedObject(*r),
-            ObjectArg::SharedObject {
-                id,
-                initial_shared_version,
-                mutable,
-            } => MoveObjectArg::SharedObject {
-                id: *id,
-                initial_shared_version: *initial_shared_version,
-                mutable: *mutable,
-            },
-            ObjectArg::Receiving(r) => MoveObjectArg::Receiving(*r),
-        }
-    }
 }
 
 impl MoveObjectArg {
@@ -171,7 +153,16 @@ impl From<&CallArg> for MoveCallArg {
     fn from(arg: &CallArg) -> Self {
         match arg {
             CallArg::Pure(bytes) => MoveCallArg::Pure(bytes.clone()),
-            CallArg::Object(obj_arg) => MoveCallArg::Object(MoveObjectArg::from(obj_arg)),
+            CallArg::ImmutableOrOwned(obj_arg) => {
+                MoveCallArg::Object(MoveObjectArg::ImmOrOwnedObject(*obj_arg))
+            }
+            CallArg::Shared(obj_arg) => MoveCallArg::Object(MoveObjectArg::SharedObject {
+                id: obj_arg.object_id,
+                initial_shared_version: obj_arg.initial_shared_version,
+                mutable: obj_arg.mutable,
+            }),
+            CallArg::Receiving(obj_arg) => MoveCallArg::Object(MoveObjectArg::Receiving(*obj_arg)),
+            _ => unimplemented!("a new CallArg enum variant was added and needs to be handled"),
         }
     }
 }
@@ -194,7 +185,7 @@ mod tests {
     use super::*;
     use crate::{
         base_types::{IotaAddress, ObjectDigest, ObjectID, SequenceNumber},
-        transaction::{Argument, CallArg, Command, ObjectArg, ProgrammableMoveCall},
+        transaction::{Argument, CallArg, Command, ProgrammableMoveCall, SharedObjectRef},
         type_input::{StructInput, TypeInput},
     };
 
@@ -262,8 +253,7 @@ mod tests {
 
     #[test]
     fn call_arg_from_object() {
-        let obj_arg = ObjectArg::ImmOrOwnedObject(obj_ref());
-        let converted = MoveCallArg::from(&CallArg::Object(obj_arg));
+        let converted = MoveCallArg::from(&CallArg::ImmutableOrOwned(obj_ref()));
         assert_eq!(
             converted,
             MoveCallArg::Object(MoveObjectArg::ImmOrOwnedObject(obj_ref()))
@@ -277,12 +267,12 @@ mod tests {
         assert!(matches!(converted, MoveCallArg::Pure(_)));
     }
 
-    // ── BCS compatibility: MoveObjectArg ↔ ObjectArg ─────────────────
+    // ── BCS compatibility: MoveCallArg ↔ CallArg ─────────────────────
 
     #[test]
-    fn object_arg_bcs_compatible_imm_or_owned() {
-        let tx_arg = ObjectArg::ImmOrOwnedObject(obj_ref());
-        let ctx_arg = MoveObjectArg::from(&tx_arg);
+    fn call_arg_bcs_compatible_imm_or_owned() {
+        let tx_arg = CallArg::ImmutableOrOwned(obj_ref());
+        let ctx_arg = MoveCallArg::from(&tx_arg);
         assert_eq!(
             bcs::to_bytes(&tx_arg).unwrap(),
             bcs::to_bytes(&ctx_arg).unwrap()
@@ -290,13 +280,13 @@ mod tests {
     }
 
     #[test]
-    fn object_arg_bcs_compatible_shared() {
-        let tx_arg = ObjectArg::SharedObject {
-            id: obj_id(),
+    fn call_arg_bcs_compatible_shared() {
+        let tx_arg = CallArg::Shared(SharedObjectRef {
+            object_id: obj_id(),
             initial_shared_version: SequenceNumber::from(5),
             mutable: true,
-        };
-        let ctx_arg = MoveObjectArg::from(&tx_arg);
+        });
+        let ctx_arg = MoveCallArg::from(&tx_arg);
         assert_eq!(
             bcs::to_bytes(&tx_arg).unwrap(),
             bcs::to_bytes(&ctx_arg).unwrap()
@@ -304,9 +294,9 @@ mod tests {
     }
 
     #[test]
-    fn object_arg_bcs_compatible_receiving() {
-        let tx_arg = ObjectArg::Receiving(obj_ref());
-        let ctx_arg = MoveObjectArg::from(&tx_arg);
+    fn call_arg_bcs_compatible_receiving() {
+        let tx_arg = CallArg::Receiving(obj_ref());
+        let ctx_arg = MoveCallArg::from(&tx_arg);
         assert_eq!(
             bcs::to_bytes(&tx_arg).unwrap(),
             bcs::to_bytes(&ctx_arg).unwrap()
