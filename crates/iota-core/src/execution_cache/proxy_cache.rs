@@ -331,8 +331,13 @@ impl GlobalStateHashStore for ProxyCache {
 }
 
 impl ExecutionCacheCommit for ProxyCache {
-    fn build_db_batch(&self, epoch: EpochId, digests: &[TransactionDigest]) -> super::Batch {
-        delegate_method!(self.build_db_batch(epoch, digests))
+    fn build_db_batch(
+        &self,
+        epoch: EpochId,
+        checkpoint_seq: CheckpointSequenceNumber,
+        digests: &[TransactionDigest],
+    ) -> super::Batch {
+        delegate_method!(self.build_db_batch(epoch, checkpoint_seq, digests))
     }
 
     fn try_commit_transaction_outputs(

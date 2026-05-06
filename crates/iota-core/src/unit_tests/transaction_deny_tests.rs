@@ -36,6 +36,7 @@ use crate::{
         auth_unit_test_utils::{
             publish_package_on_single_authority, upgrade_package_on_single_authority,
         },
+        authority_store_types::SENTINEL_PREVIOUS_TRANSACTION_CHECKPOINT,
         test_authority_builder::TestAuthorityBuilder,
     },
     test_utils::make_transfer_iota_transaction,
@@ -333,6 +334,7 @@ async fn test_package_denied() {
 
     let batch = state.get_cache_commit().build_db_batch(
         state.epoch_store_for_testing().epoch(),
+        SENTINEL_PREVIOUS_TRANSACTION_CHECKPOINT,
         &[tx_c, tx_b, tx_a, tx_c_prime, tx_b_prime],
     );
 

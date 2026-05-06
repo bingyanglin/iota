@@ -55,49 +55,40 @@ impl SurferTask {
                 .collect()
         });
         for obj in all_live_objects {
-            match obj {
-                LiveObject::Normal(obj) => {
-                    if let Some(struct_tag) = obj.struct_tag() {
-                        let obj_ref = obj.compute_object_reference();
-                        match obj.owner {
-                            Owner::Immutable => {
-                                immutable_objects
-                                    .write()
-                                    .await
-                                    .entry(struct_tag)
-                                    .or_default()
-                                    .push(obj_ref);
+            let LiveObject::Normal(obj) = obj;
+            if let Some(struct_tag) = obj.struct_tag() {
+                let obj_ref = obj.compute_object_reference();
+                match obj.owner {
+                    Owner::Immutable => {
+                        immutable_objects
+                            .write()
+                            .await
+                            .entry(struct_tag)
+                            .or_default()
+                            .push(obj_ref);
+                    }
+                    Owner::Shared(initial_shared_version) => {
+                        shared_objects
+                            .write()
+                            .await
+                            .entry(struct_tag)
+                            .or_default()
+                            .push((obj_ref.object_id, initial_shared_version));
+                    }
+                    Owner::Address(address) => {
+                        if let Some((gas_object, owned_objects)) = accounts.get_mut(&address) {
+                            if obj.is_gas_coin() && gas_object.is_none() {
+                                gas_object.replace(obj_ref);
+                            } else {
+                                owned_objects.entry(struct_tag).or_default().insert(obj_ref);
                             }
-                            Owner::Shared(initial_shared_version) => {
-                                shared_objects
-                                    .write()
-                                    .await
-                                    .entry(struct_tag)
-                                    .or_default()
-                                    .push((obj_ref.object_id, initial_shared_version));
-                            }
-                            Owner::Address(address) => {
-                                if let Some((gas_object, owned_objects)) =
-                                    accounts.get_mut(&address)
-                                {
-                                    if obj.is_gas_coin() && gas_object.is_none() {
-                                        gas_object.replace(obj_ref);
-                                    } else {
-                                        owned_objects
-                                            .entry(struct_tag)
-                                            .or_default()
-                                            .insert(obj_ref);
-                                    }
-                                }
-                            }
-                            Owner::Object(_) => (),
-                            _ => unimplemented!(
-                                "a new enum variant was added and needs to be handled"
-                            ),
                         }
                     }
+                    Owner::Object(_) => (),
+                    _ => {
+                        unimplemented!("a new enum variant was added and needs to be handled")
+                    }
                 }
-                LiveObject::Wrapped(_) => unreachable!("Explicitly skipped wrapped objects"),
             }
         }
         let entry_functions = Arc::new(RwLock::new(vec![]));

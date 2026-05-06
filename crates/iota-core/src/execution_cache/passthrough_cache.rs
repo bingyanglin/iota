@@ -36,6 +36,7 @@ use crate::{
         AuthorityStore,
         authority_per_epoch_store::AuthorityPerEpochStore,
         authority_store::{ExecutionLockWriteGuard, IotaLockResult},
+        authority_store_types::SENTINEL_PREVIOUS_TRANSACTION_CHECKPOINT,
         epoch_start_configuration::{EpochFlag, EpochStartConfiguration},
     },
     global_state_hasher::GlobalStateHashStore,
@@ -303,9 +304,17 @@ impl ExecutionCacheWrite for PassthroughCache {
         self.store
             .check_owned_objects_are_live(&tx_outputs.live_object_markers_to_delete)?;
 
-        let batch = self
-            .store
-            .build_db_batch(epoch_id, std::slice::from_ref(&tx_outputs))?;
+        // PassthroughCache writes to RocksDB at execution time, before the
+        // containing checkpoint's sequence number is known. Stamp the
+        // sentinel here; a backfill must rewrite these rows with real
+        // values before the snapshot V2 writer reads them.
+        // TODO(snapshot-v2-backfill): rewrite rows produced on this path
+        // with their real `previous_transaction_checkpoint`.
+        let batch = self.store.build_db_batch(
+            epoch_id,
+            SENTINEL_PREVIOUS_TRANSACTION_CHECKPOINT,
+            std::slice::from_ref(&tx_outputs),
+        )?;
         batch.write()?;
 
         self.executed_effects_digests_notify_read
@@ -368,7 +377,12 @@ impl GlobalStateHashStore for PassthroughCache {
 }
 
 impl ExecutionCacheCommit for PassthroughCache {
-    fn build_db_batch(&self, _epoch: EpochId, _digests: &[TransactionDigest]) -> Batch {
+    fn build_db_batch(
+        &self,
+        _epoch: EpochId,
+        _checkpoint_seq: CheckpointSequenceNumber,
+        _digests: &[TransactionDigest],
+    ) -> Batch {
         // Nothing needs to be done since they were already committed in
         // write_transaction_outputs
         (vec![], self.store.perpetual_tables.transactions.batch())
@@ -426,7 +440,8 @@ impl PassthroughCache {
 
         let object_ref = object.compute_object_reference();
         let object_key = ObjectKey::from(object_ref);
-        let store_object = get_store_object(object.clone());
+        let store_object =
+            get_store_object(object.clone(), SENTINEL_PREVIOUS_TRANSACTION_CHECKPOINT);
         self.store
             .perpetual_tables
             .objects

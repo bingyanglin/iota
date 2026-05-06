@@ -952,7 +952,10 @@ mod tests {
     use crate::authority::{
         authority_store_pruner::AuthorityStorePruningMetrics,
         authority_store_tables::AuthorityPerpetualTables,
-        authority_store_types::{StoreObject, StoreObjectWrapper, get_store_object},
+        authority_store_types::{
+            SENTINEL_PREVIOUS_TRANSACTION_CHECKPOINT, StoreObject, StoreObjectWrapper,
+            get_store_object,
+        },
     };
 
     fn get_keys_after_pruning(path: &Path) -> anyhow::Result<HashSet<ObjectKey>> {
@@ -1008,7 +1011,10 @@ mod tests {
                 } else {
                     to_delete.push(object_key);
                 }
-                let obj = get_store_object(Object::immutable_with_id_for_testing(id));
+                let obj = get_store_object(
+                    Object::immutable_with_id_for_testing(id),
+                    SENTINEL_PREVIOUS_TRANSACTION_CHECKPOINT,
+                );
                 batch.insert_batch(
                     &db.objects,
                     [(ObjectKey(id, SequenceNumber::from(seq)), obj.clone())],
@@ -1021,7 +1027,7 @@ mod tests {
                 println!("Adding tombstone object {tombstone_key:?}");
                 batch.insert_batch(
                     &db.objects,
-                    [(tombstone_key, StoreObjectWrapper::V1(StoreObject::Deleted))],
+                    [(tombstone_key, StoreObjectWrapper::V2(StoreObject::Deleted))],
                 )?;
                 tombstones.push(tombstone_key);
             }
@@ -1124,7 +1130,10 @@ mod tests {
                 if i < num_versions_per_object - 2 {
                     to_delete.push((id, SequenceNumber::from(i)));
                 }
-                let obj = get_store_object(Object::immutable_with_id_for_testing(id));
+                let obj = get_store_object(
+                    Object::immutable_with_id_for_testing(id),
+                    SENTINEL_PREVIOUS_TRANSACTION_CHECKPOINT,
+                );
                 perpetual_db
                     .objects
                     .insert(&ObjectKey(id, SequenceNumber::from(i)), &obj)?;
