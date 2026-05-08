@@ -922,7 +922,7 @@ TransactionExpiration:
 TransactionKind:
   ENUM:
     0:
-      ProgrammableTransaction:
+      Programmable:
         NEWTYPE:
           TYPENAME: ProgrammableTransaction
     1:
@@ -936,7 +936,7 @@ TransactionKind:
     3:
       AuthenticatorStateUpdateV1Deprecated: UNIT
     4:
-      EndOfEpochTransaction:
+      EndOfEpoch:
         NEWTYPE:
           SEQ:
             TYPENAME: EndOfEpochTransactionKind
