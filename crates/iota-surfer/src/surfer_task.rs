@@ -55,7 +55,7 @@ impl SurferTask {
                 .collect()
         });
         for obj in all_live_objects {
-            let LiveObject::Normal(obj) = obj;
+            let LiveObject(obj) = obj;
             if let Some(struct_tag) = obj.struct_tag() {
                 let obj_ref = obj.compute_object_reference();
                 match obj.owner {

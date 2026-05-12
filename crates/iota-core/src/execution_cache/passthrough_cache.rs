@@ -384,7 +384,12 @@ impl ExecutionCacheCommit for PassthroughCache {
         _digests: &[TransactionDigest],
     ) -> Batch {
         // Nothing needs to be done since they were already committed in
-        // write_transaction_outputs
+        // `try_write_transaction_outputs`. Note: the rows written there carry
+        // `SENTINEL_PREVIOUS_TRANSACTION_CHECKPOINT` because the containing
+        // checkpoint's sequence number was not yet known at execution time;
+        // see `TODO(snapshot-v2-backfill)` there. This stub does not rewrite
+        // those rows with `_checkpoint_seq` - the follow-up PR's one-time
+        // backfill does that across all sentinel-stamped sources.
         (vec![], self.store.perpetual_tables.transactions.batch())
     }
 
@@ -440,6 +445,10 @@ impl PassthroughCache {
 
         let object_ref = object.compute_object_reference();
         let object_key = ObjectKey::from(object_ref);
+        // Test helper: stamp the sentinel. Mirrors what the production
+        // `try_write_transaction_outputs` path does on `PassthroughCache`;
+        // the follow-up backfill rewrites these rows with the real
+        // `previous_transaction_checkpoint`.
         let store_object =
             get_store_object(object.clone(), SENTINEL_PREVIOUS_TRANSACTION_CHECKPOINT);
         self.store

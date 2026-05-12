@@ -2222,7 +2222,7 @@ impl GlobalStateHashStore for WritebackCache {
             let value = entry.value();
             match value.get_highest().unwrap() {
                 (_, ObjectEntry::Object(object)) => {
-                    dirty_objects.insert(id, LiveObject::Normal(object.clone()));
+                    dirty_objects.insert(id, LiveObject(object.clone()));
                 }
                 (_version, ObjectEntry::Wrapped) => {
                     dirty_objects.remove(&id);
