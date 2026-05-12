@@ -8,7 +8,7 @@ use async_trait::async_trait;
 use iota_core::test_utils::make_transfer_object_transaction;
 use iota_types::{
     base_types::{IotaAddress, ObjectRef},
-    crypto::{AccountKeyPair, Ed25519IotaSignature, get_key_pair},
+    crypto::{AccountKeyPair, ToFromBytes, get_key_pair},
     signature::GenericSignature,
     transaction::Transaction,
 };
@@ -34,7 +34,6 @@ pub struct ExpectedFailurePayload {
     failure_type: ExpectedFailureType,
     transfer_object: ObjectRef,
     transfer_from: IotaAddress,
-    transfer_to: IotaAddress,
     gas: Vec<Gas>,
     system_state_observer: Arc<SystemStateObserver>,
 }
@@ -50,13 +49,17 @@ impl ExpectedFailurePayload {
     fn create_failing_transaction(&self, mut tx: Transaction) -> Transaction {
         match self.failure_type {
             ExpectedFailureType::InvalidSignature => {
-                let signatures = tx.tx_signatures_mut_for_testing();
-                signatures.pop();
-                signatures.push(GenericSignature::Signature(
-                    iota_types::crypto::Signature::Ed25519IotaSignature(
-                        Ed25519IotaSignature::default(),
-                    ),
-                ));
+                // Bumping byte in position 1 (skipping position 0 because it is the flag)
+                // by 1 (mod 256) with a guaranteed-different value, makes it so that
+                // `from_bytes` still parses but verification fails at verify_authenticator
+                // (Ed25519 scalar multiply runs and rejects the corrupted scalar).
+                // The public key bytes are left intact so address derivation still matches
+                // the real sender, ensuring we reach Step 4 of signature verification.
+                for signature in tx.tx_signatures_mut_for_testing().iter_mut() {
+                    let mut bytes = signature.as_ref().to_vec();
+                    bytes[1] = bytes[1].wrapping_add(1);
+                    *signature = GenericSignature::from_bytes(&bytes).unwrap();
+                }
                 tx
             }
             ExpectedFailureType::Random => unreachable!(),
@@ -82,7 +85,10 @@ impl Payload for ExpectedFailurePayload {
             *gas_obj,
             self.transfer_from,
             keypair,
-            self.transfer_to,
+            // Use a fresh random address each call so every transaction has a unique
+            // digest. The tx is rejected at signature verification and never executes,
+            // so the recipient address has no effect on correctness.
+            IotaAddress::random(),
             self.system_state_observer
                 .state
                 .borrow()
@@ -133,10 +139,14 @@ impl ExpectedFailureWorkloadBuilder {
                 duration,
                 group,
             };
+            // Expected-failure transactions (e.g. InvalidSignature) are rejected
+            // before execution so gas is never consumed — the same gas objects can
+            // be reused across all in-flight slots.
+            let num_payloads = (num_workers * in_flight_ratio).max(1);
             let workload_builder = Box::<dyn WorkloadBuilder<dyn Payload>>::from(Box::new(
                 ExpectedFailureWorkloadBuilder {
                     expected_failure_cfg,
-                    num_payloads: max_ops,
+                    num_payloads,
                     num_transfer_accounts,
                 },
             ));
@@ -257,12 +267,10 @@ impl Workload<dyn Payload> for ExpectedFailureWorkload {
         refs.iter()
             .map(|(g, t)| {
                 let from = t.1;
-                let to = g.iter().find(|x| x.1 != from).unwrap().1;
                 Box::new(ExpectedFailurePayload {
                     failure_type: self.expected_failure_cfg.failure_type,
                     transfer_object: t.0,
                     transfer_from: from,
-                    transfer_to: to,
                     gas: g.to_vec(),
                     system_state_observer: system_state_observer.clone(),
                 })
