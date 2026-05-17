@@ -29,7 +29,7 @@ use iota_common::stream_ext::TrySpawnStreamExt;
 use iota_config::object_storage_config::ObjectStoreConfig;
 use iota_core::authority::{
     AuthorityStore,
-    authority_store_tables::{AuthorityPerpetualTables, LiveObject},
+    authority_store_tables::{AuthorityPerpetualTables, LiveObjectV2},
 };
 use iota_storage::{
     blob::{Blob, BlobEncoding},
@@ -52,9 +52,8 @@ use tokio::{
 use tracing::{error, info};
 
 use crate::{
-    FileMetadata, FileType, MAGIC_BYTES, MANIFEST_FILE_MAGIC, Manifest, OBJECT_DIGEST_BYTES,
-    OBJECT_FILE_MAGIC, OBJECT_ID_BYTES, OBJECT_REF_BYTES_V2, REFERENCE_FILE_MAGIC_V2,
-    SEQUENCE_NUM_BYTES, SHA3_BYTES,
+    FileMetadata, FileType, MAGIC_BYTES, MANIFEST_FILE_MAGIC, Manifest, OBJECT_FILE_MAGIC,
+    OBJECT_ID_BYTES, OBJECT_REF_BYTES, REFERENCE_FILE_MAGIC, SEQUENCE_NUM_BYTES, SHA3_BYTES,
 };
 
 pub type SnapshotChecksums = (DigestByBucketAndPartition, GlobalStateHash);
@@ -634,13 +633,6 @@ impl StateSnapshotReaderV1 {
     }
 }
 
-/// An iterator over all object refs in a V2 .ref file.
-///
-/// V2 records carry an 8-byte big-endian `previous_transaction_checkpoint`
-/// trailer after the V1 layout. The trailer is read past to keep the stream
-/// aligned but is not surfaced via the `Iterator` impl: the restore path
-/// only needs `ObjectRef` for digest checksumming and live-object insertion,
-/// so yielding the V1 shape keeps that code path unchanged.
 pub struct ObjectRefIter {
     reader: Box<dyn Read>,
 }
@@ -650,30 +642,21 @@ impl ObjectRefIter {
         let file_path = file_metadata.local_file_path(&root_path, &dir_path)?;
         let mut reader = file_metadata.file_compression.decompress(&file_path)?;
         let magic = reader.read_u32::<BigEndian>()?;
-        if magic != REFERENCE_FILE_MAGIC_V2 {
-            bail!(
-                "Unexpected magic string in V2 REFERENCE file: {:#x}, expected {:#x}",
-                magic,
-                REFERENCE_FILE_MAGIC_V2
-            )
+        if magic != REFERENCE_FILE_MAGIC {
+            bail!("Unexpected magic string in REFERENCE file: {:?}", magic)
         } else {
             Ok(ObjectRefIter { reader })
         }
     }
 
     fn next_ref(&mut self) -> Result<ObjectRef> {
-        let mut buf = [0u8; OBJECT_REF_BYTES_V2];
+        let mut buf = [0u8; OBJECT_REF_BYTES];
         self.reader.read_exact(&mut buf)?;
         let object_id = &buf[0..OBJECT_ID_BYTES];
         let sequence_number = &buf[OBJECT_ID_BYTES..OBJECT_ID_BYTES + SEQUENCE_NUM_BYTES]
             .reader()
             .read_u64::<BigEndian>()?;
-        let digest_end = OBJECT_ID_BYTES + SEQUENCE_NUM_BYTES + OBJECT_DIGEST_BYTES;
-        let sha3_digest = &buf[OBJECT_ID_BYTES + SEQUENCE_NUM_BYTES..digest_end];
-        // The trailing 8 bytes carry `previous_transaction_checkpoint`. We
-        // read past them to keep the stream aligned but do not surface them
-        // here; the per-record value is not needed for state-hash
-        // verification or live-object restoration.
+        let sha3_digest = &buf[OBJECT_ID_BYTES + SEQUENCE_NUM_BYTES..OBJECT_REF_BYTES];
         let object_ref = ObjectRef::new(
             ObjectID::from_bytes(object_id)?,
             SequenceNumber::from_u64(*sequence_number),
@@ -690,7 +673,6 @@ impl Iterator for ObjectRefIter {
     }
 }
 
-/// An iterator over all objects in a *.obj file.
 pub struct LiveObjectIter {
     reader: Box<dyn Read>,
 }
@@ -706,7 +688,7 @@ impl LiveObjectIter {
         }
     }
 
-    fn next_object(&mut self) -> Result<LiveObject> {
+    fn next_object(&mut self) -> Result<LiveObjectV2> {
         let len = self.reader.read_varint::<u64>()? as usize;
         if len == 0 {
             bail!("Invalid object length of 0 in file");
@@ -723,7 +705,7 @@ impl LiveObjectIter {
 }
 
 impl Iterator for LiveObjectIter {
-    type Item = LiveObject;
+    type Item = LiveObjectV2;
     fn next(&mut self) -> Option<Self::Item> {
         self.next_object().ok()
     }
