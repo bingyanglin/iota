@@ -941,7 +941,7 @@ fn build_checkpoint_transactions_with_events(
                     contents: vec![0u8; 64], // 64 bytes of dummy content
                 });
             }
-            Some(TransactionEvents { data })
+            Some(TransactionEvents(data))
         } else {
             None
         };
