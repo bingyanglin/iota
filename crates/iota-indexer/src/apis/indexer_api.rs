@@ -460,9 +460,9 @@ impl IndexerApiServer for IndexerApi {
 
         let name = field_reverse_record_object
             .to_rust::<Field<IotaAddress, Name>>()
-            .ok_or_else(|| {
+            .map_err(|e| {
                 IndexerError::PersistentStorageDataCorruption(format!(
-                    "Malformed Object {reverse_record_id}"
+                    "Malformed Object {reverse_record_id}: {e}"
                 ))
             })?
             .value;

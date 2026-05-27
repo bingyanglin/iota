@@ -80,11 +80,11 @@ pub(super) fn verify_alias_output(
 
     let created_alias = created_alias_obj
         .to_rust::<Alias>()
-        .ok_or_else(|| anyhow!("invalid alias object"))?;
+        .map_err(|e| anyhow!("invalid alias object: {e}"))?;
 
     let created_output = created_output_obj
         .to_rust::<AliasOutput>()
-        .ok_or_else(|| anyhow!("invalid alias output object"))?;
+        .map_err(|e| anyhow!("invalid alias output object: {e}"))?;
 
     // Amount
     ensure!(
