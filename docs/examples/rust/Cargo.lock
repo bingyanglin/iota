@@ -3011,6 +3011,7 @@ dependencies = [
  "iota-metrics",
  "iota-move-natives-latest",
  "iota-protocol-config",
+ "iota-sdk-types",
  "iota-types",
  "iota-verifier-latest",
  "leb128",
@@ -3158,6 +3159,7 @@ dependencies = [
  "anyhow",
  "bcs",
  "fastcrypto",
+ "iota-sdk-types",
  "iota-types",
  "move-binary-format",
  "move-bytecode-utils",
@@ -3203,6 +3205,7 @@ dependencies = [
  "iota-names",
  "iota-package-resolver",
  "iota-protocol-config",
+ "iota-sdk-types",
  "iota-types",
  "itertools 0.13.0",
  "json_to_table",
@@ -3308,6 +3311,7 @@ dependencies = [
  "fastcrypto-zkp",
  "indexmap 2.14.0",
  "iota-protocol-config",
+ "iota-sdk-types",
  "iota-types",
  "move-binary-format",
  "move-core-types",
@@ -3326,6 +3330,7 @@ version = "1.25.0-alpha"
 dependencies = [
  "anyhow",
  "bcs",
+ "iota-sdk-types",
  "iota-types",
  "serde",
  "thiserror 1.0.69",
@@ -3403,6 +3408,7 @@ version = "1.25.0-alpha"
 dependencies = [
  "async-trait",
  "bcs",
+ "iota-sdk-types",
  "iota-types",
  "lru",
  "move-binary-format",
@@ -3535,6 +3541,7 @@ dependencies = [
  "iota-json",
  "iota-json-rpc-types",
  "iota-protocol-config",
+ "iota-sdk-types",
  "iota-types",
  "move-binary-format",
 ]
@@ -3602,6 +3609,7 @@ name = "iota-verifier-latest"
 version = "0.1.0"
 dependencies = [
  "bcs",
+ "iota-sdk-types",
  "iota-types",
  "move-abstract-interpreter",
  "move-abstract-stack",
