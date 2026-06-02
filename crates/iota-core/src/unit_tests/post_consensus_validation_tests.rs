@@ -1018,16 +1018,8 @@ async fn already_executed_tx_must_remain_in_checkpoint_roots() {
     let epoch_store = authority.epoch_store_for_testing();
     let rgp = authority.reference_gas_price_for_testing().unwrap();
 
-    let object_ref = authority
-        .get_object(&object_id)
-        .await
-        .unwrap()
-        .compute_object_reference();
-    let gas_ref = authority
-        .get_object(&gas_id)
-        .await
-        .unwrap()
-        .compute_object_reference();
+    let object_ref = authority.get_object(&object_id).await.unwrap().object_ref();
+    let gas_ref = authority.get_object(&gas_id).await.unwrap().object_ref();
 
     let tx =
         make_transfer_object_transaction(object_ref, gas_ref, sender, &sender_key, recipient, rgp);
@@ -1126,21 +1118,9 @@ async fn double_spend_loser_excluded_from_checkpoint_roots() {
     let epoch_store = authority.epoch_store_for_testing();
     let rgp = authority.reference_gas_price_for_testing().unwrap();
 
-    let object_ref = authority
-        .get_object(&object_id)
-        .await
-        .unwrap()
-        .compute_object_reference();
-    let gas_a_ref = authority
-        .get_object(&gas_a)
-        .await
-        .unwrap()
-        .compute_object_reference();
-    let gas_b_ref = authority
-        .get_object(&gas_b)
-        .await
-        .unwrap()
-        .compute_object_reference();
+    let object_ref = authority.get_object(&object_id).await.unwrap().object_ref();
+    let gas_a_ref = authority.get_object(&gas_a).await.unwrap().object_ref();
+    let gas_b_ref = authority.get_object(&gas_b).await.unwrap().object_ref();
 
     // Two transactions spending the same owned object — a double spend.
     let tx_winner = make_transfer_object_transaction(
@@ -1267,16 +1247,8 @@ async fn setup_lock_tier() -> LockTierSetup {
 
     let epoch_store = (*authority.epoch_store_for_testing()).clone();
     let rgp = authority.reference_gas_price_for_testing().unwrap();
-    let object_ref = authority
-        .get_object(&object_id)
-        .await
-        .unwrap()
-        .compute_object_reference();
-    let gas_ref = authority
-        .get_object(&gas_id)
-        .await
-        .unwrap()
-        .compute_object_reference();
+    let object_ref = authority.get_object(&object_id).await.unwrap().object_ref();
+    let gas_ref = authority.get_object(&gas_id).await.unwrap().object_ref();
 
     LockTierSetup {
         authority,
