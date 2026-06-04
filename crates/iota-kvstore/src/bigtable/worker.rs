@@ -9,9 +9,10 @@ use std::{
 
 use async_trait::async_trait;
 use iota_data_ingestion_core::Worker;
+use iota_sdk_types::Owner;
 use iota_types::{
     base_types::IotaAddress, effects::TransactionEffectsExt,
-    full_checkpoint_content::CheckpointData, object::Owner, transaction::TransactionDataAPI,
+    full_checkpoint_content::CheckpointData, transaction::TransactionDataAPI,
 };
 use serde::{Deserialize, Serialize};
 use strum::IntoEnumIterator;
