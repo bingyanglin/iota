@@ -26,7 +26,9 @@ use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use integer_encoding::VarIntReader;
 use iota_common::stream_ext::TrySpawnStreamExt;
 use iota_config::object_storage_config::ObjectStoreConfig;
-use iota_core::authority::authority_store_tables::{AuthorityPerpetualTables, LiveObject};
+use iota_core::authority::authority_store_tables::{
+    AuthorityPerpetualTables, LiveObject, SnapshotLiveObject,
+};
 use iota_storage::{
     blob::{Blob, BlobEncoding},
     object_store::{
@@ -55,6 +57,7 @@ use crate::{
 
 pub type SnapshotChecksums = (DigestByBucketAndPartition, GlobalStateHash);
 pub type DigestByBucketAndPartition = BTreeMap<u32, BTreeMap<u32, [u8; 32]>>;
+
 #[derive(Clone)]
 pub struct StateSnapshotReaderV1 {
     epoch: u64,
@@ -113,10 +116,12 @@ impl StateSnapshotReaderV1 {
             local_staging_dir_root.clone(),
             &manifest_file_path,
         )?)?;
-        // Verifies MANIFEST
         let snapshot_version = manifest.snapshot_version();
-        if snapshot_version != 1u8 {
-            bail!("Unexpected snapshot version: {}", snapshot_version);
+        if snapshot_version != 2u8 {
+            bail!(
+                "Unsupported snapshot version: {snapshot_version}. \
+                 Only snapshot V2 is supported."
+            );
         }
         if manifest.address_length() as usize > ObjectID::LENGTH {
             bail!("Max possible address length is: {}", ObjectID::LENGTH);
@@ -128,6 +133,7 @@ impl StateSnapshotReaderV1 {
         // directory
         let mut object_files = BTreeMap::new();
         let mut ref_files = BTreeMap::new();
+        let mut epoch_info_seen = false;
         for file_metadata in manifest.file_metadata() {
             match file_metadata.file_type {
                 FileType::Object => {
@@ -148,7 +154,16 @@ impl StateSnapshotReaderV1 {
                     // Inserts the reference FileMetadata with the partition number to the bucket.
                     entry.insert(file_metadata.part_num, file_metadata.clone());
                 }
+                FileType::EpochInfo => {
+                    if epoch_info_seen {
+                        bail!("Manifest contains more than one EPOCH_INFO entry");
+                    }
+                    epoch_info_seen = true;
+                }
             }
+        }
+        if !epoch_info_seen {
+            bail!("V2 manifest missing required EPOCH_INFO entry");
         }
         let epoch_dir_path = Path::from(epoch_dir);
         // Collects the path of all reference files
@@ -697,7 +712,8 @@ impl LiveObjectIter {
             data,
             encoding: BlobEncoding::try_from(encoding)?,
         };
-        blob.decode()
+        let snap: SnapshotLiveObject = blob.decode()?;
+        Ok(snap.into())
     }
 }
 
