@@ -18,7 +18,7 @@ use iota_protocol_config::{
 };
 use iota_sdk_types::{
     Argument, CancelledTransaction, Command, ConsensusDeterminedVersionAssignments, Identifier,
-    StructTag, TypeTag, VersionAssignment,
+    Owner, StructTag, TypeTag, VersionAssignment,
 };
 use iota_types::{
     base_types::{
@@ -38,7 +38,7 @@ use iota_types::{
     gas_coin::GasCoin,
     iota_system_state::IotaSystemStateWrapper,
     messages_consensus::AuthorityCapabilitiesV1,
-    object::{Data, GAS_VALUE_FOR_TESTING, MoveObjectExt, OBJECT_START_VERSION, Owner},
+    object::{Data, GAS_VALUE_FOR_TESTING, MoveObjectExt, OBJECT_START_VERSION},
     programmable_transaction_builder::ProgrammableTransactionBuilder,
     randomness_state::get_randomness_state_obj_initial_shared_version,
     supported_protocol_versions::SupportedProtocolVersions,
