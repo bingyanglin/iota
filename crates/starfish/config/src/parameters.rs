@@ -36,6 +36,13 @@ pub struct Parameters {
     #[serde(default = "Parameters::default_min_block_delay")]
     pub min_block_delay: Duration,
 
+    /// Soft counterpart of `leader_timeout`: after this duration we are
+    /// willing to propose a block even without a strong-vote quorum, to avoid
+    /// liveness stalls when leader data is slow to propagate. Fires earlier
+    /// than `leader_timeout` and does not force block creation on its own.
+    #[serde(default = "Parameters::default_soft_leader_timeout")]
+    pub soft_leader_timeout: Duration,
+
     /// Maximum forward time drift (how far in future) allowed for received
     /// blocks.
     #[serde(default = "Parameters::default_max_forward_time_drift")]
@@ -125,11 +132,19 @@ pub struct Parameters {
     /// discovered, without affecting protocol-level endpoint availability.
     #[serde(default = "Parameters::default_enable_fast_commit_syncer")]
     pub enable_fast_commit_syncer: bool,
+
+    /// Enable adaptive acknowledgment filtering for StarfishSpeed.
+    /// Local heuristic that drops acks for authorities persistently blamed
+    /// by recent strong-vote masks. Effective only when the protocol-level
+    /// `consensus_starfish_speed` flag is also on. Enabled by default;
+    /// operators can disable it locally without a protocol change.
+    #[serde(default = "Parameters::default_enable_starfish_speed_adaptive_acknowledgments")]
+    pub enable_starfish_speed_adaptive_acknowledgments: bool,
 }
 
 impl Parameters {
     pub(crate) fn default_leader_timeout() -> Duration {
-        Duration::from_millis(250)
+        Duration::from_millis(200)
     }
 
     pub(crate) fn default_min_block_delay() -> Duration {
@@ -147,6 +162,10 @@ impl Parameters {
             // block rate to 20 blocks/sec
             Duration::from_millis(50)
         }
+    }
+
+    pub(crate) fn default_soft_leader_timeout() -> Duration {
+        Duration::from_millis(100)
     }
 
     pub(crate) fn default_max_forward_time_drift() -> Duration {
@@ -264,6 +283,10 @@ impl Parameters {
         // without waiting for a protocol upgrade.
         true
     }
+
+    pub(crate) fn default_enable_starfish_speed_adaptive_acknowledgments() -> bool {
+        true
+    }
 }
 
 impl Default for Parameters {
@@ -272,6 +295,7 @@ impl Default for Parameters {
             db_path: PathBuf::default(),
             leader_timeout: Parameters::default_leader_timeout(),
             min_block_delay: Parameters::default_min_block_delay(),
+            soft_leader_timeout: Parameters::default_soft_leader_timeout(),
             max_forward_time_drift: Parameters::default_max_forward_time_drift(),
             max_headers_per_commit_sync_fetch:
                 Parameters::default_max_headers_per_commit_sync_fetch(),
@@ -293,6 +317,8 @@ impl Default for Parameters {
             fast_commit_sync_batch_size: Parameters::default_fast_commit_sync_batch_size(),
             commit_sync_gap_threshold: Parameters::default_commit_sync_gap_threshold(),
             enable_fast_commit_syncer: Parameters::default_enable_fast_commit_syncer(),
+            enable_starfish_speed_adaptive_acknowledgments:
+                Parameters::default_enable_starfish_speed_adaptive_acknowledgments(),
         }
     }
 }
