@@ -2295,6 +2295,10 @@ async fn build_grpc_server(
 
     // Create gRPC server metrics
     let grpc_server_metrics = iota_grpc_server::GrpcServerMetrics::new(prometheus_registry);
+    let client_id_source = config
+        .policy_config
+        .as_ref()
+        .map(|p| p.client_id_source.clone());
 
     let handle = start_grpc_server(
         grpc_reader,
@@ -2303,6 +2307,8 @@ async fn build_grpc_server(
         shutdown_token,
         chain_id,
         Some(grpc_server_metrics),
+        state.traffic_controller.clone(),
+        client_id_source,
     )
     .await?;
 
