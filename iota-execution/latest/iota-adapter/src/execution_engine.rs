@@ -18,7 +18,8 @@ mod checked {
     use iota_protocol_config::{LimitThresholdCrossed, ProtocolConfig, check_limit_by_meter};
     use iota_sdk_types::{
         Argument, ChangeEpoch, ChangeEpochV2, ChangeEpochV3, ChangeEpochV4, Command,
-        ExecutionStatus, Identifier, ObjectId, TransactionKind,
+        ExecutionStatus, GenesisTransaction, Identifier, ObjectId, TransactionKind,
+        gas::GasCostSummary,
     };
     #[cfg(msim)]
     use iota_types::iota_system_state::advance_epoch_result_injection::maybe_modify_result;
@@ -36,7 +37,7 @@ mod checked {
         error::{ExecutionError, ExecutionErrorKind},
         execution::{ExecutionResults, ExecutionResultsV1, SharedInput, is_certificate_denied},
         execution_config_utils::to_binary_config,
-        gas::{GasCostSummary, IotaGasStatus, IotaGasStatusAPI},
+        gas::{IotaGasStatus, IotaGasStatusAPI},
         gas_coin::GAS,
         inner_temporary_store::InnerTemporaryStore,
         iota_system_state::{ADVANCE_EPOCH_FUNCTION_NAME, AdvanceEpochParams},
@@ -48,9 +49,9 @@ mod checked {
         randomness_state::RANDOMNESS_STATE_UPDATE_FUNCTION_NAME,
         storage::{BackingStore, Storage},
         transaction::{
-            CallArg, CheckedInputObjects, EndOfEpochTransactionKind, GasData, GenesisTransaction,
-            InputObjects, ProgrammableTransaction, RandomnessStateUpdate, SharedObjectRef,
-            SystemPackage, TransactionKindExt,
+            CallArg, CheckedInputObjects, EndOfEpochTransactionKind, GasData, InputObjects,
+            ProgrammableTransaction, RandomnessStateUpdate, SharedObjectRef, SystemPackage,
+            TransactionKindExt,
         },
     };
     use move_binary_format::CompiledModule;
