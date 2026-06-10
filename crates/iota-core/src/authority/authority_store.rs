@@ -29,7 +29,7 @@ use iota_types::{
 use itertools::izip;
 use move_core_types::resolver::ModuleResolver;
 use tokio::time::Instant;
-use tracing::{debug, info, trace};
+use tracing::{debug, info, trace, warn};
 use typed_store::{
     TypedStoreError,
     rocks::{DBBatch, DBMap},
@@ -798,6 +798,23 @@ impl AuthorityStore {
         }
         batch.write()?;
         Ok(())
+    }
+
+    /// Spawn the one-time `previous_transaction_checkpoint` backfill on a
+    /// blocking thread (it walks a `!Send` RocksDB iterator and rewrites live
+    /// rows in batches). Best-effort and panic-isolated; the `JoinHandle` is
+    /// intentionally dropped. Only needed on nodes that publish V2 snapshots
+    /// and still hold pre-V2 (`None`) live rows.
+    pub fn spawn_previous_tx_checkpoint_backfill(self: &Arc<Self>) {
+        let perpetual = self.perpetual_tables.clone();
+        tokio::task::spawn_blocking(move || {
+            match crate::authority::previous_tx_checkpoint_backfill::run_previous_tx_checkpoint_backfill(
+                &perpetual,
+            ) {
+                Ok(stats) => info!(?stats, "previous_transaction_checkpoint backfill done"),
+                Err(e) => warn!("previous_transaction_checkpoint backfill failed: {e}"),
+            }
+        });
     }
 
     pub fn set_epoch_start_configuration(

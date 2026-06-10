@@ -154,6 +154,11 @@ pub struct AuthorityPerpetualTables {
     /// per-epoch, and all previous epochs other than the current epoch may
     /// be pruned safely.
     pub(crate) object_per_epoch_marker_table: DBMap<(EpochId, ObjectKey), MarkerValue>,
+
+    /// Singleton marker set once the one-time
+    /// `previous_transaction_checkpoint` backfill has completed, so it does not
+    /// re-scan the live object set on every restart.
+    pub(crate) previous_tx_checkpoint_backfill_complete: DBMap<(), ()>,
 }
 
 #[derive(DBMapUtils)]
@@ -387,6 +392,22 @@ impl AuthorityPerpetualTables {
         checkpoint_number: CheckpointSequenceNumber,
     ) -> IotaResult {
         wb.insert_batch(&self.pruned_checkpoint, [((), checkpoint_number)])?;
+        Ok(())
+    }
+
+    /// Whether the one-time `previous_transaction_checkpoint` backfill has run.
+    pub fn is_previous_tx_checkpoint_backfill_complete(&self) -> Result<bool, TypedStoreError> {
+        Ok(self
+            .previous_tx_checkpoint_backfill_complete
+            .get(&())?
+            .is_some())
+    }
+
+    /// Mark the one-time `previous_transaction_checkpoint` backfill complete.
+    pub fn mark_previous_tx_checkpoint_backfill_complete(&self) -> IotaResult {
+        let mut wb = self.previous_tx_checkpoint_backfill_complete.batch();
+        wb.insert_batch(&self.previous_tx_checkpoint_backfill_complete, [((), ())])?;
+        wb.write()?;
         Ok(())
     }
 

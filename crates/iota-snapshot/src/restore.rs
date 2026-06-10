@@ -8,8 +8,12 @@ use std::future::Future;
 
 use anyhow::Result;
 use bytes::Bytes;
-use iota_core::authority::{AuthorityStore, authority_store_tables::AuthorityPerpetualTables};
+use iota_core::{
+    authority::{AuthorityStore, authority_store_tables::AuthorityPerpetualTables},
+    grpc_indexes::GrpcIndexesStore,
+};
 use iota_storage::SHA3_BYTES;
+use iota_types::storage::EpochInfoV2;
 
 use crate::{FileMetadata, reader::LiveObjectIter};
 
@@ -39,5 +43,35 @@ impl Restore for AuthorityPerpetualTables {
         AuthorityStore::bulk_insert_live_objects(self, live_objects, expected_checksum)
             .expect("Failed to insert live objects");
         Ok(())
+    }
+}
+
+/// A consumer that can persist a snapshot's `EPOCH_INFO` rows.
+///
+/// Kept separate from [`Restore`] (live objects): the two restore targets are
+/// distinct stores — objects to `AuthorityPerpetualTables`, epoch info to
+/// `GrpcIndexesStore` — so neither carries the other's method, and a future
+/// unified indexer can implement both. The insert must be idempotent and
+/// monotonic; any "skip already-covered rows" de-dup is a consumer-side
+/// optimization, not a correctness requirement. Synchronous, unlike
+/// [`Restore`].
+pub trait SeedEpochInfo {
+    fn seed_epoch_info(&self, rows: Vec<EpochInfoV2>) -> Result<()>;
+}
+
+impl SeedEpochInfo for GrpcIndexesStore {
+    fn seed_epoch_info(&self, rows: Vec<EpochInfoV2>) -> Result<()> {
+        // Skip epochs already covered by the `EpochIndexed` watermark to avoid
+        // re-writing held rows. `insert_epoch_info` is itself idempotent and
+        // monotonic, so this filter is a pure optimization.
+        let highest_indexed = self
+            .highest_indexed_epoch()
+            .map_err(|e| anyhow::anyhow!("failed to read the epochs_v2 watermark: {e}"))?;
+        let rows: Vec<EpochInfoV2> = rows
+            .into_iter()
+            .filter(|row| highest_indexed.is_none_or(|highest| row.epoch > highest))
+            .collect();
+        self.insert_epoch_info(rows)
+            .map_err(|e| anyhow::anyhow!("failed to seed epochs_v2 from snapshot: {e}"))
     }
 }
