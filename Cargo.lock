@@ -13099,6 +13099,7 @@ dependencies = [
  "cfg-if",
  "dashmap",
  "enum_dispatch",
+ "eyre",
  "fastcrypto",
  "futures",
  "http 1.4.0",
