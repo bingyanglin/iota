@@ -448,9 +448,12 @@ impl<R: ReadApiServer> IndexerApiServer for IndexerApi<R> {
                 .state
                 .get_dynamic_fields(parent_object_id, cursor, limit + 1)
                 .map_err(Error::from)?;
+            // Pagination follows the index rows: an unresolvable field
+            // (`None` info) still advances the cursor, it is only omitted
+            // from the returned page.
             let has_next_page = data.len() > limit;
             data.truncate(limit);
-            let next_cursor = data.last().cloned().map_or(cursor, |c| Some(c.0));
+            let next_cursor = data.last().map_or(cursor, |c| Some(c.0));
             self.metrics
                 .get_dynamic_fields_result_size
                 .observe(data.len() as f64);
@@ -458,7 +461,10 @@ impl<R: ReadApiServer> IndexerApiServer for IndexerApi<R> {
                 .get_dynamic_fields_result_size_total
                 .inc_by(data.len() as u64);
             Ok(DynamicFieldPage {
-                data: data.into_iter().map(|(_, w)| w.into()).collect(),
+                data: data
+                    .into_iter()
+                    .filter_map(|(_, info)| Some(info?.into()))
+                    .collect(),
                 next_cursor,
                 has_next_page,
             })

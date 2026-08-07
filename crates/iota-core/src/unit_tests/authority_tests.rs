@@ -3959,6 +3959,18 @@ fn jsonrpc_index_transaction(
 }
 
 async fn create_and_retrieve_df_info(function: &Identifier) -> (Address, Vec<DynamicFieldInfo>) {
+    let (_, _, sender, fields) = create_and_retrieve_df(function).await;
+    (sender, fields)
+}
+
+async fn create_and_retrieve_df(
+    function: &Identifier,
+) -> (
+    Arc<AuthorityState>,
+    ObjectId,
+    Address,
+    Vec<DynamicFieldInfo>,
+) {
     let (sender, sender_key): (_, AccountKeyPair) = get_key_pair();
     let gas_object_id = ObjectId::random();
     let (authority_state, object_basics) =
@@ -4029,15 +4041,38 @@ async fn create_and_retrieve_df_info(function: &Identifier) -> (Address, Vec<Dyn
 
     jsonrpc_index_transaction(&authority_state, 0, add_txn, add_effects);
 
-    (
-        sender,
-        authority_state
-            .get_dynamic_fields(outer_v0.object_id, None, usize::MAX)
-            .unwrap()
-            .into_iter()
-            .map(|x| x.1)
-            .collect(),
-    )
+    let fields = authority_state
+        .get_dynamic_fields(outer_v0.object_id, None, usize::MAX)
+        .unwrap()
+        .into_iter()
+        .filter_map(|x| x.1)
+        .collect();
+    (authority_state, outer_v0.object_id, sender, fields)
+}
+
+/// `get_dynamic_field_object_id` must resolve to the value object's id even
+/// when the caller passes the already-wrapped name type under which the
+/// index stores a dynamic object field, not the wrapper `Field` object's id.
+#[tokio::test]
+async fn test_dynamic_object_field_lookup_with_wrapped_name_type() {
+    let (authority_state, parent, _, fields) =
+        create_and_retrieve_df(&Identifier::from_static("add_ofield_with_address_name")).await;
+    assert_eq!(fields.len(), 1);
+    let value_object_id = fields[0].object_id;
+    let name_type = fields[0].name.type_.clone();
+
+    let id = authority_state
+        .get_dynamic_field_object_id(parent, name_type.clone(), &fields[0].bcs_name)
+        .unwrap();
+    assert_eq!(id, Some(value_object_id));
+
+    let wrapped_name_type = TypeTag::Struct(Box::new(
+        DynamicFieldInfo::dynamic_object_field_wrapper(name_type),
+    ));
+    let id = authority_state
+        .get_dynamic_field_object_id(parent, wrapped_name_type, &fields[0].bcs_name)
+        .unwrap();
+    assert_eq!(id, Some(value_object_id));
 }
 
 #[tokio::test]

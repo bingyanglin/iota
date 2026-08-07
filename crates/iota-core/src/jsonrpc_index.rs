@@ -42,7 +42,8 @@ use iota_types::{
 };
 use itertools::Itertools;
 use move_core_types::{
-    account_address::AccountAddress, identifier::Identifier, language_storage::ModuleId,
+    account_address::AccountAddress, annotated_value as A, identifier::Identifier,
+    language_storage::ModuleId,
 };
 use parking_lot::{ArcMutexGuard, Mutex, RwLock};
 use prometheus_filtered::{IntCounter, Registry, register_int_counter_with_registry};
@@ -982,6 +983,37 @@ fn is_dynamic_field(object: &Object) -> bool {
         .data
         .as_opt_struct()
         .is_some_and(|move_object| move_object.struct_tag().is_dynamic_field())
+}
+
+/// A [`LayoutResolver`] memoizing layouts by struct tag, for callers that
+/// resolve many values of few types, e.g. scanning a dynamic-field table
+/// whose entries share one type.
+pub(crate) struct CachingLayoutResolver<'a> {
+    resolver: &'a mut dyn LayoutResolver,
+    layouts: HashMap<StructTag, A::MoveDatatypeLayout>,
+}
+
+impl<'a> CachingLayoutResolver<'a> {
+    pub(crate) fn new(resolver: &'a mut dyn LayoutResolver) -> Self {
+        Self {
+            resolver,
+            layouts: HashMap::new(),
+        }
+    }
+}
+
+impl LayoutResolver for CachingLayoutResolver<'_> {
+    fn get_annotated_layout(
+        &mut self,
+        struct_tag: &StructTag,
+    ) -> Result<A::MoveDatatypeLayout, IotaError> {
+        if let Some(layout) = self.layouts.get(struct_tag) {
+            return Ok(layout.clone());
+        }
+        let layout = self.resolver.get_annotated_layout(struct_tag)?;
+        self.layouts.insert(struct_tag.clone(), layout.clone());
+        Ok(layout)
+    }
 }
 
 /// Resolves a `Field` object into the [`DynamicFieldInfo`] served by the
@@ -3100,6 +3132,43 @@ mod tests {
         );
     }
 
+    /// `AuthorityState::get_dynamic_fields` must return one entry per index
+    /// row: a field that no longer resolves comes back as a `None` marker
+    /// instead of vanishing, so page sizes and cursors stay truthful.
+    #[tokio::test]
+    async fn test_get_dynamic_fields_returns_one_entry_per_index_row() {
+        let authority_state = crate::authority::test_authority_builder::TestAuthorityBuilder::new()
+            .build()
+            .await;
+        let indexes = authority_state.indexes.clone().unwrap();
+
+        let parent = ObjectId::random();
+        // Index rows whose objects do not exist: unresolvable fields.
+        let mut ids: Vec<ObjectId> = (0..3).map(|_| ObjectId::random()).collect();
+        ids.sort();
+        for field_id in &ids {
+            indexes
+                .tables
+                .dynamic_field_index
+                .insert(&(parent, *field_id), &())
+                .unwrap();
+        }
+
+        let rows = authority_state.get_dynamic_fields(parent, None, 2).unwrap();
+        assert_eq!(
+            rows.iter().map(|(id, _)| *id).collect::<Vec<_>>(),
+            ids[..2],
+            "each index row must occupy one slot, resolvable or not"
+        );
+        assert!(rows.iter().all(|(_, info)| info.is_none()));
+
+        // The cursor continues from the last returned row.
+        let rows = authority_state
+            .get_dynamic_fields(parent, Some(ids[1]), 2)
+            .unwrap();
+        assert_eq!(rows.iter().map(|(id, _)| *id).collect::<Vec<_>>(), ids[2..]);
+    }
+
     /// `CoinInfo::from_object` must reject non-coin objects even when their
     /// BCS contents happen to match `Coin`'s `{UID, u64}` layout.
     #[test]
@@ -3875,5 +3944,38 @@ mod tests {
             .unwrap();
         v.reverse();
         assert_eq!(v, v_rev);
+    }
+
+    /// The caching layout resolver resolves each struct tag once.
+    #[test]
+    fn test_caching_layout_resolver_memoizes_by_tag() {
+        use iota_types::layout_resolver::LayoutResolver;
+        use move_core_types::annotated_value::{MoveDatatypeLayout, MoveStructLayout};
+
+        struct Counting {
+            calls: u32,
+        }
+        impl LayoutResolver for Counting {
+            fn get_annotated_layout(
+                &mut self,
+                _struct_tag: &StructTag,
+            ) -> Result<MoveDatatypeLayout, iota_types::error::IotaError> {
+                self.calls += 1;
+                Ok(MoveDatatypeLayout::Struct(Box::new(MoveStructLayout {
+                    type_: "0x2::coin::Coin".parse().unwrap(),
+                    fields: vec![],
+                })))
+            }
+        }
+
+        let mut inner = Counting { calls: 0 };
+        let mut caching = super::CachingLayoutResolver::new(&mut inner);
+        let coin: StructTag = "0x2::coin::Coin<0x2::iota::IOTA>".parse().unwrap();
+        let cap: StructTag = "0x2::coin::TreasuryCap<0x2::iota::IOTA>".parse().unwrap();
+        caching.get_annotated_layout(&coin).unwrap();
+        caching.get_annotated_layout(&coin).unwrap();
+        caching.get_annotated_layout(&cap).unwrap();
+        drop(caching);
+        assert_eq!(inner.calls, 2, "one resolution per distinct tag");
     }
 }

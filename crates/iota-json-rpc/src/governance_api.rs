@@ -620,7 +620,8 @@ fn validator_exchange_rates(
         let mut rates = state
             .get_dynamic_fields(exchange_rates_id, None, exchange_rates_size as usize)?
             .into_iter()
-            .map(|(_object_id, df)| {
+            .filter_map(|(_object_id, df)| df)
+            .map(|df| {
                 let epoch: EpochId = bcs::from_bytes(&df.bcs_name).map_err(|e| {
                     IotaError::ObjectDeserialization {
                         error: e.to_string(),
@@ -812,7 +813,8 @@ where
     state
         .get_dynamic_fields(table_id, None, limit as usize)?
         .into_iter()
-        .map(|(_object_id, df)| {
+        .filter_map(|(_object_id, df)| df)
+        .map(|df| {
             let validator_summary =
                 get_validator_from_table(object_store, table_id, &key(df)?, protocol_version)?;
 
