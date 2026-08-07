@@ -582,24 +582,35 @@ impl IndexStoreTables {
         Ok(())
     }
 
-    fn needs_to_do_initialization(&self, checkpoint_store: &CheckpointStore) -> bool {
-        let schema_mismatch = match self.meta.get(&()) {
-            Ok(Some(metadata)) => metadata.version != CURRENT_DB_VERSION,
-            Ok(None) => true,
-            Err(_) => true,
+    /// Whether the store must be wiped and rebuilt. Read errors propagate:
+    /// a transient error must fail the open rather than silently wipe a
+    /// healthy store or adopt a stale one.
+    fn needs_to_do_initialization(&self, checkpoint_store: &CheckpointStore) -> IotaResult<bool> {
+        let schema_mismatch = match self.meta.get(&())? {
+            Some(metadata) => metadata.version != CURRENT_DB_VERSION,
+            None => true,
         };
 
-        schema_mismatch || self.is_indexed_watermark_out_of_date(checkpoint_store)
+        Ok(schema_mismatch || self.is_indexed_watermark_out_of_date(checkpoint_store)?)
     }
 
-    // Check if the index watermark is behind the highest_executed_checkpoint.
-    fn is_indexed_watermark_out_of_date(&self, checkpoint_store: &CheckpointStore) -> bool {
-        let highest_executed_checkpoint = checkpoint_store
-            .get_highest_executed_checkpoint_seq_number()
-            .ok()
-            .flatten();
-        let watermark = self.watermark.get(&()).ok().flatten();
-        watermark < highest_executed_checkpoint
+    /// Whether the index watermark is behind `highest_executed_checkpoint`,
+    /// or absent on a store that already holds data.
+    fn is_indexed_watermark_out_of_date(
+        &self,
+        checkpoint_store: &CheckpointStore,
+    ) -> IotaResult<bool> {
+        let highest_executed_checkpoint =
+            checkpoint_store.get_highest_executed_checkpoint_seq_number()?;
+        let Some(watermark) = self.watermark.get(&())? else {
+            // A rebuild and a restore both write the watermark only once
+            // their data is durable, so data without one comes from a build
+            // that was cut short — including when nothing is executed
+            // locally and the comparison below has nothing to outrun. An
+            // empty store is the fresh one `seed_meta` covers.
+            return Ok(!self.owner_index.is_empty() || highest_executed_checkpoint.is_some());
+        };
+        Ok(highest_executed_checkpoint.is_some_and(|executed| watermark < executed))
     }
 
     /// Rebuilds the live-state tables, for the cases
@@ -688,15 +699,10 @@ impl IndexStoreTables {
         digest: &TransactionDigest,
         batch: &mut DBBatch,
         object_index_changes: &ObjectIndexChanges,
-        tx_coins: Option<TxCoins>,
+        tx_coins: TxCoins,
         coin_changes: &mut BTreeMap<CoinIndexKey, (TypeTag, Option<CoinInfo>)>,
     ) -> IotaResult {
-        // In production if this code path is hit, we should expect `tx_coins` to not be
-        // None. However, in many tests today we do not distinguish validator
-        // and/or fullnode, so we gracefully exist here.
-        let Some((input_coins, written_coins)) = tx_coins else {
-            return Ok(());
-        };
+        let (input_coins, written_coins) = tx_coins;
         // 1. Delete old owner if the object is deleted or transferred to a new owner,
         // by looking at `object_index_changes.deleted_owners`.
         let coin_delete_keys = object_index_changes
@@ -772,7 +778,7 @@ impl IndexStoreTables {
         coin_changes: &mut BTreeMap<CoinIndexKey, (TypeTag, Option<CoinInfo>)>,
         digest: &TransactionDigest,
         object_index_changes: ObjectIndexChanges,
-        tx_coins: Option<TxCoins>,
+        tx_coins: TxCoins,
     ) -> IotaResult {
         self.index_coin(digest, batch, &object_index_changes, tx_coins, coin_changes)?;
 
@@ -1299,14 +1305,33 @@ impl IndexStore {
         authority_store: &Arc<AuthorityStore>,
         checkpoint_store: &Arc<CheckpointStore>,
     ) -> Arc<Self> {
-        let mut opened = Self::open_index_db(&path);
+        // An unopenable database would crash-loop the node with no way to
+        // self-heal; wipe and rebuild it like a stale one. Read errors on an
+        // openable database stay fatal instead (see
+        // `needs_to_do_initialization`): its data is intact, so a restart
+        // retries without paying for a rebuild.
+        let mut opened = match Self::open_index_db(&path) {
+            Ok(opened) => Some(opened),
+            Err(e) => {
+                warn!("unable to open the JSON-RPC index database, wiping and rebuilding: {e}");
+                None
+            }
+        };
 
-        opened
-            .tables
-            .seed_meta()
-            .expect("failed to initialize index tables");
+        if let Some(opened) = &opened {
+            opened
+                .tables
+                .seed_meta()
+                .expect("failed to initialize index tables");
+        }
 
-        if opened.tables.needs_to_do_initialization(checkpoint_store) {
+        let needs_initialization = opened.as_ref().is_none_or(|opened| {
+            opened
+                .tables
+                .needs_to_do_initialization(checkpoint_store)
+                .expect("failed to determine whether the JSON-RPC index needs a rebuild")
+        });
+        if needs_initialization {
             let mut init_tables = {
                 drop(opened);
                 safe_drop_db(path.clone(), Duration::from_secs(30))
@@ -1348,11 +1373,12 @@ impl IndexStore {
             }
 
             // Reopen the DB with default options (eg without `unordered_write`s enabled)
-            opened = Self::open_index_db(&path);
+            let reopened = Self::open_index_db(&path)
+                .expect("unable to reopen the JSON-RPC index database after the rebuild");
 
-            // Sanity check: verify the database version was persisted correctly, i.e.
-            // the WAL-disabled bulk writes were flushed before the reopen.
-            let stored_version = opened
+            // Smoke test: the reopened database is readable and carries the
+            // schema version the rebuild wrote.
+            let stored_version = reopened
                 .tables
                 .meta
                 .get(&())
@@ -1363,7 +1389,9 @@ impl IndexStore {
                 "database version mismatch after flush and reopen: expected {}, found {}",
                 CURRENT_DB_VERSION, stored_version.version
             );
+            opened = Some(reopened);
         }
+        let opened = opened.expect("the index database is open on both paths above");
 
         // A store rebuilt without local history has no rows to derive the next
         // sequence number from; anchor it to the network transaction total at
@@ -1596,7 +1624,8 @@ impl IndexStore {
         registry: &Registry,
         max_type_length: Option<u64>,
     ) -> Self {
-        let opened = Self::open_index_db(&path);
+        let opened =
+            Self::open_index_db(&path).expect("unable to open the JSON-RPC index database");
         Self::finish_open(opened, registry, max_type_length, 0)
     }
 
@@ -1664,13 +1693,21 @@ impl IndexStore {
     /// column family at open with its tuned options: a column family left
     /// for auto-discovery would silently get default options (and its own
     /// block cache).
-    fn open_index_db(path: &Path) -> OpenedIndexDb {
+    fn open_index_db(path: &Path) -> IotaResult<OpenedIndexDb> {
         let db_options = default_db_options().disable_write_throttling();
         let coin_options = coin_index_table_default_config();
         let history_cf_options = history_cf_options(&db_options);
 
         let static_tables = IndexStoreTables::describe_tables();
-        let existing_cfs = list_tables(path.to_path_buf()).unwrap_or_default();
+        // A listing failure on an existing database must not pass for "no
+        // history": the history buckets would silently be lost to queries
+        // and to retention until the next reopen. `CURRENT` marks a
+        // directory holding a database rather than a fresh path.
+        let existing_cfs = if path.join("CURRENT").exists() {
+            list_tables(path.to_path_buf()).map_err(|e| IotaError::Storage(e.to_string()))?
+        } else {
+            Vec::new()
+        };
         let mut epochs = std::collections::BTreeSet::new();
         let mut opt_cfs: Vec<(String, rocksdb::Options)> = Vec::new();
         for name in static_tables.keys() {
@@ -1701,7 +1738,7 @@ impl IndexStore {
             MetricConf::new("index"),
             &opt_cfs,
         )
-        .expect("unable to open the JSON-RPC index database");
+        .map_err(|e| IotaError::Storage(e.to_string()))?;
 
         fn map<K, V>(db: &Arc<Database>, cf_name: &str, rw: &ReadWriteOptions) -> DBMap<K, V> {
             DBMap::reopen(db, Some(cf_name), rw, false)
@@ -1719,17 +1756,16 @@ impl IndexStore {
 
         let mut history = BTreeMap::new();
         for epoch in epochs {
-            let bucket =
-                HistoryBucket::reopen(&db, epoch).expect("unable to open a history column family");
+            let bucket = HistoryBucket::reopen(&db, epoch)?;
             history.insert(epoch, Arc::new(bucket));
         }
 
-        OpenedIndexDb {
+        Ok(OpenedIndexDb {
             tables,
             db,
             history_cf_options,
             history,
-        }
+        })
     }
 
     /// The retained history buckets in scan order: ascending epochs for
@@ -1873,7 +1909,7 @@ impl IndexStore {
     ///
     /// Must be called for each checkpoint in sequence order, so that
     /// transaction sequence numbers follow checkpoint order.
-    pub fn index_checkpoint(&self, checkpoint: &CheckpointData, index_coins: bool) -> IotaResult {
+    pub fn index_checkpoint(&self, checkpoint: &CheckpointData) -> IotaResult {
         let checkpoint_seq = checkpoint.checkpoint_summary.sequence_number;
         let timestamp_ms = checkpoint.checkpoint_summary.timestamp_ms;
         let bucket = self.ensure_history_bucket(checkpoint.checkpoint_summary.epoch)?;
@@ -1899,7 +1935,7 @@ impl IndexStore {
             bucket.index_tx(&mut batch, sequence, timestamp_ms, data)?;
 
             let object_index_changes = process_object_index(tx);
-            let tx_coins = index_coins.then(|| transaction_coins(tx));
+            let tx_coins = transaction_coins(tx);
             self.tables.index_object_changes(
                 &mut batch,
                 &mut coin_changes,
@@ -3082,7 +3118,9 @@ mod tests {
         assert_eq!(tables.watermark.get(&()).unwrap(), None);
         assert_eq!(tables.history_watermark.get(&()).unwrap(), None);
         assert!(
-            tables.needs_to_do_initialization(&checkpoint_store),
+            tables
+                .needs_to_do_initialization(&checkpoint_store)
+                .unwrap(),
             "a store whose rebuild was not adopted must be wiped and rebuilt on the next open"
         );
     }
@@ -3228,7 +3266,8 @@ mod tests {
         assert!(
             !index_store
                 .tables
-                .needs_to_do_initialization(&checkpoint_store),
+                .needs_to_do_initialization(&checkpoint_store)
+                .unwrap(),
             "a brand-new store on a node with no executed checkpoints needs no rebuild"
         );
 
@@ -3236,7 +3275,8 @@ mod tests {
         assert!(
             index_store
                 .tables
-                .needs_to_do_initialization(&checkpoint_store),
+                .needs_to_do_initialization(&checkpoint_store)
+                .unwrap(),
             "an executed checkpoint past the indexed watermark must trigger a rebuild"
         );
 
@@ -3245,6 +3285,7 @@ mod tests {
             !index_store
                 .tables
                 .needs_to_do_initialization(&checkpoint_store)
+                .unwrap()
         );
 
         // A schema version bump also triggers a rebuild.
@@ -3262,6 +3303,7 @@ mod tests {
             index_store
                 .tables
                 .needs_to_do_initialization(&checkpoint_store)
+                .unwrap()
         );
     }
 
@@ -3309,7 +3351,8 @@ mod tests {
         assert!(
             index_store
                 .tables
-                .needs_to_do_initialization(&checkpoint_store),
+                .needs_to_do_initialization(&checkpoint_store)
+                .unwrap(),
             "a database from before per-checkpoint indexing must be rebuilt"
         );
     }
@@ -3451,7 +3494,10 @@ mod tests {
         {
             let built = open_index_store(index_dir.clone());
             assert!(
-                !built.tables.needs_to_do_initialization(&checkpoint_store),
+                !built
+                    .tables
+                    .needs_to_do_initialization(&checkpoint_store)
+                    .unwrap(),
                 "a restore-built store must need no rebuild"
             );
             built
@@ -3637,7 +3683,8 @@ mod tests {
         assert!(
             !index_store
                 .tables
-                .needs_to_do_initialization(&checkpoint_store),
+                .needs_to_do_initialization(&checkpoint_store)
+                .unwrap(),
             "an index watermark ahead of the executed watermark must not trigger a rebuild"
         );
     }
@@ -3660,7 +3707,7 @@ mod tests {
         }
         let mut builder = builder.finish_transaction();
         let checkpoint = builder.build_checkpoint();
-        index_store.index_checkpoint(&checkpoint, true)?;
+        index_store.index_checkpoint(&checkpoint)?;
         index_store.commit_update_for_checkpoint(0)?;
 
         let balance_from_db = IndexStore::get_balance_from_db(
@@ -3686,7 +3733,7 @@ mod tests {
         }
         let mut builder = builder.finish_transaction();
         let checkpoint = builder.build_checkpoint();
-        index_store.index_checkpoint(&checkpoint, true)?;
+        index_store.index_checkpoint(&checkpoint)?;
         index_store.commit_update_for_checkpoint(1)?;
 
         let balance_from_db = IndexStore::get_balance_from_db(
@@ -3732,7 +3779,7 @@ mod tests {
             .create_coin_object(0, 1, 100, GAS::type_tag())
             .finish_transaction();
         let checkpoint = builder.build_checkpoint();
-        index_store.index_checkpoint(&checkpoint, true)?;
+        index_store.index_checkpoint(&checkpoint)?;
         index_store.commit_update_for_checkpoint(0)?;
 
         // A second coin for the same owner in checkpoint 1.
@@ -3741,7 +3788,7 @@ mod tests {
             .create_coin_object(1, 1, 100, GAS::type_tag())
             .finish_transaction();
         let checkpoint = builder.build_checkpoint();
-        index_store.index_checkpoint(&checkpoint, true)?;
+        index_store.index_checkpoint(&checkpoint)?;
 
         // Replay the commit by hand, pausing between the batch write and the
         // cache merge — the window where an unlocked reader used to cache
@@ -3789,13 +3836,13 @@ mod tests {
         let checkpoint = builder.build_checkpoint();
         let digest = *checkpoint.transactions[0].effects.transaction_digest();
 
-        index_store.index_checkpoint(&checkpoint, true)?;
+        index_store.index_checkpoint(&checkpoint)?;
         index_store.commit_update_for_checkpoint(0)?;
         assert_eq!(index_store.get_transaction_seq(&digest)?, Some(0));
         assert_eq!(index_store.tables.watermark.get(&())?, Some(0));
 
         // Replay the same checkpoint.
-        index_store.index_checkpoint(&checkpoint, true)?;
+        index_store.index_checkpoint(&checkpoint)?;
         index_store.commit_update_for_checkpoint(0)?;
 
         assert_eq!(index_store.get_transaction_seq(&digest)?, Some(0));
@@ -3829,7 +3876,7 @@ mod tests {
         let tx_0 = *checkpoint_epoch_0.transactions[0]
             .effects
             .transaction_digest();
-        index_store.index_checkpoint(&checkpoint_epoch_0, true)?;
+        index_store.index_checkpoint(&checkpoint_epoch_0)?;
         index_store.commit_update_for_checkpoint(0)?;
 
         let mut builder = builder
@@ -3841,7 +3888,7 @@ mod tests {
         let tx_1 = *checkpoint_epoch_1.transactions[0]
             .effects
             .transaction_digest();
-        index_store.index_checkpoint(&checkpoint_epoch_1, true)?;
+        index_store.index_checkpoint(&checkpoint_epoch_1)?;
         index_store.commit_update_for_checkpoint(1)?;
 
         // Forward and reverse iteration chain across the buckets in order.

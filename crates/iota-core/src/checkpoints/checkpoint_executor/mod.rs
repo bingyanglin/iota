@@ -709,7 +709,7 @@ impl CheckpointExecutor {
         }
 
         self.state
-            .index_checkpoint_for_jsonrpc(&checkpoint_data, &self.epoch_store)
+            .index_checkpoint_for_jsonrpc(&checkpoint_data)
             .expect("failed to stage JSON-RPC index update");
 
         if let Some(path) = &self.config.data_ingestion_dir {
