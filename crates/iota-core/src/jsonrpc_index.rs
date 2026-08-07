@@ -1675,34 +1675,43 @@ impl IndexStore {
     /// `epochs_to_retain` = N, the buckets of the newest N epochs are kept
     /// and every older bucket is dropped wholesale — one constant-time
     /// column-family drop each, with no per-row deletes and no compaction
-    /// churn. Returns the earliest retained epoch.
+    /// churn. Returns the earliest epoch actually retained.
     ///
     /// A query racing a drop may report an error for the dropped epoch's
     /// rows; a retry no longer sees the bucket.
     pub fn prune(&self, epochs_to_retain: u64) -> IotaResult<Option<EpochId>> {
-        let (expired, earliest_retained) = {
-            let mut history = self.history.write();
-            let Some((&newest, _)) = history.last_key_value() else {
-                return Ok(None);
-            };
-            let earliest_retained = newest.saturating_sub(epochs_to_retain.saturating_sub(1));
-            let expired: Vec<EpochId> = history
-                .range(..earliest_retained)
-                .map(|(&e, _)| e)
-                .collect();
-            history.retain(|&epoch, _| epoch >= earliest_retained);
-            (expired, earliest_retained)
+        // The drops run under the map's write lock: `ensure_history_bucket`
+        // could otherwise hand out a bucket for an epoch whose column family
+        // is dropped a moment later. Each map entry is removed only once its
+        // column family is dropped, so a failed drop stays visible to the
+        // next pruner pass, which retries it.
+        let mut history = self.history.write();
+        let Some((&newest, _)) = history.last_key_value() else {
+            return Ok(None);
         };
+        let earliest_retained = newest.saturating_sub(epochs_to_retain.saturating_sub(1));
+        let expired: Vec<EpochId> = history
+            .range(..earliest_retained)
+            .map(|(&e, _)| e)
+            .collect();
         for epoch in expired {
             info!(
                 epoch,
                 "dropping the JSON-RPC index history of an expired epoch"
             );
-            self.db
-                .drop_cf(&history_cf_name(epoch))
-                .map_err(|e| IotaError::Storage(e.to_string()))?;
+            match self.db.drop_cf(&history_cf_name(epoch)) {
+                Ok(()) => {
+                    history.remove(&epoch);
+                }
+                Err(e) => {
+                    warn!(
+                        epoch,
+                        "failed to drop an expired history column family: {e}"
+                    );
+                }
+            }
         }
-        Ok(Some(earliest_retained))
+        Ok(history.first_key_value().map(|(&epoch, _)| epoch))
     }
 
     pub fn tables(&self) -> &IndexStoreTables {
@@ -2635,7 +2644,7 @@ impl IndexStore {
 
 #[cfg(test)]
 mod tests {
-    use iota_sdk_types::{ObjectId, StructTag};
+    use iota_sdk_types::{ObjectId, StructTag, TransactionDigest};
     use iota_types::{
         effects::TransactionEffectsAPI, gas_coin::GAS, messages_checkpoint::CheckpointContentsExt,
         test_checkpoint_data_builder::TestCheckpointDataBuilder,
@@ -2659,6 +2668,149 @@ mod tests {
         checkpoint_store
             .update_highest_executed_checkpoint(&checkpoint)
             .unwrap();
+    }
+
+    /// Seeds `epochs` history buckets with one transaction each.
+    fn seed_history_buckets(index_store: &IndexStore, epochs: u64) {
+        for epoch in 0..epochs {
+            let bucket = index_store.ensure_history_bucket(epoch).unwrap();
+            let mut batch = index_store.tables.meta.batch();
+            batch
+                .insert_batch_tagged(&bucket.tx_order, [(epoch, TransactionDigest::random())])
+                .unwrap();
+            batch.write().unwrap();
+        }
+    }
+
+    /// A query that snapshotted the history buckets before a `prune` must
+    /// report an error for the dropped epoch's rows, as [`IndexStore::prune`]
+    /// documents, rather than panicking.
+    #[tokio::test]
+    async fn test_prune_racing_a_reader_reports_an_error() {
+        let tmp_dir = iota_common::tempdir();
+        let index_store = open_index_store(tmp_dir.path().to_path_buf());
+        seed_history_buckets(&index_store, 2);
+
+        // Every digest probe and range scan reads through such a snapshot.
+        let snapshot = index_store.history_buckets(false);
+        assert_eq!(snapshot.len(), 2);
+
+        assert_eq!(index_store.prune(1).unwrap(), Some(1));
+
+        assert!(
+            snapshot[0]
+                .tx_order
+                .safe_range_iter(..)
+                .next()
+                .expect("the scan must yield an error item")
+                .is_err()
+        );
+        assert!(
+            snapshot[0]
+                .tx_order
+                .safe_range_iter_reversed(..)
+                .next()
+                .expect("the reverse scan must yield an error item")
+                .is_err()
+        );
+        assert!(
+            snapshot[0]
+                .txs_seq
+                .get(&Default::default())
+                .is_err()
+        );
+
+        // The retained bucket keeps serving, and a retry no longer sees the
+        // dropped one.
+        assert!(
+            snapshot[1]
+                .tx_order
+                .safe_range_iter(..)
+                .next()
+                .expect("the retained bucket must still yield a row")
+                .is_ok()
+        );
+        assert_eq!(index_store.history_buckets(false).len(), 1);
+        assert_eq!(
+            index_store
+                .get_transactions(None, None, None, false)
+                .unwrap()
+                .len(),
+            1
+        );
+    }
+
+    /// Queries running concurrently with repeated pruning must never panic:
+    /// readers hold bucket handles across the pruner's column-family drops.
+    #[tokio::test]
+    async fn test_concurrent_prune_and_queries_never_panic() {
+        use std::sync::{
+            Arc,
+            atomic::{AtomicBool, Ordering},
+        };
+
+        const EPOCHS: u64 = 64;
+
+        let tmp_dir = iota_common::tempdir();
+        let index_store = Arc::new(open_index_store(tmp_dir.path().to_path_buf()));
+        seed_history_buckets(&index_store, EPOCHS);
+
+        let stop = Arc::new(AtomicBool::new(false));
+        let mut workers: Vec<_> = (0..3)
+            .map(|_| {
+                let index_store = index_store.clone();
+                let stop = stop.clone();
+                // Blocking threads, so the reads race the drops instead of
+                // interleaving at await points.
+                std::thread::spawn(move || {
+                    while !stop.load(Ordering::Relaxed) {
+                        let _ = index_store.get_transactions(None, None, Some(1000), false);
+                        let _ = index_store.get_transaction_seq(&Default::default());
+                    }
+                })
+            })
+            .collect();
+        workers.push({
+            let index_store = index_store.clone();
+            let stop = stop.clone();
+            // Recreates low epochs like a backfill would, racing the drops.
+            // Opening a bucket spawns metrics sampling tasks, so the thread
+            // needs the runtime context the real backfill gets from
+            // `spawn_blocking`.
+            let runtime = tokio::runtime::Handle::current();
+            std::thread::spawn(move || {
+                let _guard = runtime.enter();
+                let mut round = 0;
+                while !stop.load(Ordering::Relaxed) {
+                    let _ = index_store.ensure_history_bucket(round % 8);
+                    round += 1;
+                }
+            })
+        });
+
+        for retained in (1..EPOCHS).rev() {
+            index_store.prune(retained).unwrap();
+        }
+        stop.store(true, Ordering::Relaxed);
+        for worker in workers {
+            worker.join().expect("a worker thread panicked");
+        }
+
+        // No bucket left in the map may point at a dropped column family.
+        for bucket in index_store.history_buckets(false) {
+            bucket
+                .txs_seq
+                .get(&Default::default())
+                .expect("every bucket in the map must be readable");
+        }
+
+        assert_eq!(
+            index_store
+                .get_transactions(None, None, None, false)
+                .unwrap()
+                .len(),
+            1
+        );
     }
 
     /// `CoinInfo::from_object` must reject non-coin objects even when their
