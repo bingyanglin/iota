@@ -165,7 +165,7 @@ impl Database {
                 .map_err(typed_store_err_from_rocks_err)?
                 .map(GetResult::Rocks)),
             (Storage::InMemory(db), ColumnFamily::InMemory(cf_name)) => {
-                Ok(db.get(cf_name, key).map(GetResult::InMemory))
+                Ok(db.get(cf_name, key)?.map(GetResult::InMemory))
             }
 
             _ => Err(TypedStoreError::RocksDB(
@@ -233,10 +233,7 @@ impl Database {
         match &self.storage {
             Storage::Rocks(db) => nondeterministic!(db.underlying.create_cf(name, options))
                 .map_err(typed_store_err_from_rocks_err),
-            Storage::InMemory(db) => {
-                db.create_cf(name);
-                Ok(())
-            }
+            Storage::InMemory(db) => db.create_cf(name),
         }
     }
 
@@ -276,8 +273,7 @@ impl Database {
                 })
             }
             (Storage::InMemory(db), ColumnFamily::InMemory(cf_name)) => {
-                db.delete(cf_name, key.as_ref());
-                Ok(())
+                db.delete(cf_name, key.as_ref())
             }
             _ => Err(TypedStoreError::RocksDB(
                 "typed store invariant violation".to_string(),
@@ -310,10 +306,7 @@ impl Database {
                         .map_err(typed_store_err_from_rocks_err)
                 })
             }
-            (Storage::InMemory(db), ColumnFamily::InMemory(cf_name)) => {
-                db.put(cf_name, key, value);
-                Ok(())
-            }
+            (Storage::InMemory(db), ColumnFamily::InMemory(cf_name)) => db.put(cf_name, key, value),
             _ => Err(TypedStoreError::RocksDB(
                 "typed store invariant violation".to_string(),
             )),
@@ -411,8 +404,7 @@ impl Database {
                 .map_err(typed_store_err_from_rocks_err),
             (Storage::InMemory(db), StorageWriteBatch::InMemory(batch)) => {
                 // InMemory doesn't support write options.
-                db.write(batch);
-                Ok(())
+                db.write(batch)
             }
             _ => Err(TypedStoreError::RocksDB(
                 "using invalid batch type for the database".to_string(),
@@ -1798,7 +1790,7 @@ pub async fn wait_for_database_close(db: Weak<Database>) -> bool {
 }
 
 /// Returns an iterator whose only item is `Err(error)`.
-fn error_iterator<'a, T: 'a>(error: TypedStoreError) -> DbIterator<'a, T> {
+pub(crate) fn error_iterator<'a, T: 'a>(error: TypedStoreError) -> DbIterator<'a, T> {
     Box::new(std::iter::once(Err(error)))
 }
 
