@@ -534,7 +534,19 @@ impl IndexStoreTables {
     /// unordered writes) for a full rebuild or a formal-snapshot restore.
     /// Writes must be flushed before the database closes, and serving
     /// queries requires a reopen with default options.
+    ///
+    /// Anything left under `path` is deleted first, so the caller does not
+    /// have to clear the directory.
     fn open_for_bulk_ingestion(path: PathBuf) -> Self {
+        // A column family of an existing database not named here would
+        // silently be opened with default options, and `safe_drop_db` can
+        // leave files RocksDB does not recognize, so clear the directory
+        // rather than fail the recovery.
+        if path.exists() && path.read_dir().is_ok_and(|mut dir| dir.next().is_some()) {
+            warn!("clearing leftover files under {path:?} before the index rebuild");
+            std::fs::remove_dir_all(&path)
+                .expect("unable to clear the index database directory for the rebuild");
+        }
         let bulk_options = bulk_ingestion_options();
         let table_config = bulk_options.table_config(Self::describe_tables().into_keys());
         Self::open_tables_read_write(
@@ -588,22 +600,27 @@ impl IndexStoreTables {
         watermark < highest_executed_checkpoint
     }
 
-    /// Runs only when `needs_to_do_initialization` is true (fresh DB, schema
-    /// mismatch, crashed mid-init, or the index watermark falling behind
-    /// `highest_executed_checkpoint`).
-    /// The on-disk DB needs to be wiped before this is called, so `init`
-    /// always starts from an empty store.
+    /// Rebuilds the live-state tables, for the cases
+    /// `needs_to_do_initialization` covers (fresh DB, schema mismatch,
+    /// crashed mid-init, or the index watermark falling behind
+    /// `highest_executed_checkpoint`). The on-disk DB needs to be wiped
+    /// before this is called, so `init` always starts from an empty store.
+    ///
+    /// Writes only `meta`: the caller adopts the rebuild by writing the
+    /// watermarks once the WAL-less bulk writes are flushed. Returns the
+    /// highest executed checkpoint to anchor them to.
     #[tracing::instrument(skip_all)]
     fn init(
         &mut self,
         authority_store: &AuthorityStore,
         checkpoint_store: &CheckpointStore,
         batch_size_limit: usize,
-    ) -> Result<(), StorageError> {
+    ) -> Result<Option<CheckpointSequenceNumber>, StorageError> {
         info!("Initializing JSON-RPC indexes");
 
-        // `meta` first, `watermark` last: a crash in between leaves a store
-        // the next open wipes and re-initializes.
+        // Written before the flush, the watermarks would be WAL-durable over
+        // unflushed data, and a crash before the flush would leave a store
+        // the next open adopts as complete.
         self.meta.insert(
             &(),
             &MetadataInfo {
@@ -619,16 +636,9 @@ impl IndexStoreTables {
         // background once the node is up, resuming from `history_watermark`.
         self.index_live_object_set(authority_store, batch_size_limit)?;
 
-        self.history_watermark.insert(
-            &(),
-            &highest_executed_checkpoint.map_or(0, |c| c.saturating_add(1)),
-        )?;
-        self.watermark
-            .insert(&(), &highest_executed_checkpoint.unwrap_or(0))?;
-
         info!("Finished initializing JSON-RPC indexes");
 
-        Ok(())
+        Ok(highest_executed_checkpoint)
     }
 
     /// Rebuilds the live-state indexes (owner, coin, dynamic field) by
@@ -1183,13 +1193,14 @@ impl JsonRpcIndexRestorer {
         restore_checkpoint: CheckpointSequenceNumber,
     ) -> Result<(), StorageError> {
         let Self { tables, .. } = self;
+        // WAL is disabled for the bulk writes; make them durable before the
+        // WAL-durable adoption markers go in, so a crash never leaves
+        // markers over unflushed data.
+        tables.meta.flush_all()?;
         tables
             .history_watermark
             .insert(&(), &restore_checkpoint.saturating_add(1))?;
         tables.watermark.insert(&(), &restore_checkpoint)?;
-        // WAL is disabled for the bulk writes; make them durable before the
-        // database closes.
-        tables.meta.flush_all()?;
 
         // Release every RocksDB handle before returning, so the caller can
         // move the database directory.
@@ -1259,14 +1270,14 @@ impl IndexStore {
 
             // The rebuild scans and writes RocksDB for a long time; keep it
             // off the async runtime's worker threads.
-            let init_tables = tokio::task::spawn_blocking({
+            let (init_tables, highest_executed_checkpoint) = tokio::task::spawn_blocking({
                 let authority_store = authority_store.clone();
                 let checkpoint_store = checkpoint_store.clone();
                 move || {
-                    init_tables
+                    let highest_executed_checkpoint = init_tables
                         .init(&authority_store, &checkpoint_store, batch_size_limit)
                         .expect("unable to initialize JSON-RPC index");
-                    init_tables
+                    (init_tables, highest_executed_checkpoint)
                 }
             })
             .await
@@ -1280,6 +1291,21 @@ impl IndexStore {
                 .meta
                 .flush_all()
                 .expect("JSON-RPC index DB should be flushable after bulk ingestion");
+
+            // The adoption markers go in only now that the data is durable:
+            // a crash before this point re-detects the rebuild on the next
+            // open (no watermark), never adopts a half-flushed store.
+            init_tables
+                .history_watermark
+                .insert(
+                    &(),
+                    &highest_executed_checkpoint.map_or(0, |c| c.saturating_add(1)),
+                )
+                .expect("unable to write the JSON-RPC index history watermark");
+            init_tables
+                .watermark
+                .insert(&(), &highest_executed_checkpoint.unwrap_or(0))
+                .expect("unable to write the JSON-RPC index watermark");
 
             let weak_db = Arc::downgrade(&init_tables.meta.db);
             drop(init_tables);
@@ -2945,6 +2971,55 @@ mod tests {
             index_store.tables.history_watermark.get(&()).unwrap(),
             Some(6),
             "nothing below the horizon may be replayed"
+        );
+    }
+
+    /// Leftover files under the index directory are cleared before a
+    /// bulk-ingestion open instead of failing the recovery.
+    #[tokio::test]
+    async fn test_bulk_ingestion_open_clears_leftover_files() {
+        let dir = iota_common::tempdir();
+        let index_dir = dir.path().join("indexes");
+        std::fs::create_dir_all(&index_dir).unwrap();
+        std::fs::write(index_dir.join("stray"), b"leftover").unwrap();
+
+        let tables = super::IndexStoreTables::open_for_bulk_ingestion(index_dir.clone());
+        assert_eq!(tables.meta.get(&()).unwrap(), None);
+        assert!(!index_dir.join("stray").exists());
+    }
+
+    /// `init` alone must not adopt the rebuild: the watermarks are written
+    /// by the caller only after the WAL-less bulk writes are flushed, so a
+    /// crash mid-rebuild is re-detected on the next open instead of being
+    /// adopted with lost data.
+    #[tokio::test]
+    async fn test_rebuild_is_not_adopted_before_the_flush() {
+        let dir = iota_common::tempdir();
+        let checkpoint_store = CheckpointStore::new(&dir.path().join("checkpoints"));
+        mark_checkpoint_executed(&checkpoint_store, 5);
+
+        let authority_store = crate::authority::AuthorityStore::open_no_genesis(
+            std::sync::Arc::new(
+                crate::authority::authority_store_tables::AuthorityPerpetualTables::open(
+                    &dir.path().join("store"),
+                    None,
+                ),
+            ),
+            false,
+            &Registry::default(),
+        )
+        .unwrap();
+
+        let mut tables =
+            super::IndexStoreTables::open_for_bulk_ingestion(dir.path().join("indexes"));
+        tables
+            .init(&authority_store, &checkpoint_store, 1 << 20)
+            .unwrap();
+        assert_eq!(tables.watermark.get(&()).unwrap(), None);
+        assert_eq!(tables.history_watermark.get(&()).unwrap(), None);
+        assert!(
+            tables.needs_to_do_initialization(&checkpoint_store),
+            "a store whose rebuild was not adopted must be wiped and rebuilt on the next open"
         );
     }
 
