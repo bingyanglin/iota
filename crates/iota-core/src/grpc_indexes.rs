@@ -1278,7 +1278,7 @@ impl ParMakeLiveObjectIndexer for GrpcLiveObjectRestorer<'_> {
 pub struct GrpcPartitionIndexer<'a>(GrpcLiveObjectIndexer<'a>);
 
 impl GrpcPartitionIndexer<'_> {
-    pub fn index_object(&mut self, object: Object) -> Result<(), StorageError> {
+    pub fn index_object(&mut self, object: &Object) -> Result<(), StorageError> {
         self.0.index_object(object)
     }
 
@@ -1289,7 +1289,7 @@ impl GrpcPartitionIndexer<'_> {
 }
 
 impl LiveObjectIndexer for GrpcPartitionIndexer<'_> {
-    fn index_object(&mut self, object: Object) -> Result<(), StorageError> {
+    fn index_object(&mut self, object: &Object) -> Result<(), StorageError> {
         GrpcPartitionIndexer::index_object(self, object)
     }
 
@@ -1306,17 +1306,17 @@ struct GrpcLiveObjectIndexer<'a> {
 }
 
 impl LiveObjectIndexer for GrpcLiveObjectIndexer<'_> {
-    fn index_object(&mut self, object: Object) -> Result<(), StorageError> {
+    fn index_object(&mut self, object: &Object) -> Result<(), StorageError> {
         match object.owner {
             Owner::Address(owner) => {
-                if let Some((owner_key, owner_info)) = make_owner_key(owner, &object) {
+                if let Some((owner_key, owner_info)) = make_owner_key(owner, object) {
                     self.batch
                         .insert_batch(&self.tables.owner, [(owner_key, owner_info)])?;
                 }
             }
             // Dynamic Field Index
             Owner::Object(parent) => {
-                if should_index_dynamic_field(&object) {
+                if should_index_dynamic_field(object) {
                     let field_key = DynamicFieldKey::new(parent, object.id());
                     self.batch
                         .insert_batch(&self.tables.dynamic_field, [(field_key, ())])?;
@@ -1327,18 +1327,18 @@ impl LiveObjectIndexer for GrpcLiveObjectIndexer<'_> {
         }
 
         // Look for CoinMetadata<T> and TreasuryCap<T> objects
-        if let Some((key, value)) = try_create_coin_index_info(&object) {
+        if let Some((key, value)) = try_create_coin_index_info(object) {
             merge_coin_into(&mut self.coin_index.lock().unwrap(), key, value);
         }
 
         // Package version index
-        if let Some((key, info)) = try_create_package_version_info(&object) {
+        if let Some((key, info)) = try_create_package_version_info(object) {
             self.batch
                 .insert_batch(&self.tables.package_version, [(key, info)])?;
         }
 
         // Regulated coin index
-        if let Some((key, object_id)) = try_create_regulated_coin_info(&object) {
+        if let Some((key, object_id)) = try_create_regulated_coin_info(object) {
             merge_coin_into(
                 &mut self.coin_index.lock().unwrap(),
                 key,
@@ -1389,7 +1389,7 @@ mod tests {
 
         let restorer = grpc.live_object_restorer(100);
         let mut partition = restorer.begin_partition();
-        partition.index_object(object).unwrap();
+        partition.index_object(&object).unwrap();
         partition.finish().unwrap();
         restorer.finish().unwrap();
 

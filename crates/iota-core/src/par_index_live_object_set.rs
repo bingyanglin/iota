@@ -30,7 +30,7 @@ pub trait ParMakeLiveObjectIndexer: Sync {
 pub trait LiveObjectIndexer {
     /// Called on each object in the range of the live object set this indexer
     /// task is responsible for.
-    fn index_object(&mut self, object: Object) -> Result<(), StorageError>;
+    fn index_object(&mut self, object: &Object) -> Result<(), StorageError>;
 
     /// Called once the range of objects this indexer task is responsible for
     /// have been processed by calling `index_object`.
@@ -140,7 +140,7 @@ fn live_object_set_index_task<T: LiveObjectIndexer>(
             objects_scanned.fetch_add(COUNTER_CHUNK, Ordering::Relaxed);
         }
 
-        object_indexer.index_object(object)?
+        object_indexer.index_object(&object)?
     }
     objects_scanned.fetch_add(object_scanned % COUNTER_CHUNK, Ordering::Relaxed);
     position.store(

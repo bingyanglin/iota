@@ -1158,14 +1158,14 @@ struct JsonRpcLiveObjectIndexer<'a> {
 }
 
 impl LiveObjectIndexer for JsonRpcLiveObjectIndexer<'_> {
-    fn index_object(&mut self, object: Object) -> Result<(), StorageError> {
+    fn index_object(&mut self, object: &Object) -> Result<(), StorageError> {
         match object.owner {
             Owner::Address(owner) => {
                 self.batch.insert_batch(
                     &self.tables.owner_index,
-                    [((owner, object.id()), ObjectInfo::from_object(&object))],
+                    [((owner, object.id()), ObjectInfo::from_object(object))],
                 )?;
-                if let Some(coin_info) = CoinInfo::from_object(&object) {
+                if let Some(coin_info) = CoinInfo::from_object(object) {
                     let coin_type = object
                         .coin_type_opt()
                         .expect("coin object must have a coin type")
@@ -1177,7 +1177,7 @@ impl LiveObjectIndexer for JsonRpcLiveObjectIndexer<'_> {
                 }
             }
             Owner::Object(parent) => {
-                if is_dynamic_field(&object) {
+                if is_dynamic_field(object) {
                     self.batch.insert_batch(
                         &self.tables.dynamic_field_index,
                         [((parent, object.id()), ())],
@@ -1277,7 +1277,7 @@ impl JsonRpcIndexRestorer {
 pub struct JsonRpcPartitionIndexer<'a>(JsonRpcLiveObjectIndexer<'a>);
 
 impl JsonRpcPartitionIndexer<'_> {
-    pub fn index_object(&mut self, object: Object) -> Result<(), StorageError> {
+    pub fn index_object(&mut self, object: &Object) -> Result<(), StorageError> {
         self.0.index_object(object)
     }
 
@@ -3483,8 +3483,8 @@ mod tests {
         let index_dir = dir.path().join(super::JSONRPC_INDEXES_DIR);
         let restorer = super::JsonRpcIndexRestorer::open(index_dir.clone()).unwrap();
         let mut partition = restorer.partition_indexer();
-        partition.index_object(gas_object.clone()).unwrap();
-        partition.index_object(field_object).unwrap();
+        partition.index_object(&gas_object).unwrap();
+        partition.index_object(&field_object).unwrap();
         partition.finish().unwrap();
         restorer.finalize(5).await.unwrap();
 
