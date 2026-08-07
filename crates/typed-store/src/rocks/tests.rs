@@ -1317,8 +1317,8 @@ async fn a_column_family_can_be_created_at_runtime() {
 }
 
 /// Differently-typed [`TaggedDBMap`]s share one column family without their
-/// rows surfacing in each other: gets, full scans in both directions,
-/// bounded ranges, and deletes all stay within their map's tag.
+/// rows surfacing in each other: gets and full scans in both directions stay
+/// within their map's tag.
 #[tokio::test]
 async fn tagged_dbmaps_share_a_column_family() {
     let tmp_dir = iota_common::tempdir();
@@ -1894,32 +1894,21 @@ async fn operations_on_a_dropped_column_family_report_an_error() {
                 .unwrap_err(),
         );
     }
-}
 
-/// Dropping one column family must leave the others serving.
-#[tokio::test]
-async fn test_dropping_one_cf_leaves_the_others_serving() {
-    let tmp_dir = iota_common::tempdir();
-    let db = open_rocksdb(tmp_dir.path(), &["doomed", "kept"]);
-    let doomed =
-        DBMap::<u32, String>::reopen(&db, Some("doomed"), &ReadWriteOptions::default(), false)
-            .expect("the doomed map should open");
-    let kept = DBMap::<u32, String>::reopen(&db, Some("kept"), &ReadWriteOptions::default(), false)
-        .expect("the kept map should open");
-    doomed.insert(&1, &"one".to_string()).unwrap();
-    kept.insert(&1, &"one".to_string()).unwrap();
-
-    db.drop_cf("doomed").expect("the column family should drop");
-
-    assert!(doomed.get(&1).is_err());
-    assert_eq!(kept.get(&1).unwrap(), Some("one".to_string()));
-    kept.insert(&2, &"two".to_string())
-        .expect("the kept column family should still accept writes");
-    assert_eq!(kept.safe_iter().count(), 2);
+    assert_unregistered(
+        "compact_range",
+        map.compact_range(&0u32, &9u32).unwrap_err(),
+    );
+    // The one deliberate exception: flushing a dropped column family is a
+    // no-op, not an error.
+    map.flush()
+        .expect("a flush of a dropped column family is a no-op");
 }
 
 /// A batch staged while its column family existed must write cleanly after
-/// the column family is dropped.
+/// the column family is dropped (`ignore_missing_column_families`): the
+/// dropped entries are discarded, the sibling column family's entries land,
+/// and the sibling keeps serving reads and writes.
 #[tokio::test]
 async fn a_batch_staged_before_a_drop_still_writes() {
     let tmp_dir = iota_common::tempdir();
@@ -1943,9 +1932,12 @@ async fn a_batch_staged_before_a_drop_still_writes() {
     batch.write().expect("the batch should write");
     assert_eq!(kept.get(&1).unwrap(), Some("one".to_string()));
 
-    // The database was not stopped by the dropped entries.
+    // The database was not stopped by the dropped entries, and the write did
+    // not resurrect the dropped column family.
     kept.insert(&2, &"two".to_string())
         .expect("the kept column family should still accept writes");
+    assert_eq!(kept.safe_iter().count(), 2);
+    assert!(db.cf_handle("doomed").is_none());
 }
 
 fn open_map<P: AsRef<Path>, K, V>(path: P, opt_cf: Option<&str>) -> DBMap<K, V> {

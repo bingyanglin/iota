@@ -3696,19 +3696,67 @@ async fn test_store_get_dynamic_field() {
 }
 
 /// Owned objects indexed through the per-checkpoint path must be queryable
-/// through `AuthorityState::get_owner_objects`, the JSON-RPC read path.
+/// through `AuthorityState::get_owner_objects`, the JSON-RPC read path:
+/// exactly the sender's address-owned objects, not the object-owned field.
 #[tokio::test]
 async fn test_owner_objects_queryable_through_authority_state() {
-    let (authority_state, _, sender, _) =
+    let (authority_state, outer_id, gas_object_id, sender, fields) =
         create_and_retrieve_df(&Identifier::from_static("add_field")).await;
 
-    let owned = authority_state
+    let mut owned: Vec<_> = authority_state
         .get_owner_objects(sender, None, 50, None)
-        .unwrap();
-    assert!(
-        !owned.is_empty(),
+        .unwrap()
+        .iter()
+        .map(|info| info.object_id)
+        .collect();
+    owned.sort();
+    let mut expected = vec![gas_object_id, outer_id];
+    expected.sort();
+    assert_eq!(
+        owned, expected,
         "the sender's objects must be served through the owner index"
     );
+    assert!(
+        !owned.contains(&fields[0].object_id),
+        "the object-owned field must not appear under the sender"
+    );
+}
+
+/// `AuthorityState::get_dynamic_fields` must return one entry per index
+/// row: a field that no longer resolves comes back as a `None` marker
+/// instead of vanishing, so page sizes and cursors stay truthful.
+#[tokio::test]
+async fn test_get_dynamic_fields_returns_one_entry_per_index_row() {
+    use typed_store::Map;
+
+    let authority_state = TestAuthorityBuilder::new().build().await;
+    let indexes = authority_state.indexes.clone().unwrap();
+
+    let parent = ObjectId::random();
+    // Index rows whose objects do not exist: unresolvable fields.
+    let mut ids: Vec<ObjectId> = (0..3).map(|_| ObjectId::random()).collect();
+    ids.sort();
+    for field_id in &ids {
+        indexes
+            .tables()
+            .dynamic_field_index()
+            .insert(&(parent, *field_id), &())
+            .unwrap();
+    }
+
+    let rows = authority_state.get_dynamic_fields(parent, None, 2).unwrap();
+    assert_eq!(
+        rows.iter().map(|(id, _)| *id).collect::<Vec<_>>(),
+        ids[..2],
+        "each index row must occupy one slot, resolvable or not"
+    );
+    assert!(rows.iter().all(|(_, info)| info.is_none()));
+
+    // The cursor continues from the last returned row.
+    let rows = authority_state
+        .get_dynamic_fields(parent, Some(ids[1]), 2)
+        .unwrap();
+    assert_eq!(rows.iter().map(|(id, _)| *id).collect::<Vec<_>>(), ids[2..]);
 }
 
 /// A node that starts with executed checkpoints but no index database — the
@@ -3975,7 +4023,7 @@ fn jsonrpc_index_transaction(
 }
 
 async fn create_and_retrieve_df_info(function: &Identifier) -> (Address, Vec<DynamicFieldInfo>) {
-    let (_, _, sender, fields) = create_and_retrieve_df(function).await;
+    let (_, _, _, sender, fields) = create_and_retrieve_df(function).await;
     (sender, fields)
 }
 
@@ -3983,6 +4031,7 @@ async fn create_and_retrieve_df(
     function: &Identifier,
 ) -> (
     Arc<AuthorityState>,
+    ObjectId,
     ObjectId,
     Address,
     Vec<DynamicFieldInfo>,
@@ -4063,15 +4112,22 @@ async fn create_and_retrieve_df(
         .into_iter()
         .filter_map(|x| x.1)
         .collect();
-    (authority_state, outer_v0.object_id, sender, fields)
+    (
+        authority_state,
+        outer_v0.object_id,
+        gas_object_id,
+        sender,
+        fields,
+    )
 }
 
 /// `get_dynamic_field_object_id` must resolve to the value object's id even
 /// when the caller passes the already-wrapped name type under which the
-/// index stores a dynamic object field, not the wrapper `Field` object's id.
+/// index stores a dynamic object field, not the wrapper `Field` object's id
+/// — while a plain dynamic field resolves to the `Field` object itself.
 #[tokio::test]
 async fn test_dynamic_object_field_lookup_with_wrapped_name_type() {
-    let (authority_state, parent, _, fields) =
+    let (authority_state, parent, _, _, fields) =
         create_and_retrieve_df(&Identifier::from_static("add_ofield_with_address_name")).await;
     assert_eq!(fields.len(), 1);
     let value_object_id = fields[0].object_id;
@@ -4089,6 +4145,15 @@ async fn test_dynamic_object_field_lookup_with_wrapped_name_type() {
         .get_dynamic_field_object_id(parent, wrapped_name_type, &fields[0].bcs_name)
         .unwrap();
     assert_eq!(id, Some(value_object_id));
+
+    // A plain dynamic field's id is the `Field` object's own.
+    let (authority_state, parent, _, _, fields) =
+        create_and_retrieve_df(&Identifier::from_static("add_field_with_address_name")).await;
+    assert_eq!(fields.len(), 1);
+    let id = authority_state
+        .get_dynamic_field_object_id(parent, fields[0].name.type_.clone(), &fields[0].bcs_name)
+        .unwrap();
+    assert_eq!(id, Some(fields[0].object_id));
 }
 
 #[tokio::test]

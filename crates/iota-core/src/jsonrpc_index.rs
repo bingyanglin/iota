@@ -7,8 +7,8 @@
 
 use std::{
     cmp::{max, min},
-    ops::RangeBounds,
     collections::{BTreeMap, HashMap, HashSet},
+    ops::RangeBounds,
     path::{Path, PathBuf},
     sync::{
         Arc,
@@ -533,6 +533,11 @@ impl IndexStoreTables {
 
     pub fn coin_index(&self) -> &DBMap<CoinIndexKey, CoinInfo> {
         &self.coin_index
+    }
+
+    #[cfg(test)]
+    pub(crate) fn dynamic_field_index(&self) -> &DBMap<DynamicFieldKey, ()> {
+        &self.dynamic_field_index
     }
 
     /// Opens the tables with tuned bulk-ingestion options (WAL disabled,
@@ -2896,6 +2901,60 @@ mod tests {
         IndexStore::new_without_init(path, &Registry::default(), Some(128))
     }
 
+    /// Closes the store's database, waiting until every handle is released
+    /// so the same path can be reopened. Accepts the store owned or in an
+    /// `Arc`, as long as the passed handle is the last one.
+    async fn close_index_store(index_store: impl std::borrow::Borrow<IndexStore>) {
+        let weak_db = std::sync::Arc::downgrade(&index_store.borrow().tables.meta.db);
+        drop(index_store);
+        assert!(super::wait_for_database_close(weak_db).await);
+    }
+
+    /// Closes the store and reopens the same path, as a restart does.
+    async fn reopen_index_store(index_store: IndexStore, path: std::path::PathBuf) -> IndexStore {
+        close_index_store(index_store).await;
+        open_index_store(path)
+    }
+
+    /// An empty authority store under `dir`, for driving the rebuild and
+    /// backfill paths.
+    fn open_authority_store(dir: &std::path::Path) -> std::sync::Arc<super::AuthorityStore> {
+        crate::authority::AuthorityStore::open_no_genesis(
+            std::sync::Arc::new(
+                crate::authority::authority_store_tables::AuthorityPerpetualTables::open(dir, None),
+            ),
+            false,
+            &Registry::default(),
+        )
+        .unwrap()
+    }
+
+    /// An authority state whose genesis checkpoint is executed, plus the
+    /// genesis transaction's digest.
+    async fn genesis_authority_state() -> (
+        std::sync::Arc<crate::authority::AuthorityState>,
+        TransactionDigest,
+    ) {
+        let authority_state = crate::authority::test_authority_builder::TestAuthorityBuilder::new()
+            .insert_genesis_checkpoint()
+            .build()
+            .await;
+        let checkpoint_store = &authority_state.checkpoint_store;
+        let genesis_checkpoint = checkpoint_store
+            .get_checkpoint_by_sequence_number(0)
+            .unwrap()
+            .unwrap();
+        checkpoint_store
+            .update_highest_executed_checkpoint(&genesis_checkpoint)
+            .unwrap();
+        let genesis_contents = checkpoint_store
+            .get_checkpoint_contents(&genesis_checkpoint.contents_digest)
+            .unwrap()
+            .unwrap();
+        let genesis_tx_digest = genesis_contents.iter().next().unwrap().transaction;
+        (authority_state, genesis_tx_digest)
+    }
+
     fn mark_checkpoint_executed(checkpoint_store: &CheckpointStore, sequence_number: u64) {
         let checkpoint = executed_checkpoint(0, sequence_number);
         checkpoint_store
@@ -2949,12 +3008,7 @@ mod tests {
                 .expect("the reverse scan must yield an error item")
                 .is_err()
         );
-        assert!(
-            snapshot[0]
-                .txs_seq
-                .get(&Default::default())
-                .is_err()
-        );
+        assert!(snapshot[0].txs_seq.get(&Default::default()).is_err());
 
         // The retained bucket keeps serving, and a retry no longer sees the
         // dropped one.
@@ -3061,10 +3115,7 @@ mod tests {
         assert!(index_store.ensure_history_bucket(0).is_err());
         assert!(index_store.ensure_history_bucket(1).is_ok());
 
-        let weak_db = std::sync::Arc::downgrade(&index_store.tables.meta.db);
-        drop(index_store);
-        assert!(super::wait_for_database_close(weak_db).await);
-        let index_store = open_index_store(tmp_dir.path().to_path_buf());
+        let index_store = reopen_index_store(index_store, tmp_dir.path().to_path_buf()).await;
         assert!(index_store.ensure_history_bucket(0).is_err());
         assert!(index_store.ensure_history_bucket(1).is_ok());
     }
@@ -3090,18 +3141,7 @@ mod tests {
             .insert(&(), &6)
             .unwrap();
 
-        let authority_store = crate::authority::AuthorityStore::open_no_genesis(
-            std::sync::Arc::new(
-                crate::authority::authority_store_tables::AuthorityPerpetualTables::open(
-                    &dir.path().join("store"),
-                    None,
-                ),
-            ),
-            false,
-            &Registry::default(),
-        )
-        .unwrap();
-
+        let authority_store = open_authority_store(&dir.path().join("store"));
         index_store
             .backfill_history(&authority_store, &checkpoint_store)
             .expect("the backfill must stop at the horizon, not fail on missing contents");
@@ -3135,18 +3175,7 @@ mod tests {
         let dir = iota_common::tempdir();
         let checkpoint_store = CheckpointStore::new(&dir.path().join("checkpoints"));
         mark_checkpoint_executed(&checkpoint_store, 5);
-
-        let authority_store = crate::authority::AuthorityStore::open_no_genesis(
-            std::sync::Arc::new(
-                crate::authority::authority_store_tables::AuthorityPerpetualTables::open(
-                    &dir.path().join("store"),
-                    None,
-                ),
-            ),
-            false,
-            &Registry::default(),
-        )
-        .unwrap();
+        let authority_store = open_authority_store(&dir.path().join("store"));
 
         let mut tables =
             super::IndexStoreTables::open_for_bulk_ingestion(dir.path().join("indexes"));
@@ -3188,22 +3217,10 @@ mod tests {
                     &iota_types::base_types::ObjectInfo::from_object(&object),
                 )
                 .unwrap();
-            let weak_db = std::sync::Arc::downgrade(&index_store.tables.meta.db);
-            drop(index_store);
-            assert!(super::wait_for_database_close(weak_db).await);
+            close_index_store(index_store).await;
         }
 
-        let authority_store = crate::authority::AuthorityStore::open_no_genesis(
-            std::sync::Arc::new(
-                crate::authority::authority_store_tables::AuthorityPerpetualTables::open(
-                    &dir.path().join("store"),
-                    None,
-                ),
-            ),
-            false,
-            &Registry::default(),
-        )
-        .unwrap();
+        let authority_store = open_authority_store(&dir.path().join("store"));
         let index_store = IndexStore::new(
             index_dir,
             &Registry::default(),
@@ -3213,49 +3230,17 @@ mod tests {
         )
         .await;
 
+        assert_eq!(
+            index_store.tables.history_watermark.get(&()).unwrap(),
+            Some(0),
+            "the rebuild must have run and seeded the backfill marker"
+        );
         assert_eq!(index_store.tables.watermark.get(&()).unwrap(), None);
         assert_eq!(
             index_store.next_sequence_number(),
             0,
             "the genesis transaction must later be numbered 0"
         );
-    }
-
-    /// `AuthorityState::get_dynamic_fields` must return one entry per index
-    /// row: a field that no longer resolves comes back as a `None` marker
-    /// instead of vanishing, so page sizes and cursors stay truthful.
-    #[tokio::test]
-    async fn test_get_dynamic_fields_returns_one_entry_per_index_row() {
-        let authority_state = crate::authority::test_authority_builder::TestAuthorityBuilder::new()
-            .build()
-            .await;
-        let indexes = authority_state.indexes.clone().unwrap();
-
-        let parent = ObjectId::random();
-        // Index rows whose objects do not exist: unresolvable fields.
-        let mut ids: Vec<ObjectId> = (0..3).map(|_| ObjectId::random()).collect();
-        ids.sort();
-        for field_id in &ids {
-            indexes
-                .tables
-                .dynamic_field_index
-                .insert(&(parent, *field_id), &())
-                .unwrap();
-        }
-
-        let rows = authority_state.get_dynamic_fields(parent, None, 2).unwrap();
-        assert_eq!(
-            rows.iter().map(|(id, _)| *id).collect::<Vec<_>>(),
-            ids[..2],
-            "each index row must occupy one slot, resolvable or not"
-        );
-        assert!(rows.iter().all(|(_, info)| info.is_none()));
-
-        // The cursor continues from the last returned row.
-        let rows = authority_state
-            .get_dynamic_fields(parent, Some(ids[1]), 2)
-            .unwrap();
-        assert_eq!(rows.iter().map(|(id, _)| *id).collect::<Vec<_>>(), ids[2..]);
     }
 
     /// `CoinInfo::from_object` must reject non-coin objects even when their
@@ -3290,16 +3275,53 @@ mod tests {
         assert_eq!(super::CoinInfo::from_object(&fake), None);
     }
 
-    /// A brand-new store is seeded with `meta` and needs no rebuild; once the
-    /// executed watermark moves past the (missing) indexed watermark — the
-    /// state after a formal-snapshot restore — a rebuild is required.
+    /// When a store must be wiped and rebuilt, as one decision table: a
+    /// pre-upgrade database (data, no `meta` row) is never seeded and always
+    /// rebuilt; a brand-new store needs no rebuild until the executed
+    /// watermark passes the indexed one; a store holding data but no
+    /// watermark is always rebuilt; a watermark at or ahead of the executed
+    /// checkpoint (crash between index commit and executed bump) needs none;
+    /// a schema version bump always does.
     #[tokio::test]
-    async fn test_missing_watermark_triggers_initialization() {
+    async fn test_needs_to_do_initialization_cases() {
         let tmp_dir = iota_common::tempdir();
         let cp_dir = iota_common::tempdir();
         let checkpoint_store = CheckpointStore::new(&cp_dir.path().join("checkpoints"));
         let index_store = open_index_store(tmp_dir.path().to_path_buf());
 
+        // A database from before per-checkpoint indexing must stay unseeded:
+        // nodes restored from a formal snapshot wrote a corrupted owner
+        // index into it, and without a watermark it cannot prove otherwise.
+        let owner = iota_types::base_types::dbg_addr(1);
+        let object =
+            iota_types::object::Object::with_id_owner_for_testing(ObjectId::random(), owner);
+        index_store
+            .tables
+            .owner_index
+            .insert(
+                &(owner, object.id()),
+                &iota_types::base_types::ObjectInfo::from_object(&object),
+            )
+            .unwrap();
+        index_store.tables.seed_meta().unwrap();
+        assert_eq!(
+            index_store.tables.meta.get(&()).unwrap(),
+            None,
+            "a database with data but no `meta` row must not be seeded"
+        );
+        assert!(
+            index_store
+                .tables
+                .needs_to_do_initialization(&checkpoint_store)
+                .unwrap(),
+            "a database from before per-checkpoint indexing must be rebuilt"
+        );
+
+        index_store
+            .tables
+            .owner_index
+            .remove(&(owner, object.id()))
+            .unwrap();
         index_store.tables.seed_meta().unwrap();
         assert!(
             !index_store
@@ -3308,6 +3330,30 @@ mod tests {
                 .unwrap(),
             "a brand-new store on a node with no executed checkpoints needs no rebuild"
         );
+
+        // A rebuild or restore that crashed before writing the watermark
+        // leaves data behind; with nothing executed, comparing the
+        // watermarks alone would adopt it.
+        index_store
+            .tables
+            .owner_index
+            .insert(
+                &(owner, object.id()),
+                &iota_types::base_types::ObjectInfo::from_object(&object),
+            )
+            .unwrap();
+        assert!(
+            index_store
+                .tables
+                .needs_to_do_initialization(&checkpoint_store)
+                .unwrap(),
+            "a store holding data but no watermark must be rebuilt"
+        );
+        index_store
+            .tables
+            .owner_index
+            .remove(&(owner, object.id()))
+            .unwrap();
 
         mark_checkpoint_executed(&checkpoint_store, 5);
         assert!(
@@ -3324,6 +3370,15 @@ mod tests {
                 .tables
                 .needs_to_do_initialization(&checkpoint_store)
                 .unwrap()
+        );
+
+        index_store.tables.watermark.insert(&(), &6).unwrap();
+        assert!(
+            !index_store
+                .tables
+                .needs_to_do_initialization(&checkpoint_store)
+                .unwrap(),
+            "an index watermark ahead of the executed watermark must not trigger a rebuild"
         );
 
         // A schema version bump also triggers a rebuild.
@@ -3361,58 +3416,17 @@ mod tests {
         super::remove_legacy_jsonrpc_indexes_dir(db_path.path()).unwrap();
     }
 
-    /// A database written before per-checkpoint indexing (data, but no `meta`
-    /// row) must be wiped and rebuilt: nodes restored from a formal snapshot
-    /// had a corrupted owner index and non-canonical transaction numbering,
-    /// and a database without a watermark cannot prove it is not one of them.
-    #[tokio::test]
-    async fn test_pre_meta_database_triggers_initialization() {
-        let tmp_dir = iota_common::tempdir();
-        let cp_dir = iota_common::tempdir();
-        let checkpoint_store = CheckpointStore::new(&cp_dir.path().join("checkpoints"));
-        mark_checkpoint_executed(&checkpoint_store, 5);
-
-        let index_store = open_index_store(tmp_dir.path().to_path_buf());
-        let owner = iota_types::base_types::dbg_addr(1);
-        let object =
-            iota_types::object::Object::with_id_owner_for_testing(ObjectId::random(), owner);
-        index_store
-            .tables
-            .owner_index
-            .insert(
-                &(owner, object.id()),
-                &iota_types::base_types::ObjectInfo::from_object(&object),
-            )
-            .unwrap();
-
-        index_store.tables.seed_meta().unwrap();
-        assert!(
-            index_store
-                .tables
-                .needs_to_do_initialization(&checkpoint_store)
-                .unwrap(),
-            "a database from before per-checkpoint indexing must be rebuilt"
-        );
-    }
-
     /// After a rebuild, the history tables are filled by a background replay
     /// that works downwards from the watermark and records its progress
     /// atomically with each checkpoint's rows, so an interrupted replay
     /// resumes where it stopped instead of starting over.
     #[tokio::test]
     async fn test_history_backfill_after_rebuild() {
-        let authority_state = crate::authority::test_authority_builder::TestAuthorityBuilder::new()
-            .insert_genesis_checkpoint()
-            .build()
-            .await;
-
+        let (authority_state, genesis_tx_digest) = genesis_authority_state().await;
         let checkpoint_store = &authority_state.checkpoint_store;
         let genesis_checkpoint = checkpoint_store
             .get_checkpoint_by_sequence_number(0)
             .unwrap()
-            .unwrap();
-        checkpoint_store
-            .update_highest_executed_checkpoint(&genesis_checkpoint)
             .unwrap();
 
         let index_dir = iota_common::tempdir();
@@ -3426,11 +3440,6 @@ mod tests {
         .await;
         index_store.wait_for_history_backfill_for_testing().await;
 
-        let genesis_contents = checkpoint_store
-            .get_checkpoint_contents(&genesis_checkpoint.contents_digest)
-            .unwrap()
-            .unwrap();
-        let genesis_tx_digest = genesis_contents.iter().next().unwrap().transaction;
         assert_eq!(
             index_store.get_transaction_seq(&genesis_tx_digest).unwrap(),
             Some(0)
@@ -3543,22 +3552,10 @@ mod tests {
                 .dynamic_field_index
                 .insert(&sentinel, &())
                 .unwrap();
-            let weak_db = std::sync::Arc::downgrade(&built.tables.meta.db);
-            drop(built);
-            assert!(super::wait_for_database_close(weak_db).await);
+            close_index_store(built).await;
         }
 
-        let authority_store = crate::authority::AuthorityStore::open_no_genesis(
-            std::sync::Arc::new(
-                crate::authority::authority_store_tables::AuthorityPerpetualTables::open(
-                    &dir.path().join("store"),
-                    None,
-                ),
-            ),
-            false,
-            &Registry::default(),
-        )
-        .unwrap();
+        let authority_store = open_authority_store(&dir.path().join("store"));
         let index_store = IndexStore::new(
             index_dir,
             &Registry::default(),
@@ -3609,19 +3606,8 @@ mod tests {
     /// reopen with default options — and none of its rows survive.
     #[tokio::test]
     async fn test_stale_database_is_wiped_and_rebuilt_on_open() {
-        let authority_state = crate::authority::test_authority_builder::TestAuthorityBuilder::new()
-            .insert_genesis_checkpoint()
-            .build()
-            .await;
-
+        let (authority_state, genesis_tx_digest) = genesis_authority_state().await;
         let checkpoint_store = &authority_state.checkpoint_store;
-        let genesis_checkpoint = checkpoint_store
-            .get_checkpoint_by_sequence_number(0)
-            .unwrap()
-            .unwrap();
-        checkpoint_store
-            .update_highest_executed_checkpoint(&genesis_checkpoint)
-            .unwrap();
 
         let index_dir = iota_common::tempdir();
         let index_store = IndexStore::new(
@@ -3633,16 +3619,6 @@ mod tests {
         )
         .await;
         index_store.wait_for_history_backfill_for_testing().await;
-
-        let genesis_contents = checkpoint_store
-            .get_checkpoint_contents(&genesis_checkpoint.contents_digest)
-            .unwrap()
-            .unwrap();
-        let genesis_tx_digest = genesis_contents.iter().next().unwrap().transaction;
-        assert_eq!(
-            index_store.get_transaction_seq(&genesis_tx_digest).unwrap(),
-            Some(0)
-        );
 
         // Poison the store and mark it as written by another schema version.
         let poison_field = (ObjectId::random(), ObjectId::random());
@@ -3663,9 +3639,7 @@ mod tests {
             .unwrap();
 
         // Release the database before reopening the same path.
-        let weak_db = std::sync::Arc::downgrade(&index_store.tables.meta.db);
-        drop(index_store);
-        assert!(super::wait_for_database_close(weak_db).await);
+        close_index_store(index_store).await;
 
         let index_store = IndexStore::new(
             index_dir.path().to_path_buf(),
@@ -3700,30 +3674,6 @@ mod tests {
         assert_eq!(
             index_store.tables.history_watermark.get(&()).unwrap(),
             Some(0)
-        );
-    }
-
-    /// After a crash between an index commit and the executed-watermark bump,
-    /// the index watermark is ahead of `highest_executed_checkpoint` on
-    /// restart. That must not trigger a rebuild: the replayed checkpoint is
-    /// skipped through the already-indexed check instead.
-    #[tokio::test]
-    async fn test_watermark_ahead_of_executed_needs_no_rebuild() {
-        let tmp_dir = iota_common::tempdir();
-        let cp_dir = iota_common::tempdir();
-        let checkpoint_store = CheckpointStore::new(&cp_dir.path().join("checkpoints"));
-        mark_checkpoint_executed(&checkpoint_store, 5);
-
-        let index_store = open_index_store(tmp_dir.path().to_path_buf());
-        index_store.tables.seed_meta().unwrap();
-        index_store.tables.watermark.insert(&(), &6).unwrap();
-
-        assert!(
-            !index_store
-                .tables
-                .needs_to_do_initialization(&checkpoint_store)
-                .unwrap(),
-            "an index watermark ahead of the executed watermark must not trigger a rebuild"
         );
     }
 
@@ -3841,7 +3791,9 @@ mod tests {
                 let index_store = index_store.clone();
                 move || index_store.get_balance(address, GAS::type_tag()).unwrap()
             });
-            // Give the reader time to reach the owner's lock.
+            // Give the reader time to reach the owner's lock. The sleep only
+            // makes the race likely: a slow reader arrives after the merge
+            // and the test passes without exercising it.
             std::thread::sleep(std::time::Duration::from_millis(50));
 
             index_store.update_per_coin_type_cache(cache_updates.per_coin_type_balance_changes)?;
@@ -3947,12 +3899,18 @@ mod tests {
             index_store.get_transactions(None, Some(tx_0), None, false)?,
             vec![tx_1]
         );
+        // A limit landing exactly on the bucket boundary stops there.
+        assert_eq!(
+            index_store.get_transactions(None, None, Some(1), false)?,
+            vec![tx_0]
+        );
+        assert_eq!(
+            index_store.get_transactions(None, None, Some(1), true)?,
+            vec![tx_1]
+        );
 
         // Reopening rediscovers the buckets from the column-family names.
-        let weak_db = std::sync::Arc::downgrade(&index_store.tables.meta.db);
-        drop(index_store);
-        assert!(super::wait_for_database_close(weak_db).await);
-        let index_store = open_index_store(tmp_dir.path().to_path_buf());
+        let index_store = reopen_index_store(index_store, tmp_dir.path().to_path_buf()).await;
         assert_eq!(
             index_store.get_transactions(None, None, None, false)?,
             vec![tx_0, tx_1]
@@ -3968,15 +3926,12 @@ mod tests {
         );
         assert_eq!(index_store.prune(1)?, Some(1));
 
-        // The dropped bucket stays gone after another reopen.
-        let weak_db = std::sync::Arc::downgrade(&index_store.tables.meta.db);
-        drop(index_store);
-        assert!(super::wait_for_database_close(weak_db).await);
-        let index_store = open_index_store(tmp_dir.path().to_path_buf());
-        assert_eq!(
-            index_store.get_transactions(None, None, None, false)?,
-            vec![tx_1]
-        );
+        // A cursor pointing into the pruned epoch reports the transaction as
+        // gone instead of silently re-serving the first page.
+        assert!(matches!(
+            index_store.get_transactions(None, Some(tx_0), None, false),
+            Err(iota_types::error::IotaError::TransactionNotFound { .. })
+        ));
 
         Ok(())
     }
@@ -4096,8 +4051,61 @@ mod tests {
                 true,
             )
             .unwrap();
+        assert_eq!(
+            v.len(),
+            4,
+            "an unset function must span the whole identifier range"
+        );
         v.reverse();
         assert_eq!(v, v_rev);
+    }
+
+    /// Events chain across epoch buckets in global sequence order: with all
+    /// checkpoint timestamps equal, ordering falls through to the sequence
+    /// key, so correctness depends entirely on scanning the buckets in epoch
+    /// order.
+    #[tokio::test]
+    async fn test_events_chain_across_epoch_buckets() -> anyhow::Result<()> {
+        use iota_sdk_types::Event;
+
+        let tmp_dir = iota_common::tempdir();
+        let index_store = open_index_store(tmp_dir.path().to_path_buf());
+        let event = || Event {
+            package_id: ObjectId::ZERO,
+            module: iota_sdk_types::Identifier::from_static("test"),
+            sender: TestCheckpointDataBuilder::derive_address(0),
+            type_: StructTag::new_gas(),
+            contents: vec![],
+        };
+
+        let mut builder = TestCheckpointDataBuilder::new(0)
+            .with_epoch(0)
+            .start_transaction(0)
+            .with_events(vec![event()])
+            .finish_transaction();
+        let checkpoint_epoch_0 = builder.build_checkpoint();
+        index_store.index_checkpoint(&checkpoint_epoch_0)?;
+        index_store.commit_update_for_checkpoint(0)?;
+
+        let mut builder = builder
+            .with_epoch(1)
+            .start_transaction(1)
+            .with_events(vec![event()])
+            .finish_transaction();
+        let checkpoint_epoch_1 = builder.build_checkpoint();
+        index_store.index_checkpoint(&checkpoint_epoch_1)?;
+        index_store.commit_update_for_checkpoint(1)?;
+
+        let forward = index_store.event_iterator(0, u64::MAX, 0, 0, 10, false)?;
+        assert_eq!(forward.len(), 2);
+        let descending = index_store.event_iterator(0, u64::MAX, u64::MAX, usize::MAX, 10, true)?;
+        assert_eq!(
+            descending,
+            forward.iter().rev().cloned().collect::<Vec<_>>(),
+            "descending must mirror the forward chain across the buckets"
+        );
+
+        Ok(())
     }
 
     /// The caching layout resolver resolves each struct tag once.
