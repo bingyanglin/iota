@@ -882,17 +882,13 @@ impl GrpcIndexesStore {
                     // afterwards.
                     let bulk_options = bulk_ingestion_options();
                     batch_size_limit = bulk_options.batch_size_limit;
-
-                    // Apply the per-column-family bulk options to every table.
-                    let mut table_config = BTreeMap::new();
-                    for table_name in IndexStoreTables::describe_tables().into_keys() {
-                        table_config.insert(table_name, bulk_options.column_family_options.clone());
-                    }
+                    let table_config =
+                        bulk_options.table_config(IndexStoreTables::describe_tables().into_keys());
 
                     IndexStoreTables::open_with_options(
                         &path,
                         bulk_options.db_options,
-                        Some(DBMapTableConfigMap::new(table_config)),
+                        Some(table_config),
                     )
                 };
 
@@ -1371,38 +1367,11 @@ impl LiveObjectIndexer for GrpcLiveObjectIndexer<'_> {
 
 #[cfg(test)]
 mod tests {
-    use iota_sdk_types::{GasCostSummary, checkpoint::CheckpointSummary};
-    use iota_types::{
-        crypto::AuthorityStrongQuorumSignInfo, iota_system_state::IotaSystemState,
-        message_envelope::Envelope, messages_checkpoint::VerifiedCheckpoint,
-    };
+    use iota_types::iota_system_state::IotaSystemState;
     use typed_store::rocks::{MetricConf, ReadWriteOptions, open_cf_opts};
 
     use super::*;
-
-    /// An executed (non-boundary) checkpoint for seeding a test
-    /// `CheckpointStore`, with a placeholder signature and no end-of-epoch
-    /// data.
-    fn executed_checkpoint(epoch: EpochId, sequence_number: u64) -> VerifiedCheckpoint {
-        let summary = CheckpointSummary {
-            epoch,
-            sequence_number,
-            network_total_transactions: 0,
-            contents_digest: Default::default(),
-            previous_digest: None,
-            epoch_rolling_gas_cost_summary: GasCostSummary::default(),
-            end_of_epoch_data: None,
-            timestamp_ms: 0,
-            version_specific_data: Vec::new(),
-            checkpoint_commitments: Vec::new(),
-        };
-        let sig = AuthorityStrongQuorumSignInfo {
-            epoch,
-            signature: Default::default(),
-            signers_map: Default::default(),
-        };
-        VerifiedCheckpoint::new_unchecked(Envelope::new_from_data_and_sig(summary, sig))
-    }
+    use crate::test_utils::executed_checkpoint;
 
     /// The live-object restorer must derive the same live-state indexes from
     /// an external object stream that `init` derives from a store scan: an

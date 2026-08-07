@@ -77,6 +77,22 @@ pub struct BulkIngestionOptions {
     pub batch_size_limit: usize,
 }
 
+impl BulkIngestionOptions {
+    /// Per-table config applying the bulk column-family options to every
+    /// listed table.
+    pub fn table_config(
+        &self,
+        table_names: impl IntoIterator<Item = String>,
+    ) -> DBMapTableConfigMap {
+        DBMapTableConfigMap::new(
+            table_names
+                .into_iter()
+                .map(|name| (name, self.column_family_options.clone()))
+                .collect(),
+        )
+    }
+}
+
 pub fn bulk_ingestion_options() -> BulkIngestionOptions {
     let total_memory_bytes = available_memory_bytes();
     let num_cpus = num_cpus::get();
