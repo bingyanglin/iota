@@ -6,7 +6,7 @@ use std::{
     marker::PhantomData,
     ops::{Bound, Deref, RangeBounds},
     path::Path,
-    sync::Arc,
+    sync::{Arc, Weak},
     time::Duration,
 };
 
@@ -16,7 +16,7 @@ use iota_macros::{fail_point, nondeterministic};
 use prometheus_filtered::{Histogram, HistogramTimer};
 use rocksdb::{DBPinnableSlice, Error, LiveFile, ReadOptions, WriteBatch, checkpoint::Checkpoint};
 use serde::{Serialize, de::DeserializeOwned};
-use tokio::sync::oneshot;
+use tokio::{sync::oneshot, time::Instant};
 use tracing::{debug, error, instrument, warn};
 use typed_store_error::TypedStoreError;
 
@@ -1771,6 +1771,22 @@ where
     fn try_catch_up_with_primary(&self) -> Result<(), TypedStoreError> {
         self.map.try_catch_up_with_primary()
     }
+}
+
+/// Waits until every handle to the database has been dropped, so its
+/// directory can be reopened, moved, or deleted. Returns `false` if handles
+/// remain after 30 seconds.
+pub async fn wait_for_database_close(db: Weak<Database>) -> bool {
+    // The deadline is read off the same clock the sleep advances, so a test
+    // pausing time does not turn the wait into a busy loop.
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while db.strong_count() != 0 {
+        if Instant::now() > deadline {
+            return false;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    true
 }
 
 fn default_hash(value: &[u8]) -> Digest<32> {

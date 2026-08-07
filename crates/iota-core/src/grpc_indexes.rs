@@ -30,6 +30,7 @@ use serde::{Deserialize, Serialize};
 use tracing::{debug, info};
 use typed_store::{
     DBMapUtils, TypedStoreError,
+    database::wait_for_database_close,
     rocks::{
         DBMap, DBMapTableConfigMap, MetricConf, bulk_ingestion_options,
         bulk_ingestion_write_options,
@@ -910,16 +911,8 @@ impl GrpcIndexesStore {
 
                 let weak_db = Arc::downgrade(&tables.meta.db);
                 drop(tables);
-
-                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
-                loop {
-                    if weak_db.strong_count() == 0 {
-                        break;
-                    }
-                    if std::time::Instant::now() > deadline {
-                        panic!("unable to reopen DB after indexing");
-                    }
-                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                if !wait_for_database_close(weak_db).await {
+                    panic!("unable to reopen DB after indexing");
                 }
 
                 // Reopen the DB with default options (eg without `unordered_write`s enabled)

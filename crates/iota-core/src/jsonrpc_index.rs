@@ -48,7 +48,7 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use tracing::{debug, error, info, trace, warn};
 use typed_store::{
     DBMapUtils, TypedStoreError,
-    database::Database,
+    database::{Database, wait_for_database_close},
     rocks::{
         DBBatch, DBMap, DBMapTableConfigMap, DBOptions, MetricConf, ReadWriteOptions, TaggedDBMap,
         bulk_ingestion_options, bulk_ingestion_write_options, default_db_options, list_tables,
@@ -1190,14 +1190,10 @@ impl JsonRpcIndexRestorer {
         // move the database directory.
         let weak_db = Arc::downgrade(&tables.meta.db);
         drop(tables);
-        let deadline = Instant::now() + Duration::from_secs(30);
-        while weak_db.strong_count() != 0 {
-            if Instant::now() > deadline {
-                return Err(StorageError::custom(
-                    "unable to close the JSON-RPC index database after the restore",
-                ));
-            }
-            tokio::time::sleep(Duration::from_millis(100)).await;
+        if !wait_for_database_close(weak_db).await {
+            return Err(StorageError::custom(
+                "unable to close the JSON-RPC index database after the restore",
+            ));
         }
         Ok(())
     }
@@ -1282,16 +1278,8 @@ impl IndexStore {
 
             let weak_db = Arc::downgrade(&init_tables.meta.db);
             drop(init_tables);
-
-            let deadline = Instant::now() + Duration::from_secs(30);
-            loop {
-                if weak_db.strong_count() == 0 {
-                    break;
-                }
-                if Instant::now() > deadline {
-                    panic!("unable to reopen DB after indexing");
-                }
-                tokio::time::sleep(Duration::from_millis(100)).await;
+            if !wait_for_database_close(weak_db).await {
+                panic!("unable to reopen DB after indexing");
             }
 
             // Reopen the DB with default options (eg without `unordered_write`s enabled)
@@ -3055,9 +3043,7 @@ mod tests {
                 .unwrap();
             let weak_db = std::sync::Arc::downgrade(&built.tables.meta.db);
             drop(built);
-            while weak_db.strong_count() != 0 {
-                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-            }
+            assert!(super::wait_for_database_close(weak_db).await);
         }
 
         let authority_store = crate::authority::AuthorityStore::open_no_genesis(
@@ -3177,9 +3163,7 @@ mod tests {
         // Release the database before reopening the same path.
         let weak_db = std::sync::Arc::downgrade(&index_store.tables.meta.db);
         drop(index_store);
-        while weak_db.strong_count() != 0 {
-            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-        }
+        assert!(super::wait_for_database_close(weak_db).await);
 
         let index_store = IndexStore::new(
             index_dir.path().to_path_buf(),
@@ -3424,9 +3408,7 @@ mod tests {
         // Reopening rediscovers the buckets from the column-family names.
         let weak_db = std::sync::Arc::downgrade(&index_store.tables.meta.db);
         drop(index_store);
-        while weak_db.strong_count() != 0 {
-            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-        }
+        assert!(super::wait_for_database_close(weak_db).await);
         let index_store = IndexStore::new_without_init(
             tmp_dir.path().to_path_buf(),
             &Registry::default(),
@@ -3450,9 +3432,7 @@ mod tests {
         // The dropped bucket stays gone after another reopen.
         let weak_db = std::sync::Arc::downgrade(&index_store.tables.meta.db);
         drop(index_store);
-        while weak_db.strong_count() != 0 {
-            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-        }
+        assert!(super::wait_for_database_close(weak_db).await);
         let index_store = IndexStore::new_without_init(
             tmp_dir.path().to_path_buf(),
             &Registry::default(),
