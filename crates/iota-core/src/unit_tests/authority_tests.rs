@@ -3695,6 +3695,22 @@ async fn test_store_get_dynamic_field() {
     assert_eq!(TypeTag::Bool, fields[0].name.type_)
 }
 
+/// Owned objects indexed through the per-checkpoint path must be queryable
+/// through `AuthorityState::get_owner_objects`, the JSON-RPC read path.
+#[tokio::test]
+async fn test_owner_objects_queryable_through_authority_state() {
+    let (authority_state, _, sender, _) =
+        create_and_retrieve_df(&Identifier::from_static("add_field")).await;
+
+    let owned = authority_state
+        .get_owner_objects(sender, None, 50, None)
+        .unwrap();
+    assert!(
+        !owned.is_empty(),
+        "the sender's objects must be served through the owner index"
+    );
+}
+
 /// A node that starts with executed checkpoints but no index database — the
 /// state after a formal-snapshot restore — must rebuild the JSON-RPC indexes
 /// on open: the live-object scan covers objects outside any local checkpoint
