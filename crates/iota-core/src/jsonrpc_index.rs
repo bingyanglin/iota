@@ -46,7 +46,10 @@ use move_core_types::{
     language_storage::ModuleId,
 };
 use parking_lot::{ArcMutexGuard, Mutex, RwLock};
-use prometheus_filtered::{IntCounter, Registry, register_int_counter_with_registry};
+use prometheus_filtered::{
+    IntCounter, MetricLevel, Registry, register_int_counter_with_registry,
+    register_int_gauge_with_registry,
+};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use tracing::{debug, error, info, trace, warn};
 use typed_store::{
@@ -1325,6 +1328,18 @@ impl IndexStore {
                 .expect("failed to initialize index tables");
         }
 
+        // Node startup blocks on a rebuild before any RPC surface exists;
+        // the gauge tells operators (and their probes) that the node is
+        // rebuilding, not hung. Registered unconditionally, so "not
+        // rebuilding" reads as 0 rather than a missing series.
+        let rebuild_gauge = register_int_gauge_with_registry!(
+            "jsonrpc_index_rebuild_in_progress",
+            "1 while the JSON-RPC index store is being rebuilt at startup",
+            registry;
+            MetricLevel::Warn,
+        )
+        .expect("failed to register the JSON-RPC index rebuild gauge");
+
         let needs_initialization = opened.as_ref().is_none_or(|opened| {
             opened
                 .tables
@@ -1332,6 +1347,7 @@ impl IndexStore {
                 .expect("failed to determine whether the JSON-RPC index needs a rebuild")
         });
         if needs_initialization {
+            rebuild_gauge.set(1);
             let mut init_tables = {
                 drop(opened);
                 safe_drop_db(path.clone(), Duration::from_secs(30))
@@ -1390,6 +1406,7 @@ impl IndexStore {
                 CURRENT_DB_VERSION, stored_version.version
             );
             opened = Some(reopened);
+            rebuild_gauge.set(0);
         }
         let opened = opened.expect("the index database is open on both paths above");
 
