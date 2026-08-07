@@ -2589,6 +2589,13 @@ impl IndexStore {
         if let Some(balance) = balance {
             return balance;
         }
+        // Repopulating a missed entry must not interleave with a commit for
+        // this owner: a value read between the commit's batch write and its
+        // cache merge would get the checkpoint's delta applied twice. The
+        // committer holds this lock across both, so the repopulation runs
+        // either fully before it (the delta then merges on top) or fully
+        // after (the merge skipped the absent key).
+        let _lock = self.caches.locks.acquire_lock(owner);
         // cache miss, lookup in all balance cache
         let all_balance = self.caches.all_balances.get(&owner.clone());
         if let Some(Ok(all_balance)) = all_balance {
@@ -2634,6 +2641,12 @@ impl IndexStore {
                 });
         }
 
+        if let Some(all_balance) = self.caches.all_balances.get(&owner) {
+            return all_balance;
+        }
+        // See `get_balance`: repopulation takes the owner's lock so it
+        // cannot interleave with a commit's write-then-merge.
+        let _lock = self.caches.locks.acquire_lock(owner);
         self.caches.all_balances.get_with(owner, move || {
             Self::get_all_balances_from_db(metrics_cloned, coin_index_cloned, owner).map_err(|e| {
                 IotaError::Execution(format!("Failed to read all balance from DB: {e:?}"))
@@ -3700,6 +3713,62 @@ mod tests {
         assert_eq!(balance.balance, 700);
         assert_eq!(balance.num_coins, 7);
 
+        Ok(())
+    }
+
+    /// A cache-miss repopulation racing a commit must not double-apply the
+    /// checkpoint's delta: the committer holds the owner's lock from the
+    /// delta computation through the cache merge, and cache-miss reads take
+    /// the same lock, so a value read between the batch write and the merge
+    /// can never be merged onto.
+    #[tokio::test]
+    async fn test_balance_cache_repopulation_cannot_race_a_commit() -> anyhow::Result<()> {
+        let tmp_dir = iota_common::tempdir();
+        let index_store = std::sync::Arc::new(open_index_store(tmp_dir.path().to_path_buf()));
+        let address = TestCheckpointDataBuilder::derive_address(1);
+
+        let mut builder = TestCheckpointDataBuilder::new(0)
+            .start_transaction(0)
+            .create_coin_object(0, 1, 100, GAS::type_tag())
+            .finish_transaction();
+        let checkpoint = builder.build_checkpoint();
+        index_store.index_checkpoint(&checkpoint, true)?;
+        index_store.commit_update_for_checkpoint(0)?;
+
+        // A second coin for the same owner in checkpoint 1.
+        let mut builder = builder
+            .start_transaction(0)
+            .create_coin_object(1, 1, 100, GAS::type_tag())
+            .finish_transaction();
+        let checkpoint = builder.build_checkpoint();
+        index_store.index_checkpoint(&checkpoint, true)?;
+
+        // Replay the commit by hand, pausing between the batch write and the
+        // cache merge — the window where an unlocked reader used to cache
+        // the post-write value the merge was then applied on top of.
+        let reader = {
+            let (staged_seq, update) = index_store.pending_updates.lock().pop_first().unwrap();
+            assert_eq!(staged_seq, 1);
+            let cache_updates = index_store.balance_cache_updates(update.coin_changes)?;
+            update.batch.write()?;
+
+            let reader = std::thread::spawn({
+                let index_store = index_store.clone();
+                move || index_store.get_balance(address, GAS::type_tag()).unwrap()
+            });
+            // Give the reader time to reach the owner's lock.
+            std::thread::sleep(std::time::Duration::from_millis(50));
+
+            index_store.update_per_coin_type_cache(cache_updates.per_coin_type_balance_changes)?;
+            index_store.update_all_balance_cache(cache_updates.all_balance_changes)?;
+            reader
+            // The owner locks in `cache_updates` release here.
+        };
+
+        assert_eq!(reader.join().unwrap().balance, 200);
+        let cached = index_store.get_balance(address, GAS::type_tag())?;
+        assert_eq!(cached.balance, 200);
+        assert_eq!(cached.num_coins, 2);
         Ok(())
     }
 
