@@ -26,6 +26,10 @@ static GLOBAL: CounterAlloc<std::alloc::System> = CounterAlloc::new(std::alloc::
 // Define the `GIT_REVISION` and `VERSION` consts
 bin_version::bin_version!();
 
+/// How long the graceful shutdown after a termination signal may take before
+/// the runtimes are stopped anyway.
+const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(30);
+
 #[derive(Parser)]
 #[command(
     version = VERSION,
@@ -144,6 +148,7 @@ fn main() {
     // work if it deadlocks.
     let node_once_cell = Arc::new(AsyncOnceCell::<Arc<IotaNode>>::new());
     let node_once_cell_clone = node_once_cell.clone();
+    let node_once_cell_shutdown = node_once_cell.clone();
 
     // let iota-node signal main to shutdown runtimes
     let (runtime_shutdown_tx, runtime_shutdown_rx) = broadcast::channel::<()>(1);
@@ -195,6 +200,23 @@ fn main() {
         .build()
         .unwrap()
         .block_on(wait_termination(runtime_shutdown_rx));
+
+    // Stop the node's background work before its runtimes go away. It runs
+    // on the node runtime, and `AsyncOnceCell::get` waits for a node that a
+    // signal during startup may never produce, so both are bounded here.
+    runtimes.iota_node.block_on(async {
+        match tokio::time::timeout(SHUTDOWN_TIMEOUT, node_once_cell_shutdown.get()).await {
+            Ok(node) => {
+                if tokio::time::timeout(SHUTDOWN_TIMEOUT, node.shutdown())
+                    .await
+                    .is_err()
+                {
+                    error!("node shutdown timed out, stopping anyway");
+                }
+            }
+            Err(_) => info!("shutting down before the node finished starting"),
+        }
+    });
 
     // Drop and wait all runtimes on main thread
     drop(runtimes);

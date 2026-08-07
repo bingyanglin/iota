@@ -12,7 +12,7 @@ use std::{
     path::{Path, PathBuf},
     sync::{
         Arc,
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
     },
     time::{Duration, Instant},
 };
@@ -825,6 +825,9 @@ pub struct IndexStore {
     max_type_length: u64,
     pending_updates: Mutex<BTreeMap<CheckpointSequenceNumber, PendingCheckpointUpdate>>,
     history_backfill_task: Mutex<Option<tokio::task::JoinHandle<()>>>,
+    /// Set by [`Self::shutdown`]; the backfill stops at its next checkpoint
+    /// boundary.
+    backfill_cancelled: AtomicBool,
     /// The retention horizon recorded by the last [`Self::prune`] call,
     /// mirroring the persisted `earliest_retained_epoch` row.
     earliest_retained_epoch: AtomicU64,
@@ -1464,6 +1467,19 @@ impl IndexStore {
         }
     }
 
+    /// Stops the background history replay at its next checkpoint boundary
+    /// and waits for it to finish, so shutdown does not block on a full
+    /// replay.
+    pub async fn shutdown(&self) {
+        self.backfill_cancelled.store(true, Ordering::Relaxed);
+        let task = self.history_backfill_task.lock().take();
+        if let Some(task) = task {
+            if let Err(e) = task.await {
+                warn!("the JSON-RPC index history backfill task failed: {e}");
+            }
+        }
+    }
+
     /// Fills the history tables for the checkpoints below
     /// `history_watermark`, newest first, until it reaches the
     /// checkpoint-contents pruner or falls below the index retention
@@ -1490,6 +1506,10 @@ impl IndexStore {
         let mut last_report = Instant::now();
         let mut replayed: u64 = 0;
         loop {
+            if self.backfill_cancelled.load(Ordering::Relaxed) {
+                info!("Stopping the JSON-RPC history backfill at checkpoint {next}: shutdown");
+                break;
+            }
             // The pruner advances while the backfill runs; re-check the
             // bound so the replay stops before data that is about to
             // disappear.
@@ -1702,6 +1722,7 @@ impl IndexStore {
             max_type_length: max_type_length.unwrap_or(128),
             pending_updates: Mutex::new(BTreeMap::new()),
             history_backfill_task: Mutex::new(None),
+            backfill_cancelled: AtomicBool::new(false),
             earliest_retained_epoch,
         }
     }
