@@ -2810,20 +2810,19 @@ impl IndexStore {
                 return Ok(*balance);
             }
         }
-        let cloned_coin_type = coin_type.clone();
-        let metrics_cloned = self.metrics.clone();
-        let coin_index_cloned = self.tables.coin_index.clone();
+        // The database read runs before the cache insert, so the cache
+        // shard's write lock is not held across the scan and owners of other
+        // shard entries stay unblocked.
+        let balance = Self::get_balance_from_db(
+            self.metrics.clone(),
+            self.tables.coin_index.clone(),
+            owner,
+            coin_type.clone(),
+        )
+        .map_err(|e| IotaError::Execution(format!("Failed to read balance frm DB: {e:?}")));
         self.caches
             .per_coin_type_balance
-            .get_with((owner, coin_type), move || {
-                Self::get_balance_from_db(
-                    metrics_cloned,
-                    coin_index_cloned,
-                    owner,
-                    cloned_coin_type,
-                )
-                .map_err(|e| IotaError::Execution(format!("Failed to read balance frm DB: {e:?}")))
-            })
+            .get_with((owner, coin_type), move || balance)
     }
 
     /// This method gets the balance for all coin types from the `all_balance`
@@ -2852,13 +2851,16 @@ impl IndexStore {
             return all_balance;
         }
         // See `get_balance`: repopulation takes the owner's lock so it
-        // cannot interleave with a commit's write-then-merge.
+        // cannot interleave with a commit's write-then-merge, and the
+        // database read runs before the cache insert.
         let _lock = self.caches.locks.acquire_lock(owner);
-        self.caches.all_balances.get_with(owner, move || {
-            Self::get_all_balances_from_db(metrics_cloned, coin_index_cloned, owner).map_err(|e| {
+        let all_balance = Self::get_all_balances_from_db(metrics_cloned, coin_index_cloned, owner)
+            .map_err(|e| {
                 IotaError::Execution(format!("Failed to read all balance from DB: {e:?}"))
-            })
-        })
+            });
+        self.caches
+            .all_balances
+            .get_with(owner, move || all_balance)
     }
 
     /// Read balance for a `Address` and `CoinType` from the backend
