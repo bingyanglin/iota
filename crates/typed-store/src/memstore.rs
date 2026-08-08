@@ -88,19 +88,22 @@ impl InMemoryDB {
         Ok(column_family(&data, cf_name)?.get(key.as_ref()).cloned())
     }
 
-    pub fn multi_get<I, K>(&self, cf_name: &str, keys: I) -> Vec<Option<Vec<u8>>>
+    pub fn multi_get<I, K>(
+        &self,
+        cf_name: &str,
+        keys: I,
+    ) -> Vec<Result<Option<Vec<u8>>, TypedStoreError>>
     where
         I: IntoIterator<Item = K>,
         K: AsRef<[u8]>,
     {
         let data = self.data.read().expect("can't read data");
-        match data.get(cf_name) {
-            Some(cf) => keys
-                .into_iter()
-                .map(|k| cf.get(k.as_ref()).cloned())
-                .collect(),
-            None => vec![],
-        }
+        let cf = column_family(&data, cf_name);
+        // One slot per key, even when the column family is missing: a shorter
+        // result would silently misalign with the keys.
+        keys.into_iter()
+            .map(|k| Ok(cf.as_ref().map_err(Clone::clone)?.get(k.as_ref()).cloned()))
+            .collect()
     }
 
     pub fn delete(&self, cf_name: &str, key: &[u8]) -> Result<(), TypedStoreError> {
@@ -223,6 +226,27 @@ mod tests {
         let db = InMemoryDB::default();
         db.create_cf("cf").unwrap();
         assert!(db.create_cf("cf").is_err());
+    }
+
+    #[test]
+    fn multi_get_returns_one_slot_per_key() {
+        let db = InMemoryDB::default();
+        db.create_cf("cf").unwrap();
+        db.put("cf", vec![1], vec![10]).unwrap();
+
+        // Duplicate and absent keys each keep their own slot, in order.
+        let values = db
+            .multi_get("cf", [vec![1u8], vec![2], vec![1]])
+            .into_iter()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        assert_eq!(values, vec![Some(vec![10]), None, Some(vec![10])]);
+
+        // A missing column family fails every slot rather than shortening
+        // the result.
+        let results = db.multi_get("missing", [vec![1u8], vec![2]]);
+        assert_eq!(results.len(), 2);
+        assert!(results.iter().all(Result::is_err));
     }
 
     #[test]

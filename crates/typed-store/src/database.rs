@@ -209,7 +209,7 @@ impl Database {
             (Storage::InMemory(db), ColumnFamily::InMemory(cf_name)) => db
                 .multi_get(cf_name, keys)
                 .into_iter()
-                .map(|r| Ok(r.map(GetResult::InMemory)))
+                .map(|r| r.map(|value| value.map(GetResult::InMemory)))
                 .collect(),
             _ => unreachable!("typed store invariant violation"),
         }
