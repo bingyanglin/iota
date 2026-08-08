@@ -1320,15 +1320,25 @@ impl IndexStore {
         checkpoint_store: &Arc<CheckpointStore>,
     ) -> Arc<Self> {
         // An unopenable database would crash-loop the node with no way to
-        // self-heal; wipe and rebuild it like a stale one. Read errors on an
-        // openable database stay fatal instead (see
+        // self-heal; wipe and rebuild it like a stale one — but only after
+        // one retry, so a transient error does not destroy a healthy store.
+        // Read errors on an openable database stay fatal instead (see
         // `needs_to_do_initialization`): its data is intact, so a restart
         // retries without paying for a rebuild.
         let mut opened = match Self::open_index_db(&path) {
             Ok(opened) => Some(opened),
-            Err(e) => {
-                warn!("unable to open the JSON-RPC index database, wiping and rebuilding: {e}");
-                None
+            Err(first) => {
+                warn!("unable to open the JSON-RPC index database, retrying once: {first}");
+                match Self::open_index_db(&path) {
+                    Ok(opened) => Some(opened),
+                    Err(e) => {
+                        warn!(
+                            "unable to open the JSON-RPC index database, wiping and rebuilding: \
+                             {e}"
+                        );
+                        None
+                    }
+                }
             }
         };
 
@@ -1361,9 +1371,15 @@ impl IndexStore {
             rebuild_gauge.set(1);
             let mut init_tables = {
                 drop(opened);
-                safe_drop_db(path.clone(), Duration::from_secs(30))
-                    .await
-                    .expect("unable to destroy old JSON-RPC index db");
+                // `DB::destroy` fails on a database it cannot parse — the
+                // very state the rebuild recovers from — so fall back to
+                // deleting the directory. The database was already closed
+                // above, so a short wait covers its background threads.
+                if let Err(e) = safe_drop_db(path.clone(), Duration::from_secs(5)).await {
+                    warn!("unable to destroy the old JSON-RPC index database ({e}), deleting it");
+                    std::fs::remove_dir_all(&path)
+                        .expect("unable to delete the old JSON-RPC index database");
+                }
 
                 // Open the empty DB with tuned bulk ingestion options to
                 // speed up the initial indexing. The DB is reopened with default options
@@ -1827,18 +1843,22 @@ impl IndexStore {
         )
         .map_err(|e| IotaError::Storage(e.to_string()))?;
 
-        fn map<K, V>(db: &Arc<Database>, cf_name: &str, rw: &ReadWriteOptions) -> DBMap<K, V> {
+        fn map<K, V>(
+            db: &Arc<Database>,
+            cf_name: &str,
+            rw: &ReadWriteOptions,
+        ) -> IotaResult<DBMap<K, V>> {
             DBMap::reopen(db, Some(cf_name), rw, false)
-                .unwrap_or_else(|e| panic!("cannot open the {cf_name} column family: {e}"))
+                .map_err(|e| IotaError::Storage(format!("cannot open the {cf_name} table: {e}")))
         }
         let tables = IndexStoreTables {
-            meta: map(&db, "meta", &db_options.rw_options),
-            watermark: map(&db, "watermark", &db_options.rw_options),
-            history_watermark: map(&db, "history_watermark", &db_options.rw_options),
-            earliest_retained_epoch: map(&db, "earliest_retained_epoch", &db_options.rw_options),
-            owner_index: map(&db, "owner_index", &db_options.rw_options),
-            coin_index: map(&db, "coin_index", &coin_options.rw_options),
-            dynamic_field_index: map(&db, "dynamic_field_index", &db_options.rw_options),
+            meta: map(&db, "meta", &db_options.rw_options)?,
+            watermark: map(&db, "watermark", &db_options.rw_options)?,
+            history_watermark: map(&db, "history_watermark", &db_options.rw_options)?,
+            earliest_retained_epoch: map(&db, "earliest_retained_epoch", &db_options.rw_options)?,
+            owner_index: map(&db, "owner_index", &db_options.rw_options)?,
+            coin_index: map(&db, "coin_index", &coin_options.rw_options)?,
+            dynamic_field_index: map(&db, "dynamic_field_index", &db_options.rw_options)?,
         };
 
         let mut history = BTreeMap::new();
@@ -3332,6 +3352,46 @@ mod tests {
             index_store.tables.history_watermark.get(&()).unwrap(),
             Some(1),
             "a cancelled backfill must not replay"
+        );
+    }
+
+    /// An unopenable database is wiped and rebuilt instead of crash-looping
+    /// the node.
+    #[tokio::test]
+    async fn test_unopenable_database_is_wiped_and_rebuilt() {
+        let (authority_state, genesis_tx_digest) = genesis_authority_state().await;
+        let checkpoint_store = &authority_state.checkpoint_store;
+        let index_dir = iota_common::tempdir();
+        std::fs::write(index_dir.path().join("CURRENT"), b"bogus").unwrap();
+
+        let index_store = IndexStore::new(
+            index_dir.path().to_path_buf(),
+            &Registry::default(),
+            Some(128),
+            &authority_state.database_for_testing(),
+            checkpoint_store,
+        )
+        .await;
+        index_store.wait_for_history_backfill_for_testing().await;
+        assert_eq!(
+            index_store.get_transaction_seq(&genesis_tx_digest).unwrap(),
+            Some(0)
+        );
+    }
+
+    /// A read error in the rebuild predicate propagates instead of silently
+    /// deciding to wipe or to adopt.
+    #[tokio::test]
+    async fn test_rebuild_predicate_propagates_read_errors() {
+        let dir = iota_common::tempdir();
+        let checkpoint_store = CheckpointStore::new(&dir.path().join("checkpoints"));
+        let index_store = open_index_store(dir.path().join("indexes"));
+        index_store.db.drop_cf("meta").unwrap();
+        assert!(
+            index_store
+                .tables
+                .needs_to_do_initialization(&checkpoint_store)
+                .is_err()
         );
     }
 

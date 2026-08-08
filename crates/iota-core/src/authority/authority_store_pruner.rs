@@ -172,7 +172,8 @@ impl AuthorityStorePruningMetrics {
             earliest_retained_indexes_epoch: register_int_gauge_with_registry!(
                 "earliest_retained_indexes_epoch",
                 "Earliest epoch whose JSON-RPC index history is retained",
-                registry
+                registry;
+                MetricLevel::Warn,
             )
             .unwrap(),
             num_epochs_to_retain_for_objects: register_int_gauge_with_registry!(

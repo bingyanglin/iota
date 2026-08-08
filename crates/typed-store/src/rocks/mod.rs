@@ -117,7 +117,9 @@ pub fn unmark_db_corruption(path: &Path) -> Result<(), Error> {
 
 /// Opens a database with options, and a number of column families with
 /// individual options that are created if they do not exist.
-#[tracing::instrument(level="debug", skip_all, fields(path = ?path.as_ref()), err)]
+// Whether a failed open is fatal is the caller's call: some wipe and rebuild the
+// database, and the ones that abort carry the error in their panic message.
+#[tracing::instrument(level = "debug", skip_all, fields(path = ?path.as_ref()), err(level = "warn"))]
 pub fn open_cf_opts<P: AsRef<Path>>(
     path: P,
     db_options: Option<rocksdb::Options>,
