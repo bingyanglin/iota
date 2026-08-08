@@ -54,7 +54,7 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use tracing::{debug, error, info, trace, warn};
 use typed_store::{
     DBMapUtils, TypedStoreError,
-    database::{Database, wait_for_database_close},
+    database::{Database, drop_tolerant_write_options, wait_for_database_close},
     rocks::{
         DBBatch, DBMap, DBOptions, MetricConf, ReadWriteOptions, TaggedDBMap,
         bulk_ingestion_options, bulk_ingestion_write_options, default_db_options, list_tables,
@@ -1654,9 +1654,14 @@ impl IndexStore {
                 .map_err(|e| StorageError::custom(e.to_string()))?;
         }
         batch.insert_batch(&self.tables.history_watermark, [((), checkpoint_seq)])?;
-        // A plain write, not a bulk-ingestion one: the database is serving
-        // queries, and the marker must land atomically with the rows.
-        batch.write().map_err(StorageError::from)?;
+        // A plain WAL-enabled write, not a bulk-ingestion one: the database
+        // is serving queries, and the marker must land atomically with the
+        // rows. `drop_tolerant_write_options` discards the bucket's rows if
+        // `prune` dropped its column family mid-replay; the next loop
+        // iteration then stops at the pruned epoch.
+        batch
+            .write_opt(&drop_tolerant_write_options())
+            .map_err(StorageError::from)?;
         Ok(())
     }
 
@@ -2044,7 +2049,12 @@ impl IndexStore {
             )?;
         }
 
-        update.batch.write()?;
+        // The update may stage rows of a history bucket `prune` drops before
+        // this write; those rows are discarded instead of failing the write.
+        // Only expired epochs can be lost that way: `index_checkpoint`
+        // created the bucket of the epoch being executed, so it is the
+        // newest one, and `prune` retains at least the newest seven.
+        update.batch.write_opt(&drop_tolerant_write_options())?;
 
         if !invalidate_caches {
             // We cannot update the cache before updating the db or else on failing to write
