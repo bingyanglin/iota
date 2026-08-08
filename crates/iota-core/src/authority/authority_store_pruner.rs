@@ -896,9 +896,17 @@ impl AuthorityStorePruner {
                     }
                 }
                 if prune_indexes {
-                    if let Err(err) =
+                    // `IndexStore::prune` blocks queries on its lock while
+                    // dropping column families; keep it off the async
+                    // workers.
+                    let jsonrpc_index = jsonrpc_index.clone();
+                    let config = config.clone();
+                    let metrics = metrics.clone();
+                    let result = tokio::task::spawn_blocking(move || {
                         Self::prune_indexes(jsonrpc_index.as_deref(), &config, &metrics)
-                    {
+                    })
+                    .await;
+                    if let Ok(Err(err)) | Err(err) = result.map_err(anyhow::Error::from) {
                         error!("Failed to prune indexes: {:?}", err);
                     }
                 }
