@@ -3572,10 +3572,10 @@ impl AuthorityState {
         let object_store = self.get_object_store();
 
         let mut fields = Vec::new();
-        for field_id in indexes.get_dynamic_field_ids_iterator(owner, cursor)? {
-            if fields.len() >= limit {
-                break;
-            }
+        for field_id in indexes
+            .get_dynamic_field_ids_iterator(owner, cursor)?
+            .take(limit)
+        {
             let field_id = field_id?;
             let Some(field_object) = object_store.try_get_object(&field_id)? else {
                 fields.push((field_id, None));
@@ -3627,20 +3627,7 @@ impl AuthorityState {
             // dynamic object field directly: resolve through the `Field`
             // wrapper to the value object's id, as the wrapper path below
             // does for unwrapped names.
-            let Some(field_object) = self.get_object_store().try_get_object(&dynamic_field_id)?
-            else {
-                return Ok(None);
-            };
-            let epoch_store = self.load_epoch_store_one_call_per_task();
-            let mut layout_resolver = epoch_store
-                .executor()
-                .type_layout_resolver(Box::new(self.get_backing_package_store().clone()));
-            return Ok(try_create_dynamic_field_info(
-                &field_object,
-                self.get_object_store().as_ref(),
-                layout_resolver.as_mut(),
-            )?
-            .map(|info| info.object_id));
+            return self.dynamic_field_value_id(dynamic_field_id);
         }
 
         // A dynamic object field is indexed under its `Field` wrapper, which
@@ -3652,7 +3639,14 @@ impl AuthorityState {
         if !indexes.dynamic_field_exists(owner, wrapper_id)? {
             return Ok(None);
         }
-        let Some(wrapper_object) = self.get_object_store().try_get_object(&wrapper_id)? else {
+        self.dynamic_field_value_id(wrapper_id)
+    }
+
+    /// The id a dynamic-field lookup resolves `field_id` to: the value
+    /// object's for a dynamic object field, the `Field` object's own
+    /// otherwise, or `None` if the field object no longer exists.
+    fn dynamic_field_value_id(&self, field_id: ObjectId) -> IotaResult<Option<ObjectId>> {
+        let Some(field_object) = self.get_object_store().try_get_object(&field_id)? else {
             return Ok(None);
         };
         let epoch_store = self.load_epoch_store_one_call_per_task();
@@ -3660,7 +3654,7 @@ impl AuthorityState {
             .executor()
             .type_layout_resolver(Box::new(self.get_backing_package_store().clone()));
         Ok(try_create_dynamic_field_info(
-            &wrapper_object,
+            &field_object,
             self.get_object_store().as_ref(),
             layout_resolver.as_mut(),
         )?

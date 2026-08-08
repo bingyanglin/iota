@@ -8,7 +8,7 @@
 use std::{
     cmp::{max, min},
     collections::{BTreeMap, HashMap, HashSet},
-    ops::RangeBounds,
+    ops::{Bound, RangeBounds},
     path::{Path, PathBuf},
     sync::{
         Arc,
@@ -836,8 +836,8 @@ pub struct IndexStore {
     /// Set by [`Self::shutdown`]; the backfill stops at its next checkpoint
     /// boundary.
     backfill_cancelled: AtomicBool,
-    /// The retention horizon recorded by the last [`Self::prune`] call,
-    /// mirroring the persisted `earliest_retained_epoch` row.
+    /// The earliest retained epoch recorded by the last [`Self::prune`]
+    /// call, mirroring the persisted `earliest_retained_epoch` row.
     earliest_retained_epoch: AtomicU64,
 }
 
@@ -1485,10 +1485,9 @@ impl IndexStore {
 
     /// Waits for the background history replay to finish — for tests.
     pub async fn wait_for_history_backfill_for_testing(&self) {
-        let task = self.history_backfill_task.lock().take();
-        if let Some(task) = task {
-            task.await.expect("history backfill task failed");
-        }
+        self.join_backfill_task()
+            .await
+            .expect("history backfill task failed");
     }
 
     /// Stops the background history replay at its next checkpoint boundary
@@ -1496,11 +1495,17 @@ impl IndexStore {
     /// replay.
     pub async fn shutdown(&self) {
         self.backfill_cancelled.store(true, Ordering::Relaxed);
+        if let Err(e) = self.join_backfill_task().await {
+            warn!("the JSON-RPC index history backfill task failed: {e}");
+        }
+    }
+
+    /// Awaits the backfill task, if one is still running.
+    async fn join_backfill_task(&self) -> Result<(), tokio::task::JoinError> {
         let task = self.history_backfill_task.lock().take();
-        if let Some(task) = task {
-            if let Err(e) = task.await {
-                warn!("the JSON-RPC index history backfill task failed: {e}");
-            }
+        match task {
+            Some(task) => task.await,
+            None => Ok(()),
         }
     }
 
@@ -1772,7 +1777,7 @@ impl IndexStore {
             tables
                 .earliest_retained_epoch
                 .get(&())
-                .expect("failed to read the index retention horizon")
+                .expect("failed to read the earliest retained index epoch")
                 .unwrap_or(0),
         );
 
@@ -1888,7 +1893,21 @@ impl IndexStore {
         }
     }
 
-    /// Chains one `lower..=upper` scan per retained history bucket, in
+    /// Maps an `event_order` row to the query result shape.
+    fn event_order_row(
+        ((_, event_seq), (digest, tx_digest, time)): (EventId, EventIndex),
+    ) -> (TransactionEventsDigest, TransactionDigest, usize, u64) {
+        (digest, tx_digest, event_seq, time)
+    }
+
+    /// Maps a keyed event-table row to the query result shape.
+    fn keyed_event_row<K>(
+        ((_, (_, event_seq)), (digest, tx_digest, time)): ((K, EventId), EventIndex),
+    ) -> (TransactionEventsDigest, TransactionDigest, usize, u64) {
+        (digest, tx_digest, event_seq, time)
+    }
+
+    /// Chains one range scan per retained history bucket, in
     /// global sequence order, collecting up to `limit` mapped rows.
     fn scan_history_buckets<K, V, R>(
         &self,
@@ -2470,23 +2489,18 @@ impl IndexStore {
         limit: usize,
         descending: bool,
     ) -> IotaResult<Vec<(TransactionEventsDigest, TransactionDigest, usize, u64)>> {
-        if descending {
-            self.scan_history_buckets(
-                |bucket| &bucket.event_order,
-                ..=(tx_seq, event_seq),
-                Some(limit),
-                true,
-                |((_, event_seq), (digest, tx_digest, time))| (digest, tx_digest, event_seq, time),
-            )
+        let range = if descending {
+            (Bound::Unbounded, Bound::Included((tx_seq, event_seq)))
         } else {
-            self.scan_history_buckets(
-                |bucket| &bucket.event_order,
-                (tx_seq, event_seq)..,
-                Some(limit),
-                false,
-                |((_, event_seq), (digest, tx_digest, time))| (digest, tx_digest, event_seq, time),
-            )
-        }
+            (Bound::Included((tx_seq, event_seq)), Bound::Unbounded)
+        };
+        self.scan_history_buckets(
+            |bucket| &bucket.event_order,
+            range,
+            Some(limit),
+            descending,
+            Self::event_order_row,
+        )
     }
 
     pub fn events_by_transaction(
@@ -2510,7 +2524,7 @@ impl IndexStore {
             range,
             Some(limit),
             descending,
-            |((_, event_seq), (digest, tx_digest, time))| (digest, tx_digest, event_seq, time),
+            Self::event_order_row,
         )
     }
 
@@ -2538,7 +2552,7 @@ impl IndexStore {
             range,
             Some(limit),
             descending,
-            |((_, (_, event_seq)), (digest, tx_digest, time))| (digest, tx_digest, event_seq, time),
+            Self::keyed_event_row,
         )
     }
 
@@ -2633,7 +2647,7 @@ impl IndexStore {
             range,
             Some(limit),
             descending,
-            |((_, (_, event_seq)), (digest, tx_digest, time))| (digest, tx_digest, event_seq, time),
+            Self::keyed_event_row,
         )
     }
 
@@ -3330,85 +3344,6 @@ mod tests {
             Some(1),
             "the pruned genesis epoch must not be replayed"
         );
-    }
-
-    /// After `shutdown`, the backfill stops before replaying anything, so
-    /// shutdown does not block on a full replay.
-    #[tokio::test]
-    async fn test_shutdown_stops_the_backfill() {
-        let (authority_state, _) = genesis_authority_state().await;
-        let checkpoint_store = &authority_state.checkpoint_store;
-        let index_dir = iota_common::tempdir();
-        let index_store = open_index_store(index_dir.path().to_path_buf());
-        index_store
-            .tables
-            .history_watermark
-            .insert(&(), &1)
-            .unwrap();
-
-        index_store.shutdown().await;
-        index_store
-            .backfill_history(&authority_state.database_for_testing(), checkpoint_store)
-            .unwrap();
-        assert_eq!(
-            index_store.tables.history_watermark.get(&()).unwrap(),
-            Some(1),
-            "a cancelled backfill must not replay"
-        );
-    }
-
-    /// An unopenable database is wiped and rebuilt instead of crash-looping
-    /// the node.
-    #[tokio::test]
-    async fn test_unopenable_database_is_wiped_and_rebuilt() {
-        let (authority_state, genesis_tx_digest) = genesis_authority_state().await;
-        let checkpoint_store = &authority_state.checkpoint_store;
-        let index_dir = iota_common::tempdir();
-        std::fs::write(index_dir.path().join("CURRENT"), b"bogus").unwrap();
-
-        let index_store = IndexStore::new(
-            index_dir.path().to_path_buf(),
-            &Registry::default(),
-            Some(128),
-            &authority_state.database_for_testing(),
-            checkpoint_store,
-        )
-        .await;
-        index_store.wait_for_history_backfill_for_testing().await;
-        assert_eq!(
-            index_store.get_transaction_seq(&genesis_tx_digest).unwrap(),
-            Some(0)
-        );
-    }
-
-    /// A read error in the rebuild predicate propagates instead of silently
-    /// deciding to wipe or to adopt.
-    #[tokio::test]
-    async fn test_rebuild_predicate_propagates_read_errors() {
-        let dir = iota_common::tempdir();
-        let checkpoint_store = CheckpointStore::new(&dir.path().join("checkpoints"));
-        let index_store = open_index_store(dir.path().join("indexes"));
-        index_store.db.drop_cf("meta").unwrap();
-        assert!(
-            index_store
-                .tables
-                .needs_to_do_initialization(&checkpoint_store)
-                .is_err()
-        );
-    }
-
-    /// Leftover files under the index directory are cleared before a
-    /// bulk-ingestion open instead of failing the recovery.
-    #[tokio::test]
-    async fn test_bulk_ingestion_open_clears_leftover_files() {
-        let dir = iota_common::tempdir();
-        let index_dir = dir.path().join("indexes");
-        std::fs::create_dir_all(&index_dir).unwrap();
-        std::fs::write(index_dir.join("stray"), b"leftover").unwrap();
-
-        let tables = super::IndexStoreTables::open_for_bulk_ingestion(index_dir.clone());
-        assert_eq!(tables.meta.get(&()).unwrap(), None);
-        assert!(!index_dir.join("stray").exists());
     }
 
     /// `init` alone must not adopt the rebuild: the watermarks are written
@@ -4351,6 +4286,103 @@ mod tests {
         );
 
         Ok(())
+    }
+
+    /// An empty newest bucket (a crash between `create_cf` and its first
+    /// committed batch) must not reset the numbering: the floor scan reads
+    /// the older buckets.
+    #[tokio::test]
+    async fn test_numbering_floor_skips_an_empty_newest_bucket() {
+        let tmp_dir = iota_common::tempdir();
+        let index_store = open_index_store(tmp_dir.path().to_path_buf());
+        seed_history_buckets(&index_store, 1);
+        index_store.ensure_history_bucket(1).unwrap();
+
+        let index_store = reopen_index_store(index_store, tmp_dir.path().to_path_buf()).await;
+        assert_eq!(
+            index_store.next_sequence_number(),
+            1,
+            "numbering must continue after the last row of the older buckets"
+        );
+    }
+
+    /// After `shutdown`, the backfill stops before replaying anything, so
+    /// shutdown does not block on a full replay.
+    #[tokio::test]
+    async fn test_shutdown_stops_the_backfill() {
+        let (authority_state, _) = genesis_authority_state().await;
+        let checkpoint_store = &authority_state.checkpoint_store;
+        let index_dir = iota_common::tempdir();
+        let index_store = open_index_store(index_dir.path().to_path_buf());
+        index_store
+            .tables
+            .history_watermark
+            .insert(&(), &1)
+            .unwrap();
+
+        index_store.shutdown().await;
+        index_store
+            .backfill_history(&authority_state.database_for_testing(), checkpoint_store)
+            .unwrap();
+        assert_eq!(
+            index_store.tables.history_watermark.get(&()).unwrap(),
+            Some(1),
+            "a cancelled backfill must not replay"
+        );
+    }
+
+    /// An unopenable database is wiped and rebuilt instead of crash-looping
+    /// the node.
+    #[tokio::test]
+    async fn test_unopenable_database_is_wiped_and_rebuilt() {
+        let (authority_state, genesis_tx_digest) = genesis_authority_state().await;
+        let checkpoint_store = &authority_state.checkpoint_store;
+        let index_dir = iota_common::tempdir();
+        std::fs::write(index_dir.path().join("CURRENT"), b"bogus").unwrap();
+
+        let index_store = IndexStore::new(
+            index_dir.path().to_path_buf(),
+            &Registry::default(),
+            Some(128),
+            &authority_state.database_for_testing(),
+            checkpoint_store,
+        )
+        .await;
+        index_store.wait_for_history_backfill_for_testing().await;
+        assert_eq!(
+            index_store.get_transaction_seq(&genesis_tx_digest).unwrap(),
+            Some(0)
+        );
+    }
+
+    /// A read error in the rebuild predicate propagates instead of silently
+    /// deciding to wipe or to adopt.
+    #[tokio::test]
+    async fn test_rebuild_predicate_propagates_read_errors() {
+        let dir = iota_common::tempdir();
+        let checkpoint_store = CheckpointStore::new(&dir.path().join("checkpoints"));
+        let index_store = open_index_store(dir.path().join("indexes"));
+        index_store.db.drop_cf("meta").unwrap();
+        assert!(
+            index_store
+                .tables
+                .needs_to_do_initialization(&checkpoint_store)
+                .is_err()
+        );
+    }
+
+    /// Leftover files under the index directory are cleared before a
+    /// bulk-ingestion open instead of failing the recovery.
+    #[tokio::test]
+    async fn test_bulk_ingestion_open_clears_leftover_files() {
+        let dir = iota_common::tempdir();
+        let index_dir = dir.path().join("indexes");
+        std::fs::create_dir_all(&index_dir).unwrap();
+        std::fs::write(index_dir.join("stray"), b"leftover").unwrap();
+
+        let tables = super::IndexStoreTables::open_for_bulk_ingestion(index_dir.clone());
+        assert_eq!(tables.meta.get(&()).unwrap(), None);
+        assert!(!index_dir.join("stray").exists());
     }
 
     /// The caching layout resolver resolves each struct tag once.

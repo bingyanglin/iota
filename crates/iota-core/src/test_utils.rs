@@ -7,7 +7,7 @@ use std::{sync::Arc, time::Duration};
 use fastcrypto::{hash::MultisetHash, traits::KeyPair};
 use iota_sdk_types::{
     Address, GasCostSummary, Identifier, ObjectId, ObjectReference, TransactionDigest,
-    checkpoint::CheckpointSummary,
+    checkpoint::{CheckpointSummary, EndOfEpochData},
     crypto::{Intent, IntentScope},
 };
 use iota_types::{
@@ -20,7 +20,7 @@ use iota_types::{
     effects::{SignedTransactionEffects, TestEffectsBuilder},
     error::IotaError,
     message_envelope::Envelope,
-    messages_checkpoint::VerifiedCheckpoint,
+    messages_checkpoint::{CertifiedCheckpointSummary, VerifiedCheckpoint},
     transaction::{
         CallArg, CertifiedTransaction, SenderSignedTransactionAPI, SignedTransaction,
         TEST_ONLY_GAS_UNIT_FOR_TRANSFER, TransactionData, TransactionDataAPI, TransactionEnvelope,
@@ -319,9 +319,13 @@ pub fn set_scheduler_env(use_execution_scheduler: bool) {
     }
 }
 
-/// An executed (non-boundary) checkpoint for seeding a test
-/// `CheckpointStore`, with a placeholder signature.
-pub fn executed_checkpoint(epoch: EpochId, sequence_number: u64) -> VerifiedCheckpoint {
+/// A certified checkpoint summary with a placeholder signature, for seeding
+/// a test `CheckpointStore`. `end_of_epoch_data` makes it an epoch boundary.
+pub fn certified_summary(
+    epoch: EpochId,
+    sequence_number: u64,
+    end_of_epoch_data: Option<EndOfEpochData>,
+) -> CertifiedCheckpointSummary {
     let summary = CheckpointSummary {
         epoch,
         sequence_number,
@@ -329,7 +333,7 @@ pub fn executed_checkpoint(epoch: EpochId, sequence_number: u64) -> VerifiedChec
         contents_digest: Default::default(),
         previous_digest: None,
         epoch_rolling_gas_cost_summary: GasCostSummary::default(),
-        end_of_epoch_data: None,
+        end_of_epoch_data,
         timestamp_ms: 0,
         version_specific_data: Vec::new(),
         checkpoint_commitments: Vec::new(),
@@ -339,5 +343,11 @@ pub fn executed_checkpoint(epoch: EpochId, sequence_number: u64) -> VerifiedChec
         signature: Default::default(),
         signers_map: Default::default(),
     };
-    VerifiedCheckpoint::new_unchecked(Envelope::new_from_data_and_sig(summary, sig))
+    Envelope::new_from_data_and_sig(summary, sig)
+}
+
+/// An executed (non-boundary) checkpoint for seeding a test
+/// `CheckpointStore`.
+pub fn executed_checkpoint(epoch: EpochId, sequence_number: u64) -> VerifiedCheckpoint {
+    VerifiedCheckpoint::new_unchecked(certified_summary(epoch, sequence_number, None))
 }
