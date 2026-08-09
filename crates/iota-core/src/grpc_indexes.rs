@@ -1166,6 +1166,62 @@ impl GrpcIndexesStore {
     ) -> Result<(), TypedStoreError> {
         self.tables.finalize(restore_checkpoint)
     }
+
+    /// Finalizes the restore as [`Self::finalize_restore`] does, then closes
+    /// the store and reopens it the way a node does, so a database the node
+    /// would wipe and rebuild fails the restore instead — and so the caller
+    /// can move the database directory.
+    pub async fn finalize_and_verify_restore(
+        self: Arc<Self>,
+        path: &Path,
+        restore_checkpoint: CheckpointSequenceNumber,
+    ) -> Result<(), StorageError> {
+        self.finalize_restore(restore_checkpoint)?;
+
+        let weak_db = Arc::downgrade(&self.tables.meta.db);
+        drop(self);
+        if !wait_for_database_close(weak_db).await {
+            return Err(StorageError::custom(
+                "unable to close the gRPC index database after the restore",
+            ));
+        }
+
+        Self::probe_open(path).await.map_err(|e| {
+            StorageError::custom(format!(
+                "unable to reopen the restored gRPC index database: {e}"
+            ))
+        })?;
+        let reopened = IndexStoreTables::open(path);
+        let stored_version = reopened
+            .meta
+            .get(&())?
+            .ok_or_else(|| {
+                StorageError::custom("the restored gRPC index database has no metadata")
+            })?
+            .version;
+        if stored_version != CURRENT_DB_VERSION {
+            return Err(StorageError::custom(format!(
+                "restored gRPC index database version mismatch: expected {CURRENT_DB_VERSION}, \
+                 found {stored_version}"
+            )));
+        }
+        let watermark = reopened.watermark.get(&Watermark::Indexed)?;
+        if watermark != Some(restore_checkpoint) {
+            return Err(StorageError::custom(format!(
+                "the restored gRPC index is watermarked at {watermark:?}, expected \
+                 {restore_checkpoint}"
+            )));
+        }
+
+        let weak_db = Arc::downgrade(&reopened.meta.db);
+        drop(reopened);
+        if !wait_for_database_close(weak_db).await {
+            return Err(StorageError::custom(
+                "unable to close the gRPC index database after verifying the restore",
+            ));
+        }
+        Ok(())
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1674,6 +1730,31 @@ mod tests {
                 .needs_to_do_initialization(&checkpoint_store)
                 .unwrap(),
             "a stale restore watermark must not suppress re-init"
+        );
+    }
+
+    /// The restore's finalize must leave a closed, readable store: the
+    /// verify's own reopen and this one both need every handle released.
+    #[tokio::test]
+    async fn finalize_and_verify_restore_closes_the_store() {
+        let tmp_dir = iota_common::tempdir();
+        let path = tmp_dir.path().to_path_buf();
+        let grpc = Arc::new(GrpcIndexesStore::new_without_init(path.clone()));
+
+        let restorer = grpc.live_object_restorer(100);
+        let mut partition = restorer.begin_partition();
+        partition
+            .index_object(&Object::with_owner_for_testing(Address::from_u16(42)))
+            .unwrap();
+        partition.finish().unwrap();
+        restorer.finish().unwrap();
+
+        grpc.finalize_and_verify_restore(&path, 5).await.unwrap();
+
+        let reopened = IndexStoreTables::open(&path);
+        assert_eq!(
+            reopened.watermark.get(&Watermark::Indexed).unwrap(),
+            Some(5)
         );
     }
 
